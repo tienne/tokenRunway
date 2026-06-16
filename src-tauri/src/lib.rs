@@ -40,13 +40,34 @@ fn default_limit(_tool: &str) -> Option<u64> {
     None
 }
 
-/// 사용 가능한 모든 도구의 런웨이 상태를 계산.
+/// 사용 가능하고 비활성 처리되지 않은 도구의 런웨이 상태를 계산.
 fn compute_all() -> Vec<RunwayStatus> {
     let now_ms = chrono::Utc::now().timestamp_millis();
+    let disabled = settings::disabled_tools();
     providers()
         .iter()
-        .filter(|p| p.available())
+        .filter(|p| p.available() && !disabled.iter().any(|d| d == p.tool_name()))
         .map(|p| runway::compute(p.as_ref(), now_ms, default_limit(p.tool_name())))
+        .collect()
+}
+
+/// 도구 가용성 정보 (설정 UI의 on/off 토글용).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ToolInfo {
+    tool: String,
+    available: bool,
+}
+
+/// 등록된 모든 도구와 가용 여부 (비활성 필터 전).
+#[tauri::command]
+fn get_available_tools() -> Vec<ToolInfo> {
+    providers()
+        .iter()
+        .map(|p| ToolInfo {
+            tool: p.tool_name().to_string(),
+            available: p.available(),
+        })
         .collect()
 }
 
@@ -71,6 +92,7 @@ fn set_settings(settings: Settings) {
 /// 임계치 이하로 떨어진 도구에 네이티브 알림을 발사 (도구별 1회, 회복 시 재무장).
 fn check_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
     let threshold = settings::alert_threshold();
+    let eta_threshold = settings::eta_alert_minutes();
     let Ok(mut alerted) = ALERTED.lock() else {
         return;
     };
@@ -80,15 +102,31 @@ fn check_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
         };
         let was_alerted = alerted.get(&s.tool).copied().unwrap_or(false);
 
-        if pct <= threshold && !was_alerted {
+        let pct_hit = pct <= threshold;
+        let eta_hit = eta_threshold > 0.0
+            && s.eta_minutes.is_some_and(|e| e <= eta_threshold);
+        let should_alert = pct_hit || eta_hit;
+
+        if should_alert && !was_alerted {
+            // ETA만 걸렸으면 시간 중심 메시지, 그 외엔 잔여율 메시지
+            let body = if eta_hit && !pct_hit {
+                format!(
+                    "{} 약 {:.0}분 후 소진 ({:.0}% 남음)",
+                    s.tool,
+                    s.eta_minutes.unwrap_or(0.0),
+                    pct
+                )
+            } else {
+                format!("{} 런웨이 {pct:.0}% 남음", s.tool)
+            };
             let _ = app
                 .notification()
                 .builder()
                 .title("🛬 Token Runway 경보")
-                .body(format!("{} 런웨이 {:.0}% 남음", s.tool, pct))
+                .body(body)
                 .show();
             alerted.insert(s.tool.clone(), true);
-        } else if pct > threshold && was_alerted {
+        } else if !should_alert && was_alerted {
             // 리셋 등으로 회복 → 다음 소진 시 다시 알림 가능하게 재무장
             alerted.insert(s.tool.clone(), false);
         }
@@ -130,7 +168,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_runway,
             get_settings,
-            set_settings
+            set_settings,
+            get_available_tools
         ])
         .setup(|app| {
             // 메뉴바 tray — Token Runway의 기본 폼팩터.

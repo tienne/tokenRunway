@@ -104,6 +104,29 @@ h1 {
   accent-color: #0a84ff;
 }
 
+.settings input[type="range"] {
+  margin-bottom: 10px;
+}
+
+.setting-tools {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(127, 127, 127, 0.18);
+}
+
+.tool-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  padding: 4px 0;
+  cursor: pointer;
+}
+
+.tool-toggle input {
+  accent-color: #0a84ff;
+}
+
 .setting-hint {
   margin: 8px 0 0;
   font-size: 11px;

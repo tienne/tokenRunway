@@ -20,6 +20,14 @@ interface RunwayStatus {
 
 interface Settings {
   alertThreshold: number;
+  etaAlertMinutes: number;
+  pollSeconds: number;
+  disabledTools: string[];
+}
+
+interface ToolInfo {
+  tool: string;
+  available: boolean;
 }
 
 function formatAmount(n: number): string {
@@ -59,7 +67,13 @@ function formatResetsAt(iso: string | null): string | null {
 function App() {
   const [statuses, setStatuses] = useState<RunwayStatus[]>([]);
   const [loading, setLoading] = useState(true);
-  const [settings, setSettings] = useState<Settings>({ alertThreshold: 20 });
+  const [settings, setSettings] = useState<Settings>({
+    alertThreshold: 20,
+    etaAlertMinutes: 30,
+    pollSeconds: 30,
+    disabledTools: [],
+  });
+  const [tools, setTools] = useState<ToolInfo[]>([]);
   const [showSettings, setShowSettings] = useState(false);
 
   async function refresh() {
@@ -71,18 +85,32 @@ function App() {
     }
   }
 
-  async function updateThreshold(value: number) {
-    const next = { ...settings, alertThreshold: value };
+  async function update(patch: Partial<Settings>) {
+    const next = { ...settings, ...patch };
     setSettings(next);
     await invoke("set_settings", { settings: next });
+    refresh();
+  }
+
+  function toggleTool(tool: string, enabled: boolean) {
+    const disabled = enabled
+      ? settings.disabledTools.filter((t) => t !== tool)
+      : [...settings.disabledTools, tool];
+    update({ disabledTools: disabled });
   }
 
   useEffect(() => {
     refresh();
     invoke<Settings>("get_settings").then(setSettings).catch(() => {});
-    const id = setInterval(refresh, 30_000); // 30s 폴링
-    return () => clearInterval(id);
+    invoke<ToolInfo[]>("get_available_tools").then(setTools).catch(() => {});
   }, []);
+
+  // 폴링 주기는 설정에 따라 동적 적용.
+  useEffect(() => {
+    const ms = Math.max(5, settings.pollSeconds) * 1000;
+    const id = setInterval(refresh, ms);
+    return () => clearInterval(id);
+  }, [settings.pollSeconds]);
 
   return (
     <main className="container">
@@ -114,10 +142,61 @@ function App() {
             max={90}
             step={5}
             value={settings.alertThreshold}
-            onChange={(e) => updateThreshold(Number(e.target.value))}
+            onChange={(e) => update({ alertThreshold: Number(e.target.value) })}
           />
+
+          <label className="setting-row">
+            <span>ETA 경보</span>
+            <span className="setting-value">
+              {settings.etaAlertMinutes === 0
+                ? "끔"
+                : `${settings.etaAlertMinutes}분 전`}
+            </span>
+          </label>
+          <input
+            type="range"
+            min={0}
+            max={120}
+            step={10}
+            value={settings.etaAlertMinutes}
+            onChange={(e) => update({ etaAlertMinutes: Number(e.target.value) })}
+          />
+
+          <label className="setting-row">
+            <span>새로고침 주기</span>
+            <span className="setting-value">{settings.pollSeconds}초</span>
+          </label>
+          <input
+            type="range"
+            min={10}
+            max={120}
+            step={10}
+            value={settings.pollSeconds}
+            onChange={(e) => update({ pollSeconds: Number(e.target.value) })}
+          />
+
+          {tools.length > 0 && (
+            <div className="setting-tools">
+              <span className="setting-row">모니터링 도구</span>
+              {tools.map((t) => (
+                <label key={t.tool} className="tool-toggle">
+                  <input
+                    type="checkbox"
+                    checked={!settings.disabledTools.includes(t.tool)}
+                    disabled={!t.available}
+                    onChange={(e) => toggleTool(t.tool, e.target.checked)}
+                  />
+                  <span>
+                    {t.tool}
+                    {!t.available && <span className="muted"> (미감지)</span>}
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+
           <p className="setting-hint">
-            잔여율이 이 값 이하로 떨어지면 알림을 보냅니다.
+            잔여율 임계치 또는 ETA 중 하나라도 도달하면 알림을 보냅니다.
           </p>
         </section>
       )}

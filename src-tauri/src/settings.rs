@@ -11,6 +11,12 @@ use std::sync::{LazyLock, Mutex};
 fn default_threshold() -> f64 {
     20.0
 }
+fn default_eta_alert_minutes() -> f64 {
+    30.0
+}
+fn default_poll_seconds() -> u64 {
+    30
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -18,12 +24,24 @@ pub struct Settings {
     /// 잔여율이 이 % 이하로 떨어지면 경보.
     #[serde(default = "default_threshold")]
     pub alert_threshold: f64,
+    /// 예상 소진까지 이 분(分) 이하면 경보. 0이면 ETA 경보 비활성.
+    #[serde(default = "default_eta_alert_minutes")]
+    pub eta_alert_minutes: f64,
+    /// UI 새로고침 주기(초).
+    #[serde(default = "default_poll_seconds")]
+    pub poll_seconds: u64,
+    /// 모니터링에서 제외할 도구명 목록.
+    #[serde(default)]
+    pub disabled_tools: Vec<String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
             alert_threshold: default_threshold(),
+            eta_alert_minutes: default_eta_alert_minutes(),
+            poll_seconds: default_poll_seconds(),
+            disabled_tools: Vec::new(),
         }
     }
 }
@@ -66,5 +84,21 @@ pub fn set(new: Settings) {
 
 /// 경보 임계치 (%).
 pub fn alert_threshold() -> f64 {
-    SETTINGS.lock().map(|s| s.alert_threshold).unwrap_or_else(|_| default_threshold())
+    SETTINGS
+        .lock()
+        .map(|s| s.alert_threshold)
+        .unwrap_or_else(|_| default_threshold())
+}
+
+/// ETA 경보 임계치(분). 0이면 비활성.
+pub fn eta_alert_minutes() -> f64 {
+    SETTINGS
+        .lock()
+        .map(|s| s.eta_alert_minutes)
+        .unwrap_or_else(|_| default_eta_alert_minutes())
+}
+
+/// 모니터링 제외 도구 목록.
+pub fn disabled_tools() -> Vec<String> {
+    SETTINGS.lock().map(|s| s.disabled_tools.clone()).unwrap_or_default()
 }
