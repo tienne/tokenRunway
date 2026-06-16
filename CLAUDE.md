@@ -80,6 +80,21 @@ trait UsageProvider {
   - 단위 `requests`, 윈도우 일간(24h), 추정이므로 note로 명시
   - 플랜 배지 없음 (무료티어 가정)
 
+### 향후 provider (데이터 소스 스펙 — 미구현)
+
+이 개발 환경엔 데이터/계정이 없어 검증 불가. 실제 사용 환경에서 구현할 것.
+스펙은 AgentBar 소스(`scari/AgentBar`)에서 확보.
+
+- **Cursor** — SQLite + REST, 월간 요청
+  - DB: `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`에서 인증 추출
+  - API: `https://www.cursor.com/api/usage` → `modelUsages[].maxRequestUsage`
+  - Rust: `rusqlite`(SQLite) + JWT 디코드 + `ureq` 필요. 한도는 플랜별 월간 추정.
+- **Copilot** — gh CLI/Keychain 토큰 + GitHub API, 월간 requests
+  - 토큰: `gh auth token` 우선, 폴백 Keychain(copilot account)
+  - `GET https://api.github.com/copilot_internal/user` → 권한/플랜(`copilot_plan`,
+    `access_type_sku`). **사용량(used/limit)은 이 엔드포인트에 없음** — 별도 조사 필요.
+  - 주의: 계정에 Copilot 권한 없으면 `access_type_sku: "no_access"`.
+
 ## 핵심 모듈
 
 - **RunwayEngine** (`runway.rs`): `BURN_WINDOW_MIN`(15분) 기울기로 소진 속도(단위/분),
@@ -109,8 +124,8 @@ pnpm tauri dev                  # 실제 실행 (메뉴바 + 알림 권한 다�
 ## 로드맵
 
 - [x] 트레이 타이틀에 실시간 % 표시 — 최저 잔여율 도구 (`update_tray_title`, 60s 갱신)
-- [x] 임계치 설정 UI — `settings.rs`(파일 영속화) + ⚙️ 슬라이더. 폴링 주기는 아직 상수
-- [ ] 폴링 주기 / 도구 on·off 설정
-- [ ] ETA 기반 경보 ("30분 후 소진")
-- [ ] Cursor / Copilot provider
+- [x] 임계치 설정 UI — `settings.rs`(파일 영속화) + ⚙️ 슬라이더
+- [x] 폴링 주기 / 도구 on·off 설정 — `poll_seconds`·`disabled_tools`
+- [x] ETA 기반 경보 — `eta_alert_minutes` (잔여율 OR ETA 도달 시 알림)
+- [ ] Cursor / Copilot provider — 데이터 소스 스펙 확보(위 참고), 검증 환경에서 구현 필요
 - [ ] 비-macOS Keychain 지원 (`keyring` crate)
