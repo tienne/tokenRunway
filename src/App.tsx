@@ -12,6 +12,8 @@ interface RunwayStatus {
   percentRemaining: number | null;
   burnRatePerMin: number;
   etaMinutes: number | null;
+  resetsAt: string | null;
+  sevenDayRemaining: number | null;
   note: string | null;
 }
 
@@ -35,6 +37,18 @@ function formatEta(min: number | null): string {
   const h = Math.floor(min / 60);
   const m = Math.round(min % 60);
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+function formatResetsAt(iso: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  const now = Date.now();
+  const diffMin = Math.round((d.getTime() - now) / 60000);
+  if (diffMin <= 0) return "곧 리셋";
+  const h = Math.floor(diffMin / 60);
+  const m = diffMin % 60;
+  return h > 0 ? `${h}h ${m}m 후 리셋` : `${m}m 후 리셋`;
 }
 
 function App() {
@@ -90,6 +104,10 @@ function App() {
             </div>
           )}
 
+          {formatResetsAt(s.resetsAt) && (
+            <p className="resets">⏱ {formatResetsAt(s.resetsAt)}</p>
+          )}
+
           <dl className="metrics">
             <div>
               <dt>{windowLabel(s.windowHours)} 누적</dt>
@@ -108,6 +126,10 @@ function App() {
               <dd>{formatEta(s.etaMinutes)}</dd>
             </div>
           </dl>
+
+          {s.sevenDayRemaining != null && (
+            <p className="weekly">주간 {s.sevenDayRemaining.toFixed(0)}% 남음</p>
+          )}
 
           {s.note && <p className="note">{s.note}</p>}
         </section>

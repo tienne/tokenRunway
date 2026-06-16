@@ -16,7 +16,7 @@ Token Runway는 **시계열**을 분석해 소진 속도와 ETA까지 만든다:
 
 - **Tauri 2** (Rust 코어 + React/TS UI) — 경량 메뉴바 상주 앱
 - 데이터: Claude Code transcript JSONL (`~/.claude/projects`) 시계열 파싱
-- 한도 산정: Keychain OAuth API (예정)
+- 한도 산정: Keychain OAuth 토큰 → `api/oauth/usage` 공식 사용률 (180s 캐싱)
 
 ## 아키텍처
 

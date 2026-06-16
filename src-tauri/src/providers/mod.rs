@@ -23,6 +23,22 @@ pub struct UsageSample {
     pub amount: u64,
 }
 
+/// 도구가 제공하는 공식(권위) 사용률. Claude Code는 OAuth `/api/oauth/usage`에서 받는다.
+///
+/// 로컬 토큰 합산보다 정확하므로 percent 계산에 우선 사용한다.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfficialUsage {
+    /// 5시간 윈도우 사용률 (%).
+    pub five_hour_utilization: f64,
+    /// 5시간 윈도우 리셋 시각 (RFC3339).
+    pub five_hour_resets_at: String,
+    /// 주간 윈도우 사용률 (%).
+    pub seven_day_utilization: f64,
+    /// 주간 윈도우 리셋 시각 (RFC3339).
+    pub seven_day_resets_at: String,
+}
+
 /// 도구 하나의 런웨이 상태 — UI로 그대로 전달되는 뷰 모델.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -38,12 +54,16 @@ pub struct RunwayStatus {
     pub window_usage: u64,
     /// 한도(분모). OAuth 연동 전에는 None → percent/eta 계산 불가.
     pub limit: Option<u64>,
-    /// 남은 비율 (%). limit이 있을 때만.
+    /// 남은 비율 (%). 공식 사용률 또는 limit이 있을 때만.
     pub percent_remaining: Option<f64>,
     /// 최근 구간 소진 속도 (단위/분).
     pub burn_rate_per_min: f64,
-    /// 소진까지 예상 시간(분). limit과 burn_rate가 유효할 때만.
+    /// 소진까지 예상 시간(분). 한도와 burn_rate가 유효할 때만.
     pub eta_minutes: Option<f64>,
+    /// 5시간 윈도우 리셋 시각 (공식 사용률이 있을 때만).
+    pub resets_at: Option<String>,
+    /// 주간 윈도우 남은 비율 (%) (공식 사용률이 있을 때만).
+    pub seven_day_remaining: Option<f64>,
     /// 상태 보조 설명.
     pub note: Option<String>,
 }
@@ -67,6 +87,11 @@ pub trait UsageProvider: Send + Sync {
     /// 사용량 누적 윈도우(초). 기본 5h (Claude Code/Codex 한도 주기).
     fn window_secs(&self) -> i64 {
         5 * 3600
+    }
+
+    /// 공식(권위) 사용률. 제공 가능한 도구만 Some을 반환한다 (기본 None).
+    fn official_usage(&self) -> Option<OfficialUsage> {
+        None
     }
 }
 

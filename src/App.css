@@ -123,6 +123,20 @@ h1 {
   font-variant-numeric: tabular-nums;
 }
 
+.resets {
+  margin: 0 0 10px;
+  font-size: 11px;
+  color: #8e8e93;
+  font-variant-numeric: tabular-nums;
+}
+
+.weekly {
+  margin: 10px 0 0;
+  font-size: 11px;
+  color: #8e8e93;
+  font-variant-numeric: tabular-nums;
+}
+
 .note {
   margin: 10px 0 0;
   font-size: 11px;

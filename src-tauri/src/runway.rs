@@ -27,23 +27,50 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
         .sum();
     let burn_rate_per_min = recent_usage as f64 / BURN_WINDOW_MIN;
 
-    let percent_remaining = limit.map(|l| {
-        let remaining = (l as f64 - window_usage as f64).max(0.0);
-        (remaining / l as f64) * 100.0
-    });
+    // 공식 사용률(OAuth)이 있으면 우선 사용 — 로컬 토큰 합산보다 정확하다.
+    let official = provider.official_usage();
 
-    let eta_minutes = match limit {
-        Some(l) if burn_rate_per_min > 0.0 => {
-            let remaining = (l as f64 - window_usage as f64).max(0.0);
-            Some(remaining / burn_rate_per_min)
+    let (percent_remaining, eta_minutes, resets_at, seven_day_remaining, note) = match &official {
+        Some(u) => {
+            let pct_remaining = (100.0 - u.five_hour_utilization).max(0.0);
+
+            // 공식 사용률 %와 로컬 누적 토큰으로 한도(분모)를 역산해 ETA를 계산한다.
+            // (Anthropic은 절대 토큰 한도를 공개하지 않으므로 역산이 유일한 방법)
+            let eta = if u.five_hour_utilization > 0.0 && burn_rate_per_min > 0.0 {
+                let implied_limit = window_usage as f64 / (u.five_hour_utilization / 100.0);
+                let remaining = (implied_limit - window_usage as f64).max(0.0);
+                Some(remaining / burn_rate_per_min)
+            } else {
+                None
+            };
+
+            (
+                Some(pct_remaining),
+                eta,
+                Some(u.five_hour_resets_at.clone()),
+                Some((100.0 - u.seven_day_utilization).max(0.0)),
+                None,
+            )
         }
-        _ => None,
-    };
-
-    let note = if limit.is_none() {
-        Some("한도 미설정 — OAuth 연동 전까지 사용량/속도만 표시".to_string())
-    } else {
-        None
+        None => {
+            let pct = limit.map(|l| {
+                let remaining = (l as f64 - window_usage as f64).max(0.0);
+                (remaining / l as f64) * 100.0
+            });
+            let eta = match limit {
+                Some(l) if burn_rate_per_min > 0.0 => {
+                    let remaining = (l as f64 - window_usage as f64).max(0.0);
+                    Some(remaining / burn_rate_per_min)
+                }
+                _ => None,
+            };
+            let note = if limit.is_none() {
+                Some("한도 정보 없음 — 사용량/속도만 표시".to_string())
+            } else {
+                None
+            };
+            (pct, eta, None, None, note)
+        }
     };
 
     RunwayStatus {
@@ -56,6 +83,8 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
         percent_remaining,
         burn_rate_per_min,
         eta_minutes,
+        resets_at,
+        seven_day_remaining,
         note,
     }
 }
