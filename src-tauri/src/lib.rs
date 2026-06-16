@@ -82,10 +82,29 @@ fn check_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
     }
 }
 
-/// 백그라운드에서 주기적으로 경보를 체크 (창이 닫혀 있어도 동작).
+/// 가장 임박한(잔여율 최저) 도구의 %를 트레이 타이틀로 표시.
+fn update_tray_title(app: &AppHandle, statuses: &[RunwayStatus]) {
+    let min_pct = statuses
+        .iter()
+        .filter_map(|s| s.percent_remaining)
+        .min_by(|a, b| a.total_cmp(b));
+    let title = min_pct.map(|p| format!("{p:.0}%"));
+
+    // 트레이 UI 갱신은 메인 스레드에서.
+    let app_for_tray = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(tray) = app_for_tray.tray_by_id("main") {
+            let _ = tray.set_title(title);
+        }
+    });
+}
+
+/// 백그라운드에서 주기적으로 경보 + 트레이 타이틀 갱신 (창이 닫혀 있어도 동작).
 fn spawn_alert_loop(app: AppHandle) {
     std::thread::spawn(move || loop {
-        check_alerts(&app, &compute_all());
+        let statuses = compute_all();
+        update_tray_title(&app, &statuses);
+        check_alerts(&app, &statuses);
         std::thread::sleep(Duration::from_secs(ALERT_CHECK_SECS));
     });
 }
@@ -107,7 +126,7 @@ pub fn run() {
                 "../icons/tray@2x.png"
             ))?;
 
-            TrayIconBuilder::new()
+            TrayIconBuilder::with_id("main")
                 .icon(tray_icon)
                 .icon_as_template(true)
                 .tooltip("Token Runway")
