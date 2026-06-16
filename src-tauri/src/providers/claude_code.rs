@@ -104,6 +104,6 @@ fn parse_line(line: &str, since_ms: i64) -> Option<UsageSample> {
     }
     Some(UsageSample {
         timestamp_ms,
-        tokens: usage.total(),
+        amount: usage.total(),
     })
 }

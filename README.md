@@ -26,8 +26,9 @@ Token Runway는 **시계열**을 분석해 소진 속도와 ETA까지 만든다:
                           ▼
                   Rust 코어
                   ├ providers/   도구별 UsageProvider trait
-                  │   ├ claude_code  ~/.claude JSONL 파서 (P0)
-                  │   └ codex        ~/.codex JSONL 파서 (P1)
+                  │   ├ claude_code  ~/.claude JSONL 파서 (P0, 토큰·5h)
+                  │   ├ codex        ~/.codex JSONL 파서 (P1, 토큰·5h)
+                  │   └ gemini       ~/.gemini 로그 파서 (P2, 요청수·24h)
                   ├ runway       RunwayEngine (5h 윈도우·속도·ETA)
                   └ tray         메뉴바 상주
 ```

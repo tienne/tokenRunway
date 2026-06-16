@@ -3,6 +3,7 @@ mod runway;
 
 use providers::claude_code::ClaudeCodeProvider;
 use providers::codex::CodexProvider;
+use providers::gemini::GeminiProvider;
 use providers::{RunwayStatus, UsageProvider};
 use tauri::{
     menu::{Menu, MenuItem},
@@ -15,6 +16,7 @@ fn providers() -> Vec<Box<dyn UsageProvider>> {
     vec![
         Box::new(ClaudeCodeProvider::new()),
         Box::new(CodexProvider::new()),
+        Box::new(GeminiProvider::new()),
     ]
 }
 

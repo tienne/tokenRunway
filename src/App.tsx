@@ -5,7 +5,9 @@ import "./App.css";
 interface RunwayStatus {
   tool: string;
   available: boolean;
-  windowTokens: number;
+  unit: string; // "tokens" | "requests"
+  windowHours: number;
+  windowUsage: number;
   limit: number | null;
   percentRemaining: number | null;
   burnRatePerMin: number;
@@ -13,10 +15,18 @@ interface RunwayStatus {
   note: string | null;
 }
 
-function formatTokens(n: number): string {
+function formatAmount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return `${n}`;
+}
+
+function unitLabel(unit: string): string {
+  return unit === "requests" ? "req" : "tok";
+}
+
+function windowLabel(hours: number): string {
+  return Number.isInteger(hours) ? `${hours}h` : `${hours.toFixed(1)}h`;
 }
 
 function formatEta(min: number | null): string {
@@ -82,12 +92,16 @@ function App() {
 
           <dl className="metrics">
             <div>
-              <dt>5h 누적</dt>
-              <dd>{formatTokens(s.windowTokens)} tok</dd>
+              <dt>{windowLabel(s.windowHours)} 누적</dt>
+              <dd>
+                {formatAmount(s.windowUsage)} {unitLabel(s.unit)}
+              </dd>
             </div>
             <div>
               <dt>소진 속도</dt>
-              <dd>{formatTokens(Math.round(s.burnRatePerMin))} tok/min</dd>
+              <dd>
+                {formatAmount(Math.round(s.burnRatePerMin))} {unitLabel(s.unit)}/min
+              </dd>
             </div>
             <div>
               <dt>예상 소진</dt>

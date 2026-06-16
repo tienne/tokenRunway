@@ -5,18 +5,22 @@
 
 pub mod claude_code;
 pub mod codex;
+pub mod gemini;
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-/// 단일 시점의 토큰 사용 샘플 (시계열의 한 점).
+/// 단일 시점의 사용 샘플 (시계열의 한 점).
+///
+/// `amount`의 단위는 provider의 [`UsageProvider::unit`]에 따른다
+/// (토큰 도구는 토큰 수, 요청 기반 도구는 요청 1건).
 #[derive(Debug, Clone, Serialize)]
 pub struct UsageSample {
     /// epoch milliseconds (UTC)
     pub timestamp_ms: i64,
-    /// 해당 시점에 소비된 총 토큰 (input + output + cache).
-    pub tokens: u64,
+    /// 해당 시점에 소비된 사용량 (토큰 수 또는 요청 수).
+    pub amount: u64,
 }
 
 /// 도구 하나의 런웨이 상태 — UI로 그대로 전달되는 뷰 모델.
@@ -26,13 +30,17 @@ pub struct RunwayStatus {
     pub tool: String,
     /// 데이터 수집 가능 여부 (예: 로그 디렉토리 존재).
     pub available: bool,
-    /// 최근 5h 롤링 윈도우 누적 토큰.
-    pub window_tokens: u64,
+    /// 사용량 단위 ("tokens" | "requests").
+    pub unit: String,
+    /// 누적 윈도우 길이(시간). UI 라벨용 (토큰 도구 5h, Gemini 24h 등).
+    pub window_hours: f64,
+    /// 윈도우 누적 사용량 (단위는 `unit`).
+    pub window_usage: u64,
     /// 한도(분모). OAuth 연동 전에는 None → percent/eta 계산 불가.
     pub limit: Option<u64>,
     /// 남은 비율 (%). limit이 있을 때만.
     pub percent_remaining: Option<f64>,
-    /// 최근 구간 소진 속도 (토큰/분).
+    /// 최근 구간 소진 속도 (단위/분).
     pub burn_rate_per_min: f64,
     /// 소진까지 예상 시간(분). limit과 burn_rate가 유효할 때만.
     pub eta_minutes: Option<f64>,
@@ -50,6 +58,16 @@ pub trait UsageProvider: Send + Sync {
 
     /// `since_ms`(epoch millis) 이후의 사용 샘플 수집.
     fn collect_samples(&self, since_ms: i64) -> Vec<UsageSample>;
+
+    /// 사용량 단위. 기본 "tokens".
+    fn unit(&self) -> &'static str {
+        "tokens"
+    }
+
+    /// 사용량 누적 윈도우(초). 기본 5h (Claude Code/Codex 한도 주기).
+    fn window_secs(&self) -> i64 {
+        5 * 3600
+    }
 }
 
 /// `root` 아래의 모든 `.jsonl` 파일을 재귀적으로 수집한다.
