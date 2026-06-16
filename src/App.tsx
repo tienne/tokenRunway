@@ -14,6 +14,7 @@ interface RunwayStatus {
   etaMinutes: number | null;
   resetsAt: string | null;
   sevenDayRemaining: number | null;
+  plan: string | null;
   note: string | null;
 }
 
@@ -87,7 +88,10 @@ function App() {
       {statuses.map((s) => (
         <section className="card" key={s.tool}>
           <div className="card-head">
-            <span className="tool">{s.tool}</span>
+            <span className="tool">
+              {s.tool}
+              {s.plan && <span className="plan-badge">{s.plan}</span>}
+            </span>
             <span className="pct">
               {s.percentRemaining != null ? (
                 <>

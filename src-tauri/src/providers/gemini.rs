@@ -113,6 +113,7 @@ impl UsageProvider for GeminiProvider {
             five_hour_resets_at: tomorrow_midnight.to_rfc3339(),
             seven_day_utilization: 0.0,
             seven_day_resets_at: String::new(),
+            plan: None,
         })
     }
 }

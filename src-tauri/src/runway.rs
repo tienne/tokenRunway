@@ -85,6 +85,8 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
         }
     };
 
+    let plan = official.as_ref().and_then(|u| u.plan.clone());
+
     RunwayStatus {
         tool: provider.tool_name().to_string(),
         available: provider.available(),
@@ -97,6 +99,7 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
         eta_minutes,
         resets_at,
         seven_day_remaining,
+        plan,
         note,
     }
 }

@@ -135,7 +135,7 @@ fn fetch_official_usage_cached() -> Option<OfficialUsage> {
 
 /// OAuth `/api/oauth/usage`를 호출해 5시간/주간 사용률을 가져온다.
 fn fetch_official_usage() -> Option<OfficialUsage> {
-    let token = read_oauth_token()?;
+    let (token, plan) = read_oauth_credentials()?;
     let version = claude_version();
     let user_agent = format!("claude-code/{version}");
 
@@ -160,6 +160,7 @@ fn fetch_official_usage() -> Option<OfficialUsage> {
         five_hour_resets_at: five.resets_at,
         seven_day_utilization: seven.utilization,
         seven_day_resets_at: seven.resets_at,
+        plan,
     })
 }
 
@@ -168,7 +169,7 @@ fn fetch_official_usage() -> Option<OfficialUsage> {
 /// macOS의 `security` CLI를 쓴다 — account 이름 추정 없이 service만으로 조회 가능.
 /// 다른 OS는 추후 `keyring` crate로 확장한다.
 #[cfg(target_os = "macos")]
-fn read_oauth_token() -> Option<String> {
+fn read_oauth_credentials() -> Option<(String, Option<String>)> {
     let out = Command::new("security")
         .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
         .output()
@@ -178,12 +179,39 @@ fn read_oauth_token() -> Option<String> {
     }
     let raw = String::from_utf8(out.stdout).ok()?;
     let creds: Credentials = serde_json::from_str(raw.trim()).ok()?;
-    Some(creds.claude_ai_oauth.access_token)
+    let o = creds.claude_ai_oauth;
+    let plan = format_claude_plan(o.rate_limit_tier.as_deref(), o.subscription_type.as_deref());
+    Some((o.access_token, plan))
 }
 
 #[cfg(not(target_os = "macos"))]
-fn read_oauth_token() -> Option<String> {
+fn read_oauth_credentials() -> Option<(String, Option<String>)> {
     None
+}
+
+/// rateLimitTier("default_claude_max_5x") → "Max 5x". 없으면 subscriptionType.
+fn format_claude_plan(tier: Option<&str>, sub: Option<&str>) -> Option<String> {
+    if let Some(t) = tier {
+        if let Some(rest) = t.strip_prefix("default_claude_") {
+            let joined = rest
+                .split('_')
+                .map(capitalize_word)
+                .collect::<Vec<_>>()
+                .join(" ");
+            if !joined.is_empty() {
+                return Some(joined);
+            }
+        }
+    }
+    sub.filter(|s| !s.is_empty()).map(capitalize_word)
+}
+
+fn capitalize_word(w: &str) -> String {
+    let mut chars = w.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 /// `claude --version` 출력에서 시맨틱 버전을 추출. 실패 시 폴백.
@@ -233,6 +261,10 @@ struct Credentials {
 struct ClaudeAiOauth {
     #[serde(rename = "accessToken")]
     access_token: String,
+    #[serde(rename = "subscriptionType")]
+    subscription_type: Option<String>,
+    #[serde(rename = "rateLimitTier")]
+    rate_limit_tier: Option<String>,
 }
 
 #[derive(Deserialize)]

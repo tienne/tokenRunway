@@ -64,6 +64,8 @@ struct RateLimits {
     primary: Option<RateWindow>,
     /// 주간 윈도우 (window_minutes ≈ 10080).
     secondary: Option<RateWindow>,
+    /// 구독 등급 (예: "plus", "pro").
+    plan_type: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -122,6 +124,7 @@ impl UsageProvider for CodexProvider {
         }
 
         let (_, rl) = latest?;
+        let plan = rl.plan_type.as_deref().map(capitalize);
         let primary = rl.primary?;
         Some(OfficialUsage {
             five_hour_utilization: primary.used_percent,
@@ -132,7 +135,17 @@ impl UsageProvider for CodexProvider {
                 .as_ref()
                 .map(|s| epoch_to_rfc3339(s.resets_at))
                 .unwrap_or_default(),
+            plan,
         })
+    }
+}
+
+/// 첫 글자만 대문자로 ("plus" → "Plus").
+fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
     }
 }
 

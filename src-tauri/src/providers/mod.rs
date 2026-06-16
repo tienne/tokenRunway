@@ -37,6 +37,8 @@ pub struct OfficialUsage {
     pub seven_day_utilization: f64,
     /// 주간 윈도우 리셋 시각 (RFC3339).
     pub seven_day_resets_at: String,
+    /// 구독 플랜/등급 (예: "Plus", "Max 5x"). 표시용.
+    pub plan: Option<String>,
 }
 
 /// 도구 하나의 런웨이 상태 — UI로 그대로 전달되는 뷰 모델.
@@ -64,6 +66,8 @@ pub struct RunwayStatus {
     pub resets_at: Option<String>,
     /// 주간 윈도우 남은 비율 (%) (공식 사용률이 있을 때만).
     pub seven_day_remaining: Option<f64>,
+    /// 구독 플랜/등급 배지 (표시용).
+    pub plan: Option<String>,
     /// 상태 보조 설명.
     pub note: Option<String>,
 }
