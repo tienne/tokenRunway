@@ -1,0 +1,115 @@
+# CLAUDE.md — Token Runway 개발 가이드
+
+AI 코딩 어시스턴트(Claude Code/Codex/Gemini)의 **세션 토큰 잔여량**을 모니터링하고
+임계치 도달 시 경보하는 macOS 메뉴바 앱. Tauri 2 (Rust 코어 + React/TS UI).
+
+핵심 철학: **"얼마나 남았어?"** — OAuth/로컬 데이터로 공식 잔여율을 받고(분모),
+JSONL 시계열로 소진 속도·ETA를 더한다(차별점). 사용자 로그인/설정 불필요.
+
+## 디렉토리 구조
+
+```
+src-tauri/src/
+├ lib.rs            앱 진입점: provider 등록, get_runway command, tray, AlertManager
+├ runway.rs         RunwayEngine — 샘플/공식사용률 → RunwayStatus 계산
+└ providers/
+   ├ mod.rs         UsageProvider trait + 공용 타입 + find_recent_jsonl 헬퍼
+   ├ claude_code.rs Keychain OAuth + ~/.claude JSONL
+   ├ codex.rs       ~/.codex JSONL (token_count + rate_limits)
+   └ gemini.rs      ~/.gemini 로그 요청 수
+src/                React UI (App.tsx 대시보드)
+design/             아이콘 SVG 소스
+```
+
+## 데이터 흐름
+
+1. UI가 30초마다 `get_runway` invoke → `compute_all()` → 각 provider별 `runway::compute`
+2. `runway::compute`는 `collect_samples`(시계열) + `official_usage`(공식 사용률)를 조합
+3. 백그라운드 스레드(60초)가 `compute_all` + `check_alerts`로 임계치 경보 (창 닫혀도 동작)
+
+## UsageProvider trait 규약 (`providers/mod.rs`)
+
+```rust
+trait UsageProvider {
+    fn tool_name(&self) -> &'static str;        // 표시명
+    fn available(&self) -> bool;                // 데이터 소스 존재 여부
+    fn collect_samples(&self, since_ms) -> Vec<UsageSample>;  // 시계열 (속도·ETA용)
+    fn unit(&self) -> &'static str { "tokens" }      // "tokens" | "requests"
+    fn window_secs(&self) -> i64 { 5*3600 }          // 누적 윈도우
+    fn official_usage(&self) -> Option<OfficialUsage> { None }  // 공식 잔여율(우선)
+}
+```
+
+- **`official_usage`가 있으면** percent는 그 값(`100 - utilization`)을 쓰고, `window_usage`/
+  공식 utilization으로 implied limit을 역산해 ETA를 구한다. (Anthropic은 절대 토큰 한도를
+  공개하지 않으므로 역산이 유일한 방법)
+- **없으면** `default_limit`(현재 전부 None) 기반 — percent/ETA 미계산.
+
+## 새 provider 추가 (4단계)
+
+1. `providers/<tool>.rs` 생성, `UsageProvider` 구현
+2. `providers/mod.rs`에 `pub mod <tool>;`
+3. `lib.rs`의 `providers()` vec에 `Box::new(<Tool>Provider::new())` 추가
+4. JSONL 디렉토리면 `find_recent_jsonl(root, since_ms)` 헬퍼 재사용 (mtime 필터 내장)
+
+## 도구별 데이터 소스 상세
+
+### Claude Code (`claude_code.rs`) — 정확
+- **시계열**: `~/.claude/projects/<프로젝트>/<세션>.jsonl`, assistant 메시지의
+  `message.usage` (input+output+cache 합산), `timestamp`
+- **공식 잔여율**: Keychain `Claude Code-credentials`(macOS `security` CLI) →
+  `claudeAiOauth.accessToken`으로 `GET https://api.anthropic.com/api/oauth/usage` 호출
+  - **필수 헤더**: `Authorization: Bearer`, `anthropic-beta: oauth-2025-04-20`,
+    `User-Agent: claude-code/<version>` ← **없으면 즉시 영구 429**
+  - **180초 캐싱 필수** — 이 엔드포인트는 공격적 rate limit. `USAGE_CACHE` 전역.
+  - 응답: `five_hour.utilization`, `seven_day.utilization`, `resets_at`
+- **플랜**: 같은 credentials의 `rateLimitTier`(`default_claude_max_5x` → "Max 5x")
+
+### Codex (`codex.rs`) — 정확, 더 쉬움
+- **시계열**: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, `event_msg`/`token_count`의
+  `info.last_token_usage.total_tokens`
+- **공식 잔여율**: 같은 JSONL의 `payload.rate_limits` (네트워크 불필요!)
+  - `primary`(5h, used_percent/resets_at), `secondary`(주간), `plan_type`("plus")
+  - `resets_at`은 epoch seconds → RFC3339 변환
+  - 최근 24h 파일에서 가장 신선한 rate_limits 선택
+
+### Gemini (`gemini.rs`) — 추정
+- **시계열**: `~/.gemini/tmp/<프로젝트>/logs.json`(JSON 배열), `type=="user"` 메시지 카운트
+- **공식 잔여율 없음** — 로컬에 토큰/한도 데이터 미기록. AgentBar 방식 차용:
+  오늘 자정(로컬) 이후 요청 수 ÷ `DAILY_REQUEST_LIMIT`(1000) = 추정 사용률
+  - 단위 `requests`, 윈도우 일간(24h), 추정이므로 note로 명시
+  - 플랜 배지 없음 (무료티어 가정)
+
+## 핵심 모듈
+
+- **RunwayEngine** (`runway.rs`): `BURN_WINDOW_MIN`(15분) 기울기로 소진 속도(단위/분),
+  공식 사용률 우선 → percent/ETA/리셋/주간/플랜 채움
+- **AlertManager** (`lib.rs`): `ALERT_THRESHOLD`(20%) 이하 도달 시 알림. `ALERTED`
+  HashMap으로 도구별 1회 발사 + 회복 시 재무장 (스팸 방지)
+
+## 빌드 / 검증
+
+```bash
+pnpm exec tsc --noEmit          # TS 타입 체크
+cd src-tauri && cargo check     # Rust 컴파일
+pnpm tauri dev                  # 실제 실행 (메뉴바 + 알림 권한 다이얼로그)
+```
+
+## 주의사항 (회귀 방지)
+
+- **OAuth 폴링은 180초 미만 금지** — User-Agent 누락/과빈도 폴링 시 영구 429
+- 토큰 등 시크릿은 로그/커밋에 절대 노출 금지 (Keychain 직접 읽기)
+- `official_usage` 우선 — 로컬 토큰 합산보다 공식 사용률이 정확
+- 새 provider의 `window_secs`/`unit`이 다르면 UI는 자동 대응 (라벨 동적)
+
+## 커밋 컨벤션
+
+`type(scope): subject` — 예: `feat(usage): ...`, `fix(ui): ...`, `feat(alert): ...`
+
+## 로드맵
+
+- [ ] 트레이 타이틀에 실시간 % 표시 (`🛬 23%`)
+- [ ] 임계치/폴링 주기 설정 UI (현재 20%·30s·60s 상수)
+- [ ] ETA 기반 경보 ("30분 후 소진")
+- [ ] Cursor / Copilot provider
+- [ ] 비-macOS Keychain 지원 (`keyring` crate)
