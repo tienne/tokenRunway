@@ -1,0 +1,16 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+ <defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#10182E"/><stop offset="1" stop-color="#243056"/></linearGradient>
+  <linearGradient id="fill" x1="0" y1="788" x2="0" y2="430" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#30D158"/><stop offset="0.55" stop-color="#A8E80A"/><stop offset="1" stop-color="#FFD60A"/></linearGradient>
+ </defs>
+ <rect width="1024" height="1024" rx="228" fill="url(#bg)"/>
+ <!-- 빈 슬롯 (소진/한도) -->
+ <rect x="372" y="236" width="280" height="84" rx="24" fill="none" stroke="#3A4A66" stroke-width="7"/>
+ <rect x="372" y="344" width="280" height="84" rx="24" fill="none" stroke="#3A4A66" stroke-width="7"/>
+ <!-- 채워진 토큰 (잔여) -->
+ <rect x="372" y="452" width="280" height="84" rx="24" fill="url(#fill)"/>
+ <rect x="372" y="560" width="280" height="84" rx="24" fill="url(#fill)"/>
+ <rect x="372" y="668" width="280" height="84" rx="24" fill="url(#fill)"/>
+ <!-- 스파클 (AI) -->
+ <path d="M0,-1 C0.12,-0.35 0.35,-0.12 1,0 C0.35,0.12 0.12,0.35 0,1 C-0.12,0.35 -0.35,0.12 -1,0 C-0.35,-0.12 -0.12,-0.35 0,-1 Z" transform="translate(700 268) scale(82)" fill="#FFFFFF"/>
+</svg>

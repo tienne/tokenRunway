@@ -48,8 +48,14 @@ pub fn run() {
             let show = MenuItem::with_id(app, "show", "열기", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
 
+            // 메뉴바 전용 단색 아이콘 (template 모드 → macOS가 라이트/다크에 맞게 자동 반전)
+            let tray_icon = tauri::image::Image::from_bytes(include_bytes!(
+                "../icons/tray@2x.png"
+            ))?;
+
             TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
+                .icon(tray_icon)
+                .icon_as_template(true)
                 .tooltip("Token Runway")
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
