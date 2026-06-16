@@ -89,9 +89,13 @@ function App() {
           <div className="card-head">
             <span className="tool">{s.tool}</span>
             <span className="pct">
-              {s.percentRemaining != null
-                ? `${s.percentRemaining.toFixed(0)}%`
-                : "한도 미설정"}
+              {s.percentRemaining != null ? (
+                <>
+                  {s.percentRemaining.toFixed(0)}%<span className="pct-label"> 남음</span>
+                </>
+              ) : (
+                "한도 미설정"
+              )}
             </span>
           </div>
 
@@ -110,7 +114,7 @@ function App() {
 
           <dl className="metrics">
             <div>
-              <dt>{windowLabel(s.windowHours)} 누적</dt>
+              <dt>{windowLabel(s.windowHours)} 사용</dt>
               <dd>
                 {formatAmount(s.windowUsage)} {unitLabel(s.unit)}
               </dd>

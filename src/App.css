@@ -83,6 +83,12 @@ h1 {
   font-variant-numeric: tabular-nums;
 }
 
+.pct-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: #8e8e93;
+}
+
 .bar {
   height: 8px;
   background: #e5e5ea;
