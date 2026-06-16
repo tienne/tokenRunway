@@ -4,11 +4,14 @@
 //! 데이터 소스: `~/.gemini/tmp/<프로젝트>/logs.json` (JSON 배열).
 //! `type == "user"` 항목 1건을 요청 1건으로 집계하고, 윈도우는 일간(24h)이다.
 
-use super::{UsageProvider, UsageSample};
-use chrono::DateTime;
+use super::{OfficialUsage, UsageProvider, UsageSample};
+use chrono::{DateTime, Duration as ChronoDuration, Local};
 use serde::Deserialize;
 use std::fs;
 use std::path::PathBuf;
+
+/// Gemini 무료 티어 일일 요청 한도 (추정 가정). AgentBar와 동일.
+const DAILY_REQUEST_LIMIT: f64 = 1000.0;
 
 pub struct GeminiProvider {
     tmp_dir: PathBuf,
@@ -89,5 +92,27 @@ impl UsageProvider for GeminiProvider {
 
         samples.sort_by_key(|s| s.timestamp_ms);
         samples
+    }
+
+    fn official_usage(&self) -> Option<OfficialUsage> {
+        // 오늘 자정(로컬) 이후 요청 수를 일일 한도로 나눠 사용률을 추정.
+        let now = Local::now();
+        let today_midnight = now
+            .date_naive()
+            .and_hms_opt(0, 0, 0)?
+            .and_local_timezone(Local)
+            .single()?;
+        let tomorrow_midnight = today_midnight + ChronoDuration::days(1);
+
+        let since_ms = today_midnight.timestamp_millis();
+        let count = self.collect_samples(since_ms).len() as f64;
+        let utilization = (count / DAILY_REQUEST_LIMIT * 100.0).min(100.0);
+
+        Some(OfficialUsage {
+            five_hour_utilization: utilization,
+            five_hour_resets_at: tomorrow_midnight.to_rfc3339(),
+            seven_day_utilization: 0.0,
+            seven_day_resets_at: String::new(),
+        })
     }
 }

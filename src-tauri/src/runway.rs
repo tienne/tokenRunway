@@ -44,12 +44,24 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
                 None
             };
 
+            // 요청 수 기반(Gemini)은 공식 한도가 아닌 추정치이므로 명시한다.
+            let note = if provider.unit() == "requests" {
+                Some("추정치 — 무료티어 1000 req/day 가정".to_string())
+            } else {
+                None
+            };
+            // 주간 데이터가 없으면(0%·빈 리셋) 표시하지 않는다.
+            let seven_day = if u.seven_day_resets_at.is_empty() {
+                None
+            } else {
+                Some((100.0 - u.seven_day_utilization).max(0.0))
+            };
             (
                 Some(pct_remaining),
                 eta,
                 Some(u.five_hour_resets_at.clone()),
-                Some((100.0 - u.seven_day_utilization).max(0.0)),
-                None,
+                seven_day,
+                note,
             )
         }
         None => {
