@@ -4,7 +4,7 @@
 //! 각 assistant 메시지 라인의 `timestamp` + `message.usage`에서
 //! 토큰을 추출해 시계열 샘플로 변환한다.
 
-use super::{UsageProvider, UsageSample};
+use super::{find_recent_jsonl, UsageProvider, UsageSample};
 use chrono::DateTime;
 use serde::Deserialize;
 use std::fs;
@@ -75,27 +75,15 @@ impl UsageProvider for ClaudeCodeProvider {
 
     fn collect_samples(&self, since_ms: i64) -> Vec<UsageSample> {
         let mut samples = Vec::new();
-        let Ok(projects) = fs::read_dir(&self.projects_dir) else {
-            return samples;
-        };
 
-        // 구조: projects/<프로젝트 디렉토리>/<세션>.jsonl (깊이 2)
-        for project in projects.flatten() {
-            let Ok(files) = fs::read_dir(project.path()) else {
+        // 구조: projects/<프로젝트 디렉토리>/<세션>.jsonl
+        for path in find_recent_jsonl(&self.projects_dir, since_ms) {
+            let Ok(content) = fs::read_to_string(&path) else {
                 continue;
             };
-            for file in files.flatten() {
-                let path = file.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                    continue;
-                }
-                let Ok(content) = fs::read_to_string(&path) else {
-                    continue;
-                };
-                for line in content.lines() {
-                    if let Some(sample) = parse_line(line, since_ms) {
-                        samples.push(sample);
-                    }
+            for line in content.lines() {
+                if let Some(sample) = parse_line(line, since_ms) {
+                    samples.push(sample);
                 }
             }
         }

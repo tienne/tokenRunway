@@ -2,6 +2,7 @@ mod providers;
 mod runway;
 
 use providers::claude_code::ClaudeCodeProvider;
+use providers::codex::CodexProvider;
 use providers::{RunwayStatus, UsageProvider};
 use tauri::{
     menu::{Menu, MenuItem},
@@ -11,7 +12,10 @@ use tauri::{
 
 /// 등록된 모든 provider 목록. 새 도구는 여기에 추가한다.
 fn providers() -> Vec<Box<dyn UsageProvider>> {
-    vec![Box::new(ClaudeCodeProvider::new())]
+    vec![
+        Box::new(ClaudeCodeProvider::new()),
+        Box::new(CodexProvider::new()),
+    ]
 }
 
 /// 도구별 한도(분모). OAuth 연동 전까지는 None.
