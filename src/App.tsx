@@ -18,6 +18,10 @@ interface RunwayStatus {
   note: string | null;
 }
 
+interface Settings {
+  alertThreshold: number;
+}
+
 function formatAmount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
@@ -55,6 +59,8 @@ function formatResetsAt(iso: string | null): string | null {
 function App() {
   const [statuses, setStatuses] = useState<RunwayStatus[]>([]);
   const [loading, setLoading] = useState(true);
+  const [settings, setSettings] = useState<Settings>({ alertThreshold: 20 });
+  const [showSettings, setShowSettings] = useState(false);
 
   async function refresh() {
     try {
@@ -65,8 +71,15 @@ function App() {
     }
   }
 
+  async function updateThreshold(value: number) {
+    const next = { ...settings, alertThreshold: value };
+    setSettings(next);
+    await invoke("set_settings", { settings: next });
+  }
+
   useEffect(() => {
     refresh();
+    invoke<Settings>("get_settings").then(setSettings).catch(() => {});
     const id = setInterval(refresh, 30_000); // 30s 폴링
     return () => clearInterval(id);
   }, []);
@@ -75,10 +88,39 @@ function App() {
     <main className="container">
       <header>
         <h1>🛬 Token Runway</h1>
-        <button onClick={refresh} className="refresh">
-          새로고침
-        </button>
+        <div className="header-actions">
+          <button onClick={refresh} className="refresh">
+            새로고침
+          </button>
+          <button
+            onClick={() => setShowSettings((v) => !v)}
+            className="icon-btn"
+            title="설정"
+          >
+            ⚙️
+          </button>
+        </div>
       </header>
+
+      {showSettings && (
+        <section className="settings">
+          <label className="setting-row">
+            <span>경보 임계치</span>
+            <span className="setting-value">{settings.alertThreshold}% 남음</span>
+          </label>
+          <input
+            type="range"
+            min={5}
+            max={90}
+            step={5}
+            value={settings.alertThreshold}
+            onChange={(e) => updateThreshold(Number(e.target.value))}
+          />
+          <p className="setting-hint">
+            잔여율이 이 값 이하로 떨어지면 알림을 보냅니다.
+          </p>
+        </section>
+      )}
 
       {loading && <p className="muted">불러오는 중…</p>}
       {!loading && statuses.length === 0 && (

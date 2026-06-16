@@ -109,7 +109,8 @@ pnpm tauri dev                  # 실제 실행 (메뉴바 + 알림 권한 다�
 ## 로드맵
 
 - [x] 트레이 타이틀에 실시간 % 표시 — 최저 잔여율 도구 (`update_tray_title`, 60s 갱신)
-- [ ] 임계치/폴링 주기 설정 UI (현재 20%·30s·60s 상수)
+- [x] 임계치 설정 UI — `settings.rs`(파일 영속화) + ⚙️ 슬라이더. 폴링 주기는 아직 상수
+- [ ] 폴링 주기 / 도구 on·off 설정
 - [ ] ETA 기반 경보 ("30분 후 소진")
 - [ ] Cursor / Copilot provider
 - [ ] 비-macOS Keychain 지원 (`keyring` crate)

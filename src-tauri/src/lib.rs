@@ -1,5 +1,8 @@
 mod providers;
 mod runway;
+mod settings;
+
+use settings::Settings;
 
 use providers::claude_code::ClaudeCodeProvider;
 use providers::codex::CodexProvider;
@@ -14,9 +17,6 @@ use tauri::{
     AppHandle, Manager,
 };
 use tauri_plugin_notification::NotificationExt;
-
-/// 잔여율이 이 % 이하로 떨어지면 경보. (TODO: 사용자 설정으로 노출)
-const ALERT_THRESHOLD: f64 = 20.0;
 
 /// 백그라운드 경보 체크 주기.
 const ALERT_CHECK_SECS: u64 = 60;
@@ -56,8 +56,21 @@ fn get_runway() -> Vec<RunwayStatus> {
     compute_all()
 }
 
+/// 현재 설정을 반환.
+#[tauri::command]
+fn get_settings() -> Settings {
+    settings::get()
+}
+
+/// 설정을 저장 (디스크 + 전역).
+#[tauri::command]
+fn set_settings(settings: Settings) {
+    settings::set(settings);
+}
+
 /// 임계치 이하로 떨어진 도구에 네이티브 알림을 발사 (도구별 1회, 회복 시 재무장).
 fn check_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
+    let threshold = settings::alert_threshold();
     let Ok(mut alerted) = ALERTED.lock() else {
         return;
     };
@@ -67,7 +80,7 @@ fn check_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
         };
         let was_alerted = alerted.get(&s.tool).copied().unwrap_or(false);
 
-        if pct <= ALERT_THRESHOLD && !was_alerted {
+        if pct <= threshold && !was_alerted {
             let _ = app
                 .notification()
                 .builder()
@@ -75,7 +88,7 @@ fn check_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
                 .body(format!("{} 런웨이 {:.0}% 남음", s.tool, pct))
                 .show();
             alerted.insert(s.tool.clone(), true);
-        } else if pct > ALERT_THRESHOLD && was_alerted {
+        } else if pct > threshold && was_alerted {
             // 리셋 등으로 회복 → 다음 소진 시 다시 알림 가능하게 재무장
             alerted.insert(s.tool.clone(), false);
         }
@@ -114,7 +127,11 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![get_runway])
+        .invoke_handler(tauri::generate_handler![
+            get_runway,
+            get_settings,
+            set_settings
+        ])
         .setup(|app| {
             // 메뉴바 tray — Token Runway의 기본 폼팩터.
             let quit = MenuItem::with_id(app, "quit", "종료", true, None::<&str>)?;

@@ -42,6 +42,12 @@ h1 {
   margin: 0;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .refresh {
   font-size: 12px;
   padding: 4px 10px;
@@ -50,6 +56,59 @@ h1 {
   background: #0a84ff;
   color: white;
   cursor: pointer;
+}
+
+.icon-btn {
+  font-size: 14px;
+  padding: 3px 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.icon-btn:hover {
+  background: rgba(127, 127, 127, 0.18);
+}
+
+.settings {
+  background: white;
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  .settings {
+    background: #2c2c2e;
+  }
+}
+
+.setting-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.setting-value {
+  color: #0a84ff;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings input[type="range"] {
+  width: 100%;
+  accent-color: #0a84ff;
+}
+
+.setting-hint {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: #8e8e93;
+  line-height: 1.4;
 }
 
 .muted {
