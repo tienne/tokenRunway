@@ -13,10 +13,11 @@ use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 use tauri::{
     menu::{Menu, MenuItem},
-    tray::TrayIconBuilder,
-    AppHandle, Manager,
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    AppHandle, Manager, WindowEvent,
 };
 use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_positioner::{Position, WindowExt};
 
 /// 백그라운드 경보 체크 주기.
 const ALERT_CHECK_SECS: u64 = 60;
@@ -165,14 +166,30 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_positioner::init())
         .invoke_handler(tauri::generate_handler![
             get_runway,
             get_settings,
             set_settings,
             get_available_tools
         ])
+        // 팝오버 UX: 창 닫기는 종료가 아니라 숨김, 포커스 잃으면 자동 숨김.
+        .on_window_event(|window, event| match event {
+            WindowEvent::CloseRequested { api, .. } => {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+            WindowEvent::Focused(false) => {
+                let _ = window.hide();
+            }
+            _ => {}
+        })
         .setup(|app| {
-            // 메뉴바 tray — Token Runway의 기본 폼팩터.
+            // Dock 아이콘 없이 메뉴바 전용 앱으로 (macOS).
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+            // 우클릭 메뉴 (종료/열기).
             let quit = MenuItem::with_id(app, "quit", "종료", true, None::<&str>)?;
             let show = MenuItem::with_id(app, "show", "열기", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
@@ -187,15 +204,25 @@ pub fn run() {
                 .icon_as_template(true)
                 .tooltip("Token Runway")
                 .menu(&menu)
+                // 좌클릭은 메뉴 대신 팝오버 토글에 쓴다.
+                .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => app.exit(0),
-                    "show" => {
-                        if let Some(win) = app.get_webview_window("main") {
-                            let _ = win.show();
-                            let _ = win.set_focus();
-                        }
-                    }
+                    "show" => toggle_popover(app, true),
                     _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    let app = tray.app_handle();
+                    // positioner가 트레이 위치를 기억하도록 이벤트 전달.
+                    tauri_plugin_positioner::on_tray_event(app, &event);
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        toggle_popover(app, false);
+                    }
                 })
                 .build(app)?;
 
@@ -206,4 +233,20 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// 트레이 팝오버 토글. `force_show`면 항상 표시(메뉴 "열기"용), 아니면 토글.
+fn toggle_popover(app: &AppHandle, force_show: bool) {
+    let Some(win) = app.get_webview_window("main") else {
+        return;
+    };
+    let visible = win.is_visible().unwrap_or(false);
+    if visible && !force_show {
+        let _ = win.hide();
+    } else {
+        // 트레이 아이콘 아래 중앙에 배치 후 표시.
+        let _ = win.move_window(Position::TrayBottomCenter);
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
 }

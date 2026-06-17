@@ -13,9 +13,15 @@
     "windows": [
       {
         "title": "Token Runway",
-        "width": 420,
-        "height": 600,
-        "resizable": true
+        "label": "main",
+        "width": 360,
+        "height": 520,
+        "resizable": false,
+        "decorations": false,
+        "transparent": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false
       }
     ],
     "security": {
