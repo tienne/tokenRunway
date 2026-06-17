@@ -24,6 +24,7 @@ interface Settings {
   etaAlertMinutes: number;
   pollSeconds: number;
   disabledTools: string[];
+  trayTool: string | null;
 }
 
 interface ToolInfo {
@@ -192,6 +193,7 @@ function SettingsView() {
     etaAlertMinutes: 30,
     pollSeconds: 30,
     disabledTools: [],
+    trayTool: null,
   });
   const [tools, setTools] = useState<ToolInfo[]>([]);
 
@@ -262,6 +264,24 @@ function SettingsView() {
           value={settings.pollSeconds}
           onChange={(e) => update({ pollSeconds: Number(e.target.value) })}
         />
+
+        <label className="setting-row">
+          <span>트레이 표시</span>
+        </label>
+        <select
+          className="setting-select"
+          value={settings.trayTool ?? ""}
+          onChange={(e) => update({ trayTool: e.target.value || null })}
+        >
+          <option value="">자동 (가장 임박한 도구)</option>
+          {tools
+            .filter((t) => t.available)
+            .map((t) => (
+              <option key={t.tool} value={t.tool}>
+                {t.tool}
+              </option>
+            ))}
+        </select>
 
         {tools.length > 0 && (
           <div className="setting-tools">

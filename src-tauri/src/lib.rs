@@ -153,13 +153,20 @@ fn check_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
     }
 }
 
-/// 가장 임박한(잔여율 최저) 도구의 %를 트레이 타이틀로 표시.
+/// 트레이 타이틀에 잔여율 표시.
+/// 설정에 지정 도구가 있으면 그 도구를, 없으면 잔여율 최저(가장 임박)를 표시.
 fn update_tray_title(app: &AppHandle, statuses: &[RunwayStatus]) {
-    let min_pct = statuses
-        .iter()
-        .filter_map(|s| s.percent_remaining)
-        .min_by(|a, b| a.total_cmp(b));
-    let title = min_pct.map(|p| format!("{p:.0}%"));
+    let pct = match settings::tray_tool() {
+        Some(tool) => statuses
+            .iter()
+            .find(|s| s.tool == tool)
+            .and_then(|s| s.percent_remaining),
+        None => statuses
+            .iter()
+            .filter_map(|s| s.percent_remaining)
+            .min_by(|a, b| a.total_cmp(b)),
+    };
+    let title = pct.map(|p| format!("{p:.0}%"));
 
     // 트레이 UI 갱신은 메인 스레드에서.
     let app_for_tray = app.clone();

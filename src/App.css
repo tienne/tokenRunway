@@ -108,6 +108,17 @@ h1 {
   margin-bottom: 10px;
 }
 
+.setting-select {
+  width: 100%;
+  padding: 6px 8px;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(127, 127, 127, 0.3);
+  background: transparent;
+  font-size: 13px;
+  color: inherit;
+}
+
 .setting-tools {
   margin-top: 4px;
   padding-top: 10px;

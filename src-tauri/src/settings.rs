@@ -33,6 +33,9 @@ pub struct Settings {
     /// 모니터링에서 제외할 도구명 목록.
     #[serde(default)]
     pub disabled_tools: Vec<String>,
+    /// 트레이에 표시할 도구. None이면 잔여율 최저(가장 임박) 자동 선택.
+    #[serde(default)]
+    pub tray_tool: Option<String>,
 }
 
 impl Default for Settings {
@@ -42,6 +45,7 @@ impl Default for Settings {
             eta_alert_minutes: default_eta_alert_minutes(),
             poll_seconds: default_poll_seconds(),
             disabled_tools: Vec::new(),
+            tray_tool: None,
         }
     }
 }
@@ -101,4 +105,9 @@ pub fn eta_alert_minutes() -> f64 {
 /// 모니터링 제외 도구 목록.
 pub fn disabled_tools() -> Vec<String> {
     SETTINGS.lock().map(|s| s.disabled_tools.clone()).unwrap_or_default()
+}
+
+/// 트레이 표시 도구 (None이면 자동).
+pub fn tray_tool() -> Option<String> {
+    SETTINGS.lock().ok().and_then(|s| s.tray_tool.clone())
 }
