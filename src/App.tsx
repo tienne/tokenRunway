@@ -146,7 +146,7 @@ function App() {
           />
 
           <label className="setting-row">
-            <span>ETA 경보</span>
+            <span>예상 소진 경보</span>
             <span className="setting-value">
               {settings.etaAlertMinutes === 0
                 ? "끔"
@@ -196,7 +196,7 @@ function App() {
           )}
 
           <p className="setting-hint">
-            잔여율 임계치 또는 ETA 중 하나라도 도달하면 알림을 보냅니다.
+            잔여율 또는 예상 소진 시간 중 하나라도 도달하면 알림을 보냅니다.
           </p>
         </section>
       )}
