@@ -108,6 +108,39 @@ h1 {
   margin-bottom: 10px;
 }
 
+.toggle-row {
+  cursor: pointer;
+}
+
+.toggle-row input {
+  accent-color: #0a84ff;
+  width: 18px;
+  height: 18px;
+}
+
+.setting-divider {
+  border: none;
+  border-top: 1px solid rgba(127, 127, 127, 0.18);
+  margin: 12px 0;
+}
+
+.perm-warn {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: #ff9500;
+  line-height: 1.4;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: #0a84ff;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+
 .setting-select {
   width: 100%;
   padding: 6px 8px;

@@ -20,6 +20,9 @@ fn default_poll_seconds() -> u64 {
 fn default_reset_alert_minutes() -> f64 {
     0.0
 }
+fn default_notifications_enabled() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +45,9 @@ pub struct Settings {
     /// 리셋까지 이 분(分) 이하이고 잔여가 충분하면 "남은 토큰 활용" 알림. 0이면 비활성.
     #[serde(default = "default_reset_alert_minutes")]
     pub reset_alert_minutes: f64,
+    /// 모든 OS 알림 마스터 스위치.
+    #[serde(default = "default_notifications_enabled")]
+    pub notifications_enabled: bool,
 }
 
 impl Default for Settings {
@@ -53,6 +59,7 @@ impl Default for Settings {
             disabled_tools: Vec::new(),
             tray_tool: None,
             reset_alert_minutes: default_reset_alert_minutes(),
+            notifications_enabled: default_notifications_enabled(),
         }
     }
 }
@@ -122,4 +129,9 @@ pub fn tray_tool() -> Option<String> {
 /// 리셋 임박 알림 임계치(분). 0이면 비활성.
 pub fn reset_alert_minutes() -> f64 {
     SETTINGS.lock().map(|s| s.reset_alert_minutes).unwrap_or(0.0)
+}
+
+/// OS 알림 마스터 스위치.
+pub fn notifications_enabled() -> bool {
+    SETTINGS.lock().map(|s| s.notifications_enabled).unwrap_or(true)
 }

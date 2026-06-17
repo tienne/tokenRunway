@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  isPermissionGranted,
+  requestPermission,
+} from "@tauri-apps/plugin-notification";
 import "./App.css";
 
 interface RunwayStatus {
@@ -26,6 +30,7 @@ interface Settings {
   pollSeconds: number;
   disabledTools: string[];
   trayTool: string | null;
+  notificationsEnabled: boolean;
 }
 
 interface ToolInfo {
@@ -196,13 +201,21 @@ function SettingsView() {
     pollSeconds: 30,
     disabledTools: [],
     trayTool: null,
+    notificationsEnabled: true,
   });
   const [tools, setTools] = useState<ToolInfo[]>([]);
+  const [permGranted, setPermGranted] = useState<boolean | null>(null);
 
   useEffect(() => {
     invoke<Settings>("get_settings").then(setSettings).catch(() => {});
     invoke<ToolInfo[]>("get_available_tools").then(setTools).catch(() => {});
+    isPermissionGranted().then(setPermGranted).catch(() => {});
   }, []);
+
+  async function askPermission() {
+    const result = await requestPermission();
+    setPermGranted(result === "granted");
+  }
 
   async function update(patch: Partial<Settings>) {
     const next = { ...settings, ...patch };
@@ -224,6 +237,28 @@ function SettingsView() {
       </header>
 
       <section className="settings">
+        <label className="setting-row toggle-row">
+          <span>OS 알림</span>
+          <input
+            type="checkbox"
+            checked={settings.notificationsEnabled}
+            onChange={(e) => update({ notificationsEnabled: e.target.checked })}
+          />
+        </label>
+        {settings.notificationsEnabled && permGranted === false && (
+          <p className="perm-warn">
+            ⚠️ 시스템 알림 권한이 없어요.{" "}
+            <button className="link-btn" onClick={askPermission}>
+              권한 요청
+            </button>
+          </p>
+        )}
+        {settings.notificationsEnabled && permGranted === true && (
+          <p className="setting-hint">시스템 알림 권한 허용됨 ✓</p>
+        )}
+
+        <hr className="setting-divider" />
+
         <label className="setting-row">
           <span>경보 임계치</span>
           <span className="setting-value">{settings.alertThreshold}% 남음</span>
