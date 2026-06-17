@@ -14,7 +14,7 @@ use std::time::Duration;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, WindowEvent,
+    AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_positioner::{Position, WindowExt};
@@ -88,6 +88,25 @@ fn get_settings() -> Settings {
 #[tauri::command]
 fn set_settings(settings: Settings) {
     settings::set(settings);
+}
+
+/// 설정 창을 열거나 포커스. 같은 프론트(label로 화면 분기)를 일반 창으로 띄운다.
+fn open_settings(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("settings") {
+        let _ = win.show();
+        let _ = win.set_focus();
+        return;
+    }
+    let _ = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
+        .title("Token Runway 설정")
+        .inner_size(420.0, 560.0)
+        .resizable(false)
+        .build();
+}
+
+#[tauri::command]
+fn open_settings_window(app: AppHandle) {
+    open_settings(&app);
 }
 
 /// 임계치 이하로 떨어진 도구에 네이티브 알림을 발사 (도구별 1회, 회복 시 재무장).
@@ -171,28 +190,36 @@ pub fn run() {
             get_runway,
             get_settings,
             set_settings,
-            get_available_tools
+            get_available_tools,
+            open_settings_window
         ])
-        // 팝오버 UX: 창 닫기는 종료가 아니라 숨김, 포커스 잃으면 자동 숨김.
-        .on_window_event(|window, event| match event {
-            WindowEvent::CloseRequested { api, .. } => {
-                api.prevent_close();
-                let _ = window.hide();
+        // 팝오버 UX는 main 창에만 적용 (설정 창은 일반 창으로 동작).
+        .on_window_event(|window, event| {
+            if window.label() != "main" {
+                return;
             }
-            WindowEvent::Focused(false) => {
-                let _ = window.hide();
+            match event {
+                WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+                WindowEvent::Focused(false) => {
+                    let _ = window.hide();
+                }
+                _ => {}
             }
-            _ => {}
         })
         .setup(|app| {
             // Dock 아이콘 없이 메뉴바 전용 앱으로 (macOS).
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            // 우클릭 메뉴 (종료/열기).
-            let quit = MenuItem::with_id(app, "quit", "종료", true, None::<&str>)?;
+            // 우클릭 메뉴 (열기/설정/종료).
             let show = MenuItem::with_id(app, "show", "열기", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let settings_item =
+                MenuItem::with_id(app, "settings", "설정...", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "종료", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show, &settings_item, &quit])?;
 
             // 메뉴바 전용 단색 아이콘 (template 모드 → macOS가 라이트/다크에 맞게 자동 반전)
             let tray_icon = tauri::image::Image::from_bytes(include_bytes!(
@@ -209,6 +236,7 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => app.exit(0),
                     "show" => toggle_popover(app, true),
+                    "settings" => open_settings(app),
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {

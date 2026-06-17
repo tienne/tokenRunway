@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./App.css";
 
 interface RunwayStatus {
@@ -64,17 +65,11 @@ function formatResetsAt(iso: string | null): string | null {
   return h > 0 ? `${h}h ${m}m 후 리셋` : `${m}m 후 리셋`;
 }
 
-function App() {
+/** 트레이 팝오버 — 런웨이 대시보드 */
+function Dashboard() {
   const [statuses, setStatuses] = useState<RunwayStatus[]>([]);
   const [loading, setLoading] = useState(true);
-  const [settings, setSettings] = useState<Settings>({
-    alertThreshold: 20,
-    etaAlertMinutes: 30,
-    pollSeconds: 30,
-    disabledTools: [],
-  });
-  const [tools, setTools] = useState<ToolInfo[]>([]);
-  const [showSettings, setShowSettings] = useState(false);
+  const [pollSeconds, setPollSeconds] = useState(30);
 
   async function refresh() {
     try {
@@ -85,32 +80,26 @@ function App() {
     }
   }
 
-  async function update(patch: Partial<Settings>) {
-    const next = { ...settings, ...patch };
-    setSettings(next);
-    await invoke("set_settings", { settings: next });
-    refresh();
-  }
-
-  function toggleTool(tool: string, enabled: boolean) {
-    const disabled = enabled
-      ? settings.disabledTools.filter((t) => t !== tool)
-      : [...settings.disabledTools, tool];
-    update({ disabledTools: disabled });
-  }
-
   useEffect(() => {
     refresh();
-    invoke<Settings>("get_settings").then(setSettings).catch(() => {});
-    invoke<ToolInfo[]>("get_available_tools").then(setTools).catch(() => {});
+    invoke<Settings>("get_settings")
+      .then((s) => setPollSeconds(s.pollSeconds))
+      .catch(() => {});
   }, []);
 
-  // 폴링 주기는 설정에 따라 동적 적용.
+  // 폴링 + 설정에서 바뀐 주기 동기화.
   useEffect(() => {
-    const ms = Math.max(5, settings.pollSeconds) * 1000;
-    const id = setInterval(refresh, ms);
+    const id = setInterval(async () => {
+      refresh();
+      try {
+        const s = await invoke<Settings>("get_settings");
+        if (s.pollSeconds !== pollSeconds) setPollSeconds(s.pollSeconds);
+      } catch {
+        /* noop */
+      }
+    }, Math.max(5, pollSeconds) * 1000);
     return () => clearInterval(id);
-  }, [settings.pollSeconds]);
+  }, [pollSeconds]);
 
   return (
     <main className="container">
@@ -121,7 +110,7 @@ function App() {
             새로고침
           </button>
           <button
-            onClick={() => setShowSettings((v) => !v)}
+            onClick={() => invoke("open_settings_window")}
             className="icon-btn"
             title="설정"
           >
@@ -129,77 +118,6 @@ function App() {
           </button>
         </div>
       </header>
-
-      {showSettings && (
-        <section className="settings">
-          <label className="setting-row">
-            <span>경보 임계치</span>
-            <span className="setting-value">{settings.alertThreshold}% 남음</span>
-          </label>
-          <input
-            type="range"
-            min={5}
-            max={90}
-            step={5}
-            value={settings.alertThreshold}
-            onChange={(e) => update({ alertThreshold: Number(e.target.value) })}
-          />
-
-          <label className="setting-row">
-            <span>예상 소진 경보</span>
-            <span className="setting-value">
-              {settings.etaAlertMinutes === 0
-                ? "끔"
-                : `${settings.etaAlertMinutes}분 전`}
-            </span>
-          </label>
-          <input
-            type="range"
-            min={0}
-            max={120}
-            step={10}
-            value={settings.etaAlertMinutes}
-            onChange={(e) => update({ etaAlertMinutes: Number(e.target.value) })}
-          />
-
-          <label className="setting-row">
-            <span>새로고침 주기</span>
-            <span className="setting-value">{settings.pollSeconds}초</span>
-          </label>
-          <input
-            type="range"
-            min={10}
-            max={120}
-            step={10}
-            value={settings.pollSeconds}
-            onChange={(e) => update({ pollSeconds: Number(e.target.value) })}
-          />
-
-          {tools.length > 0 && (
-            <div className="setting-tools">
-              <span className="setting-row">모니터링 도구</span>
-              {tools.map((t) => (
-                <label key={t.tool} className="tool-toggle">
-                  <input
-                    type="checkbox"
-                    checked={!settings.disabledTools.includes(t.tool)}
-                    disabled={!t.available}
-                    onChange={(e) => toggleTool(t.tool, e.target.checked)}
-                  />
-                  <span>
-                    {t.tool}
-                    {!t.available && <span className="muted"> (미감지)</span>}
-                  </span>
-                </label>
-              ))}
-            </div>
-          )}
-
-          <p className="setting-hint">
-            잔여율 또는 예상 소진 시간 중 하나라도 도달하면 알림을 보냅니다.
-          </p>
-        </section>
-      )}
 
       {loading && <p className="muted">불러오는 중…</p>}
       {!loading && statuses.length === 0 && (
@@ -265,6 +183,118 @@ function App() {
       ))}
     </main>
   );
+}
+
+/** 설정 전용 창 */
+function SettingsView() {
+  const [settings, setSettings] = useState<Settings>({
+    alertThreshold: 20,
+    etaAlertMinutes: 30,
+    pollSeconds: 30,
+    disabledTools: [],
+  });
+  const [tools, setTools] = useState<ToolInfo[]>([]);
+
+  useEffect(() => {
+    invoke<Settings>("get_settings").then(setSettings).catch(() => {});
+    invoke<ToolInfo[]>("get_available_tools").then(setTools).catch(() => {});
+  }, []);
+
+  async function update(patch: Partial<Settings>) {
+    const next = { ...settings, ...patch };
+    setSettings(next);
+    await invoke("set_settings", { settings: next });
+  }
+
+  function toggleTool(tool: string, enabled: boolean) {
+    const disabled = enabled
+      ? settings.disabledTools.filter((t) => t !== tool)
+      : [...settings.disabledTools, tool];
+    update({ disabledTools: disabled });
+  }
+
+  return (
+    <main className="container">
+      <header>
+        <h1>⚙️ 설정</h1>
+      </header>
+
+      <section className="settings">
+        <label className="setting-row">
+          <span>경보 임계치</span>
+          <span className="setting-value">{settings.alertThreshold}% 남음</span>
+        </label>
+        <input
+          type="range"
+          min={5}
+          max={90}
+          step={5}
+          value={settings.alertThreshold}
+          onChange={(e) => update({ alertThreshold: Number(e.target.value) })}
+        />
+
+        <label className="setting-row">
+          <span>예상 소진 경보</span>
+          <span className="setting-value">
+            {settings.etaAlertMinutes === 0
+              ? "끔"
+              : `${settings.etaAlertMinutes}분 전`}
+          </span>
+        </label>
+        <input
+          type="range"
+          min={0}
+          max={120}
+          step={10}
+          value={settings.etaAlertMinutes}
+          onChange={(e) => update({ etaAlertMinutes: Number(e.target.value) })}
+        />
+
+        <label className="setting-row">
+          <span>새로고침 주기</span>
+          <span className="setting-value">{settings.pollSeconds}초</span>
+        </label>
+        <input
+          type="range"
+          min={10}
+          max={120}
+          step={10}
+          value={settings.pollSeconds}
+          onChange={(e) => update({ pollSeconds: Number(e.target.value) })}
+        />
+
+        {tools.length > 0 && (
+          <div className="setting-tools">
+            <span className="setting-row">모니터링 도구</span>
+            {tools.map((t) => (
+              <label key={t.tool} className="tool-toggle">
+                <input
+                  type="checkbox"
+                  checked={!settings.disabledTools.includes(t.tool)}
+                  disabled={!t.available}
+                  onChange={(e) => toggleTool(t.tool, e.target.checked)}
+                />
+                <span>
+                  {t.tool}
+                  {!t.available && <span className="muted"> (미감지)</span>}
+                </span>
+              </label>
+            ))}
+          </div>
+        )}
+
+        <p className="setting-hint">
+          잔여율 또는 예상 소진 시간 중 하나라도 도달하면 알림을 보냅니다.
+        </p>
+      </section>
+    </main>
+  );
+}
+
+function App() {
+  // 창 label로 화면 분기 (main = 팝오버 대시보드, settings = 설정 창)
+  const isSettings = getCurrentWindow().label === "settings";
+  return isSettings ? <SettingsView /> : <Dashboard />;
 }
 
 export default App;
