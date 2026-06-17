@@ -58,6 +58,7 @@ struct TranscriptLine {
 
 #[derive(Deserialize)]
 struct Message {
+    id: Option<String>,
     usage: Option<Usage>,
 }
 
@@ -95,6 +96,9 @@ impl UsageProvider for ClaudeCodeProvider {
 
     fn collect_samples(&self, since_ms: i64) -> Vec<UsageSample> {
         let mut samples = Vec::new();
+        // Claude Code는 세션 재개·worktree·압축 등으로 같은 메시지를 transcript에
+        // 여러 번 기록한다. message.id로 중복 제거해야 사용량이 부풀려지지 않는다.
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         // 구조: projects/<프로젝트 디렉토리>/<세션>.jsonl
         for path in find_recent_jsonl(&self.projects_dir, since_ms) {
@@ -102,7 +106,12 @@ impl UsageProvider for ClaudeCodeProvider {
                 continue;
             };
             for line in content.lines() {
-                if let Some(sample) = parse_line(line, since_ms) {
+                if let Some((id, sample)) = parse_line(line, since_ms) {
+                    if let Some(id) = id {
+                        if !seen.insert(id) {
+                            continue; // 이미 집계한 메시지
+                        }
+                    }
                     samples.push(sample);
                 }
             }
@@ -281,17 +290,21 @@ struct UsageWindow {
     resets_at: String,
 }
 
-/// 한 줄을 파싱해 윈도우 내 유효 샘플이면 반환.
-fn parse_line(line: &str, since_ms: i64) -> Option<UsageSample> {
+/// 한 줄을 파싱해 (중복 제거용 message.id, 샘플)을 반환.
+fn parse_line(line: &str, since_ms: i64) -> Option<(Option<String>, UsageSample)> {
     let parsed: TranscriptLine = serde_json::from_str(line).ok()?;
-    let usage = parsed.message?.usage?;
+    let message = parsed.message?;
+    let usage = message.usage?;
     let ts = parsed.timestamp?;
     let timestamp_ms = DateTime::parse_from_rfc3339(&ts).ok()?.timestamp_millis();
     if timestamp_ms < since_ms {
         return None;
     }
-    Some(UsageSample {
-        timestamp_ms,
-        amount: usage.total(),
-    })
+    Some((
+        message.id,
+        UsageSample {
+            timestamp_ms,
+            amount: usage.total(),
+        },
+    ))
 }
