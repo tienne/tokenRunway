@@ -9,6 +9,7 @@ use providers::codex::CodexProvider;
 use providers::gemini::GeminiProvider;
 use providers::{RunwayStatus, UsageProvider};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 use tauri::{
@@ -21,6 +22,13 @@ use tauri_plugin_positioner::{Position, WindowExt};
 
 /// 백그라운드 경보 체크 주기.
 const ALERT_CHECK_SECS: u64 = 60;
+
+/// 트레이 아이콘 — 평소(단색 template) / 위험(빨강).
+const TRAY_NORMAL_ICON: &[u8] = include_bytes!("../icons/tray@2x.png");
+const TRAY_ALERT_ICON: &[u8] = include_bytes!("../icons/tray-alert@2x.png");
+
+/// 직전 위험 상태 — 변할 때만 아이콘을 교체(깜빡임 방지).
+static TRAY_DANGER: AtomicBool = AtomicBool::new(false);
 
 /// 도구별 경보 발사 여부 (임계치 아래에서 1회만, 회복 시 리셋).
 static ALERTED: LazyLock<Mutex<HashMap<String, bool>>> =
@@ -153,8 +161,9 @@ fn check_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
     }
 }
 
-/// 트레이 타이틀에 잔여율 표시.
+/// 트레이 타이틀 + 아이콘 갱신.
 /// 설정에 지정 도구가 있으면 그 도구를, 없으면 잔여율 최저(가장 임박)를 표시.
+/// 임계치 이하면 빨간 경고 아이콘으로 교체한다.
 fn update_tray_title(app: &AppHandle, statuses: &[RunwayStatus]) {
     let pct = match settings::tray_tool() {
         Some(tool) => statuses
@@ -167,12 +176,23 @@ fn update_tray_title(app: &AppHandle, statuses: &[RunwayStatus]) {
             .min_by(|a, b| a.total_cmp(b)),
     };
     let title = pct.map(|p| format!("{p:.0}%"));
+    let danger = pct.is_some_and(|p| p <= settings::alert_threshold());
 
     // 트레이 UI 갱신은 메인 스레드에서.
     let app_for_tray = app.clone();
     let _ = app.run_on_main_thread(move || {
-        if let Some(tray) = app_for_tray.tray_by_id("main") {
-            let _ = tray.set_title(title);
+        let Some(tray) = app_for_tray.tray_by_id("main") else {
+            return;
+        };
+        let _ = tray.set_title(title);
+
+        // 위험 상태가 바뀔 때만 아이콘 교체 (위험=빨강 컬러, 평소=단색 template).
+        if TRAY_DANGER.swap(danger, Ordering::Relaxed) != danger {
+            let bytes = if danger { TRAY_ALERT_ICON } else { TRAY_NORMAL_ICON };
+            if let Ok(img) = tauri::image::Image::from_bytes(bytes) {
+                let _ = tray.set_icon(Some(img));
+            }
+            let _ = tray.set_icon_as_template(!danger);
         }
     });
 }
