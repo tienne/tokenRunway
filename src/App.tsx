@@ -231,11 +231,7 @@ function SettingsView() {
   }
 
   return (
-    <main className="container">
-      <header>
-        <h1>⚙️ 설정</h1>
-      </header>
-
+    <main className="container settings-window">
       <section className="settings">
         <label className="setting-row toggle-row">
           <span>OS 알림</span>

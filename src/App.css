@@ -30,6 +30,11 @@ body {
   max-width: 420px;
 }
 
+/* 설정 창: 콘텐츠가 길면 스크롤, 하단 여백 확보 */
+.settings-window {
+  padding-bottom: 24px;
+}
+
 header {
   display: flex;
   align-items: center;

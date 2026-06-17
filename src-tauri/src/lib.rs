@@ -111,8 +111,9 @@ fn open_settings(app: &AppHandle) {
     }
     let _ = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
         .title("Token Runway 설정")
-        .inner_size(420.0, 560.0)
-        .resizable(false)
+        .inner_size(420.0, 640.0)
+        .min_inner_size(420.0, 480.0)
+        .resizable(true)
         .build();
 }
 
