@@ -17,6 +17,9 @@ fn default_eta_alert_minutes() -> f64 {
 fn default_poll_seconds() -> u64 {
     30
 }
+fn default_reset_alert_minutes() -> f64 {
+    0.0
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -36,6 +39,9 @@ pub struct Settings {
     /// 트레이에 표시할 도구. None이면 잔여율 최저(가장 임박) 자동 선택.
     #[serde(default)]
     pub tray_tool: Option<String>,
+    /// 리셋까지 이 분(分) 이하이고 잔여가 충분하면 "남은 토큰 활용" 알림. 0이면 비활성.
+    #[serde(default = "default_reset_alert_minutes")]
+    pub reset_alert_minutes: f64,
 }
 
 impl Default for Settings {
@@ -46,6 +52,7 @@ impl Default for Settings {
             poll_seconds: default_poll_seconds(),
             disabled_tools: Vec::new(),
             tray_tool: None,
+            reset_alert_minutes: default_reset_alert_minutes(),
         }
     }
 }
@@ -110,4 +117,9 @@ pub fn disabled_tools() -> Vec<String> {
 /// 트레이 표시 도구 (None이면 자동).
 pub fn tray_tool() -> Option<String> {
     SETTINGS.lock().ok().and_then(|s| s.tray_tool.clone())
+}
+
+/// 리셋 임박 알림 임계치(분). 0이면 비활성.
+pub fn reset_alert_minutes() -> f64 {
+    SETTINGS.lock().map(|s| s.reset_alert_minutes).unwrap_or(0.0)
 }

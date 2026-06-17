@@ -22,6 +22,7 @@ interface RunwayStatus {
 interface Settings {
   alertThreshold: number;
   etaAlertMinutes: number;
+  resetAlertMinutes: number;
   pollSeconds: number;
   disabledTools: string[];
   trayTool: string | null;
@@ -191,6 +192,7 @@ function SettingsView() {
   const [settings, setSettings] = useState<Settings>({
     alertThreshold: 20,
     etaAlertMinutes: 30,
+    resetAlertMinutes: 0,
     pollSeconds: 30,
     disabledTools: [],
     trayTool: null,
@@ -253,6 +255,23 @@ function SettingsView() {
         />
 
         <label className="setting-row">
+          <span>리셋 임박 알림</span>
+          <span className="setting-value">
+            {settings.resetAlertMinutes === 0
+              ? "끔"
+              : `${settings.resetAlertMinutes}분 전`}
+          </span>
+        </label>
+        <input
+          type="range"
+          min={0}
+          max={60}
+          step={5}
+          value={settings.resetAlertMinutes}
+          onChange={(e) => update({ resetAlertMinutes: Number(e.target.value) })}
+        />
+
+        <label className="setting-row">
           <span>새로고침 주기</span>
           <span className="setting-value">{settings.pollSeconds}초</span>
         </label>
@@ -305,6 +324,8 @@ function SettingsView() {
 
         <p className="setting-hint">
           잔여율 또는 예상 소진 시간 중 하나라도 도달하면 알림을 보냅니다.
+          리셋 임박 알림은 반대로, 곧 리셋되는데 토큰이 많이 남아있을 때
+          "지금 더 써도 된다"고 알려줍니다.
         </p>
       </section>
     </main>

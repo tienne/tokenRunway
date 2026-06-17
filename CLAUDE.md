@@ -99,8 +99,13 @@ trait UsageProvider {
 
 - **RunwayEngine** (`runway.rs`): `BURN_WINDOW_MIN`(15분) 기울기로 소진 속도(단위/분),
   공식 사용률 우선 → percent/ETA/리셋/주간/플랜 채움
-- **AlertManager** (`lib.rs`): `ALERT_THRESHOLD`(20%) 이하 도달 시 알림. `ALERTED`
-  HashMap으로 도구별 1회 발사 + 회복 시 재무장 (스팸 방지)
+- **AlertManager** (`lib.rs`): 세 가지 경보, 각 도구별 1회 발사 + 회복 시 재무장.
+  - 소진 경보 — 잔여율 ≤ 임계치
+  - 예상 소진 경보 — ETA ≤ `eta_alert_minutes`
+  - 리셋 임박 경보 — 리셋까지 ≤ `reset_alert_minutes` **이고** 잔여 > 임계치
+    (곧 사라질 토큰이 많을 때 "지금 활용" 알림 — 소진 경보의 반대 방향)
+- **트레이 위험 표시** (`update_tray_title`): 잔여 ≤ 임계치 시 빨간 아이콘으로 교체
+  (`TRAY_DANGER` AtomicBool로 상태 변화 시에만 교체)
 
 ## 빌드 / 검증
 

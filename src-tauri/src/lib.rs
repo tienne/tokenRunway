@@ -30,8 +30,12 @@ const TRAY_ALERT_ICON: &[u8] = include_bytes!("../icons/tray-alert@2x.png");
 /// 직전 위험 상태 — 변할 때만 아이콘을 교체(깜빡임 방지).
 static TRAY_DANGER: AtomicBool = AtomicBool::new(false);
 
-/// 도구별 경보 발사 여부 (임계치 아래에서 1회만, 회복 시 리셋).
+/// 도구별 소진 경보 발사 여부 (임계치 아래에서 1회만, 회복 시 리셋).
 static ALERTED: LazyLock<Mutex<HashMap<String, bool>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// 도구별 리셋 임박 경보 발사 여부 (윈도우당 1회).
+static RESET_ALERTED: LazyLock<Mutex<HashMap<String, bool>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// 등록된 모든 provider 목록. 새 도구는 여기에 추가한다.
@@ -197,12 +201,63 @@ fn update_tray_title(app: &AppHandle, statuses: &[RunwayStatus]) {
     });
 }
 
+/// RFC3339 시각까지 남은 분(分). 과거면 음수.
+fn minutes_until(iso: &str) -> Option<f64> {
+    let reset = chrono::DateTime::parse_from_rfc3339(iso).ok()?;
+    let now = chrono::Utc::now().timestamp();
+    Some((reset.timestamp() - now) as f64 / 60.0)
+}
+
+/// 리셋 임박 + 잔여 충분(버려질 토큰 많음) 시 "지금 활용" 알림.
+fn check_reset_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
+    let reset_min = settings::reset_alert_minutes();
+    if reset_min <= 0.0 {
+        return;
+    }
+    let threshold = settings::alert_threshold();
+    let Ok(mut alerted) = RESET_ALERTED.lock() else {
+        return;
+    };
+    for s in statuses {
+        let Some(pct) = s.percent_remaining else {
+            continue;
+        };
+        let Some(resets_at) = &s.resets_at else {
+            continue;
+        };
+        let Some(mins) = minutes_until(resets_at) else {
+            continue;
+        };
+
+        // 리셋이 임박했고 아직 여유가 있으면(잔여 > 소진 임계치) = 곧 사라질 토큰이 많음.
+        let hit = mins > 0.0 && mins <= reset_min && pct > threshold;
+        let was = alerted.get(&s.tool).copied().unwrap_or(false);
+
+        if hit && !was {
+            let _ = app
+                .notification()
+                .builder()
+                .title("🛬 토큰 리셋 임박")
+                .body(format!(
+                    "{} 약 {:.0}분 후 리셋 — {:.0}% 남음, 지금 더 써도 됩니다",
+                    s.tool, mins, pct
+                ))
+                .show();
+            alerted.insert(s.tool.clone(), true);
+        } else if !hit && was {
+            // 새 윈도우 시작(리셋 지남) → 재무장
+            alerted.insert(s.tool.clone(), false);
+        }
+    }
+}
+
 /// 백그라운드에서 주기적으로 경보 + 트레이 타이틀 갱신 (창이 닫혀 있어도 동작).
 fn spawn_alert_loop(app: AppHandle) {
     std::thread::spawn(move || loop {
         let statuses = compute_all();
         update_tray_title(&app, &statuses);
         check_alerts(&app, &statuses);
+        check_reset_alerts(&app, &statuses);
         std::thread::sleep(Duration::from_secs(ALERT_CHECK_SECS));
     });
 }
