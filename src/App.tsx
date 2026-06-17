@@ -5,6 +5,7 @@ import {
   isPermissionGranted,
   requestPermission,
 } from "@tauri-apps/plugin-notification";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import "./App.css";
 
 interface RunwayStatus {
@@ -226,6 +227,25 @@ function SettingsView() {
     setPermGranted(result === "granted");
   }
 
+  // 알림 토글: 켤 때 OS 권한을 재확인하고, 없으면 요청까지 시도.
+  async function setNotifications(enabled: boolean) {
+    update({ notificationsEnabled: enabled });
+    if (enabled) {
+      let granted = await isPermissionGranted();
+      if (!granted) {
+        const res = await requestPermission();
+        granted = res === "granted";
+      }
+      setPermGranted(granted);
+    }
+  }
+
+  async function openNotifSettings() {
+    await openUrl(
+      "x-apple.systempreferences:com.apple.preference.notifications"
+    ).catch(() => {});
+  }
+
   async function update(patch: Partial<Settings>) {
     const next = { ...settings, ...patch };
     setSettings(next);
@@ -247,14 +267,18 @@ function SettingsView() {
           <input
             type="checkbox"
             checked={settings.notificationsEnabled}
-            onChange={(e) => update({ notificationsEnabled: e.target.checked })}
+            onChange={(e) => setNotifications(e.target.checked)}
           />
         </label>
         {settings.notificationsEnabled && permGranted === false && (
           <p className="perm-warn">
-            ⚠️ 시스템 알림 권한이 없어요.{" "}
+            ⚠️ 시스템 알림 권한이 꺼져 있어 알림이 오지 않아요.{" "}
             <button className="link-btn" onClick={askPermission}>
               권한 요청
+            </button>
+            {" · "}
+            <button className="link-btn" onClick={openNotifSettings}>
+              시스템 설정 열기
             </button>
           </p>
         )}
