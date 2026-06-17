@@ -117,6 +117,9 @@ pnpm tauri dev                  # 실제 실행 (메뉴바 + 알림 권한 다�
 
 ## 주의사항 (회귀 방지)
 
+- **Claude Code transcript는 message.id로 dedup 필수** — 세션 재개·worktree·압축으로
+  같은 메시지가 여러 번 기록됨. dedup 안 하면 토큰·메시지가 ~2배 부풀려짐
+  (`collect_samples`의 `seen` HashSet). 다른 provider도 중복 의심되면 동일 적용.
 - **OAuth 폴링은 180초 미만 금지** — User-Agent 누락/과빈도 폴링 시 영구 429
 - 토큰 등 시크릿은 로그/커밋에 절대 노출 금지 (Keychain 직접 읽기)
 - `official_usage` 우선 — 로컬 토큰 합산보다 공식 사용률이 정확
