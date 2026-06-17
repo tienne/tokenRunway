@@ -54,6 +54,10 @@ pub struct RunwayStatus {
     pub window_hours: f64,
     /// 윈도우 누적 사용량 (단위는 `unit`).
     pub window_usage: u64,
+    /// 오늘(로컬 자정 이후) 누적 사용량.
+    pub daily_usage: u64,
+    /// 오늘 메시지/요청 수 (시계열 샘플 개수).
+    pub daily_count: u64,
     /// 한도(분모). OAuth 연동 전에는 None → percent/eta 계산 불가.
     pub limit: Option<u64>,
     /// 남은 비율 (%). 공식 사용률 또는 limit이 있을 때만.

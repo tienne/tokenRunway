@@ -3,20 +3,42 @@
 //! AgentBar의 percent 스냅샷과 달리, 시계열에서 소진 속도와 ETA를 뽑는 것이
 //! Token Runway의 핵심 차별점이다.
 
+use chrono::Local;
 use crate::providers::{RunwayStatus, UsageProvider};
 
 /// 소진 속도 측정 구간 (분). 최근 이 시간의 기울기로 ETA를 추정.
 const BURN_WINDOW_MIN: f64 = 15.0;
+
+/// 오늘(로컬) 자정의 epoch millis.
+fn local_midnight_ms() -> i64 {
+    Local::now()
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .and_then(|d| d.and_local_timezone(Local).single())
+        .map(|d| d.timestamp_millis())
+        .unwrap_or(0)
+}
 
 /// provider 하나에 대한 런웨이 상태 계산.
 ///
 /// 누적 윈도우와 단위는 provider가 정한다 (토큰 도구 5h, Gemini 요청·24h 등).
 pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) -> RunwayStatus {
     let window_secs = provider.window_secs();
-    let since_ms = now_ms - window_secs * 1000;
-    let samples = provider.collect_samples(since_ms);
+    let window_start = now_ms - window_secs * 1000;
+    let day_start = local_midnight_ms();
+    // 윈도우 시작과 오늘 자정 중 더 이른 시점부터 한 번에 수집 후 구간별 집계.
+    let samples = provider.collect_samples(window_start.min(day_start));
 
-    let window_usage: u64 = samples.iter().map(|s| s.amount).sum();
+    let window_usage: u64 = samples
+        .iter()
+        .filter(|s| s.timestamp_ms >= window_start)
+        .map(|s| s.amount)
+        .sum();
+
+    // 오늘(자정 이후) 누적 사용량 + 메시지/요청 수.
+    let daily_samples = samples.iter().filter(|s| s.timestamp_ms >= day_start);
+    let daily_usage: u64 = daily_samples.clone().map(|s| s.amount).sum();
+    let daily_count = daily_samples.count() as u64;
 
     // 소진 속도: 최근 BURN_WINDOW_MIN 분간 사용량 / 분
     let recent_since = now_ms - (BURN_WINDOW_MIN as i64) * 60 * 1000;
@@ -93,6 +115,8 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
         unit: provider.unit().to_string(),
         window_hours: window_secs as f64 / 3600.0,
         window_usage,
+        daily_usage,
+        daily_count,
         limit,
         percent_remaining,
         burn_rate_per_min,

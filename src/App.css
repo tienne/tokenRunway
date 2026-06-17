@@ -278,8 +278,15 @@ h1 {
   font-variant-numeric: tabular-nums;
 }
 
-.weekly {
+.daily {
   margin: 10px 0 0;
+  font-size: 11px;
+  color: #8e8e93;
+  font-variant-numeric: tabular-nums;
+}
+
+.weekly {
+  margin: 4px 0 0;
   font-size: 11px;
   color: #8e8e93;
   font-variant-numeric: tabular-nums;

@@ -13,6 +13,8 @@ interface RunwayStatus {
   unit: string; // "tokens" | "requests"
   windowHours: number;
   windowUsage: number;
+  dailyUsage: number;
+  dailyCount: number;
   limit: number | null;
   percentRemaining: number | null;
   burnRatePerMin: number;
@@ -180,6 +182,13 @@ function Dashboard() {
               <dd>{formatEta(s.etaMinutes)}</dd>
             </div>
           </dl>
+
+          <p className="daily">
+            오늘{" "}
+            {s.unit === "requests"
+              ? `${s.dailyCount} 요청`
+              : `${formatAmount(s.dailyUsage)} ${unitLabel(s.unit)} · ${s.dailyCount} 메시지`}
+          </p>
 
           {s.sevenDayRemaining != null && (
             <p className="weekly">주간 {s.sevenDayRemaining.toFixed(0)}% 남음</p>
