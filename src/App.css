@@ -364,10 +364,12 @@ h1 {
   gap: 8px;
   margin-bottom: 6px;
   font-size: 12px;
+  min-width: 0;
 }
 
 .model-name {
-  flex: 0 0 80px;
+  flex: 0 1 80px;
+  min-width: 0;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
@@ -433,8 +435,14 @@ h1 {
   margin-top: 10px;
 }
 
+/* 막대가 많을 때(14/30일) 간격을 좁혀 창 안에 맞춘다. */
+.hist-bars.dense {
+  gap: 2px;
+}
+
 .hist-col {
   flex: 1;
+  min-width: 0; /* flex 항목이 콘텐츠보다 좁아질 수 있게 — 가로 넘침 방지 */
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -460,6 +468,7 @@ h1 {
   font-size: 9px;
   color: #8e8e93;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .spark {

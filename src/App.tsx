@@ -676,6 +676,9 @@ const PERIODS = [7, 14, 30];
 function StatsCard({ s, lang }: { s: ToolStats; lang: Lang }) {
   const isReq = s.unit === "requests";
   const fmt = (n: number) => (isReq ? `${n}` : formatAmount(n));
+  // 막대가 많으면(14/30일) 컬럼이 좁아져 텍스트가 창을 넘친다.
+  // 막대 위 값은 숨기고, 날짜는 일정 간격으로만 표시한다.
+  const dense = s.days.length > 10;
   const maxDay = Math.max(...s.days.map((d) => d.usage), 1);
   const maxHour = Math.max(...s.hourly, 1);
   const maxModel = Math.max(...s.models.map((m) => m.usage), 1);
@@ -726,10 +729,10 @@ function StatsCard({ s, lang }: { s: ToolStats; lang: Lang }) {
       </div>
 
       {/* 일별 막대 */}
-      <div className="hist-bars">
-        {s.days.map((d) => (
+      <div className={dense ? "hist-bars dense" : "hist-bars"}>
+        {s.days.map((d, i) => (
           <div className="hist-col" key={d.date}>
-            <span className="hist-val">{fmt(d.usage)}</span>
+            {!dense && <span className="hist-val">{fmt(d.usage)}</span>}
             <div
               className="hist-bar"
               style={{ height: `${Math.max(4, (d.usage / maxDay) * 100)}%` }}
@@ -737,7 +740,10 @@ function StatsCard({ s, lang }: { s: ToolStats; lang: Lang }) {
                 d.cost > 0 ? ` · $${d.cost.toFixed(2)}` : ""
               }`}
             />
-            <span className="hist-date">{d.date}</span>
+            {/* dense일 때는 5일 간격(과 마지막)만 날짜 표시 */}
+            {(!dense || i % 5 === 0 || i === s.days.length - 1) && (
+              <span className="hist-date">{d.date}</span>
+            )}
           </div>
         ))}
       </div>
