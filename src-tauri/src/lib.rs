@@ -59,10 +59,13 @@ fn default_limit(_tool: &str) -> Option<u64> {
 fn compute_all() -> Vec<RunwayStatus> {
     let now_ms = chrono::Utc::now().timestamp_millis();
     let disabled = settings::disabled_tools();
+    let hide_inactive = settings::hide_inactive();
     providers()
         .iter()
         .filter(|p| p.available() && !disabled.iter().any(|d| d == p.tool_name()))
         .map(|p| runway::compute(p.as_ref(), now_ms, default_limit(p.tool_name())))
+        // 사용 중인 도구만 표시 옵션: 현재 윈도우 사용량이 0이면 숨김
+        .filter(|s| !hide_inactive || s.window_usage > 0)
         .collect()
 }
 

@@ -47,6 +47,7 @@ interface Settings {
   quietStartHour: number;
   quietEndHour: number;
   analyticsEnabled: boolean;
+  hideInactive: boolean;
 }
 
 interface ToolInfo {
@@ -355,6 +356,7 @@ function SettingsView() {
     quietStartHour: 22,
     quietEndHour: 8,
     analyticsEnabled: false,
+    hideInactive: false,
   });
   const [tools, setTools] = useState<ToolInfo[]>([]);
   const [permGranted, setPermGranted] = useState<boolean | null>(null);
@@ -602,6 +604,15 @@ function SettingsView() {
           />
         </label>
         <p className="setting-hint">{tr("analyticsHint")}</p>
+
+        <label className="setting-row toggle-row">
+          <span>{tr("hideInactive")}</span>
+          <input
+            type="checkbox"
+            checked={settings.hideInactive}
+            onChange={(e) => update({ hideInactive: e.target.checked })}
+          />
+        </label>
 
         {tools.length > 0 && (
           <div className="setting-tools">

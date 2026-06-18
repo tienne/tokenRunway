@@ -66,6 +66,9 @@ pub struct Settings {
     /// 익명 분석용 랜덤 ID (개인 식별 불가). 최초 1회 생성.
     #[serde(default)]
     pub anon_id: Option<String>,
+    /// 최근 사용량이 0인(현재 윈도우에서 안 쓴) 도구 카드 숨김.
+    #[serde(default)]
+    pub hide_inactive: bool,
 }
 
 fn default_quiet_start() -> u32 {
@@ -91,6 +94,7 @@ impl Default for Settings {
             quiet_end_hour: default_quiet_end(),
             analytics_enabled: false,
             anon_id: None,
+            hide_inactive: false,
         }
     }
 }
@@ -150,6 +154,11 @@ pub fn eta_alert_minutes() -> f64 {
 /// 모니터링 제외 도구 목록.
 pub fn disabled_tools() -> Vec<String> {
     SETTINGS.lock().map(|s| s.disabled_tools.clone()).unwrap_or_default()
+}
+
+/// 비활성(최근 사용량 0) 도구 숨김 여부.
+pub fn hide_inactive() -> bool {
+    SETTINGS.lock().map(|s| s.hide_inactive).unwrap_or(false)
 }
 
 /// 트레이 표시 도구 (None이면 자동).
