@@ -61,6 +61,36 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
         None
     };
 
+    // 효율 인사이트(코칭) — 비효율 신호를 하나 골라 알린다.
+    let window_count = samples
+        .iter()
+        .filter(|s| s.timestamp_ms >= window_start)
+        .count() as u64;
+    let window_cache_write: u64 = samples
+        .iter()
+        .filter(|s| s.timestamp_ms >= window_start)
+        .map(|s| s.cache_write)
+        .sum();
+    let cache_write_ratio = if window_input > 0 {
+        window_cache_write as f64 / window_input as f64
+    } else {
+        0.0
+    };
+    let avg_per_msg = if window_count > 0 {
+        window_usage / window_count
+    } else {
+        0
+    };
+    let insight = if cache_write_ratio > 0.5 && window_cache_write > 50_000 {
+        // 입력의 절반 이상이 캐시 재생성 = 캐시가 잘 안 먹힘
+        Some("insight.cache_write".to_string())
+    } else if avg_per_msg > 80_000 {
+        // 메시지당 평균 토큰 과다 = 무거운 컨텍스트
+        Some("insight.heavy".to_string())
+    } else {
+        None
+    };
+
     // 소진 속도: 최근 BURN_WINDOW_MIN 분간 사용량 / 분
     let recent_since = now_ms - (BURN_WINDOW_MIN as i64) * 60 * 1000;
     let recent_usage: u64 = samples
@@ -168,6 +198,7 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
         daily_count,
         daily_cost,
         cache_hit_rate,
+        insight,
         sparkline,
         limit,
         percent_remaining,

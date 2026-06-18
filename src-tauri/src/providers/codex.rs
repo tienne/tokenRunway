@@ -192,6 +192,7 @@ fn parse_line(line: &str, since_ms: i64) -> Option<UsageSample> {
         amount: usage.total_tokens,
         cost_usd: 0.0, // OpenAI 단가 매핑 불확실 — 추후
         cache_read: usage.cached_input_tokens,
+        cache_write: 0,
         input_total: usage.input_tokens, // cached 포함된 입력 총량
     })
 }

@@ -21,6 +21,7 @@ interface RunwayStatus {
   dailyCount: number;
   dailyCost: number;
   cacheHitRate: number | null;
+  insight: string | null;
   sparkline: number[];
   limit: number | null;
   percentRemaining: number | null;
@@ -238,9 +239,10 @@ function Dashboard() {
               <div className="today-item">
                 <span className="today-val">
                   {formatAmount(Math.round(s.burnRatePerMin))}/min
-                  {s.burnTrend === "up" && (
-                    <span className="trend-up"> ↑</span>
-                  )}
+                </span>
+                <span className="today-label">
+                  {t(lang, "burnRate")}
+                  {s.burnTrend === "up" && <span className="trend-up"> ↑</span>}
                   {s.burnTrend === "down" && (
                     <span className="trend-down"> ↓</span>
                   )}
@@ -248,7 +250,6 @@ function Dashboard() {
                     <span className="trend-flat"> →</span>
                   )}
                 </span>
-                <span className="today-label">{t(lang, "burnRate")}</span>
               </div>
               <div className="today-item">
                 <span className="today-val">{formatEta(s.etaMinutes, lang)}</span>
@@ -295,6 +296,8 @@ function Dashboard() {
               ⚡ {t(lang, "cacheHit", { n: s.cacheHitRate.toFixed(0) })}
             </p>
           )}
+
+          {s.insight && <p className="insight">{t(lang, s.insight)}</p>}
 
           {s.sevenDayRemaining != null && (
             <p className="weekly">

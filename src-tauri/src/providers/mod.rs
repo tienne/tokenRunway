@@ -25,6 +25,8 @@ pub struct UsageSample {
     pub cost_usd: f64,
     /// 캐시 읽기 토큰 수 (효율 지표용). 해당 없으면 0.
     pub cache_read: u64,
+    /// 캐시 쓰기(생성) 토큰 수. 재생성 과다 판정용. 해당 없으면 0.
+    pub cache_write: u64,
     /// 입력 토큰 총량 (input + cache_creation + cache_read). 캐시 적중률 분모.
     pub input_total: u64,
 }
@@ -68,6 +70,8 @@ pub struct RunwayStatus {
     pub daily_cost: f64,
     /// 윈도우 캐시 적중률 (%) — cache_read / 전체. 캐시 개념 없으면 None.
     pub cache_hit_rate: Option<f64>,
+    /// 효율 인사이트 (i18n 키). 없으면 None. 예: "insight.cache_write".
+    pub insight: Option<String>,
     /// 윈도우를 균등 분할한 구간별 사용량 (미니 추세 그래프용).
     pub sparkline: Vec<u64>,
     /// 한도(분모). OAuth 연동 전에는 None → percent/eta 계산 불가.

@@ -398,6 +398,14 @@ h1 {
   font-variant-numeric: tabular-nums;
 }
 
+.insight {
+  margin: 6px 0 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: #bf8700;
+  line-height: 1.4;
+}
+
 .weekly {
   margin: 4px 0 0;
   font-size: 11px;
