@@ -182,6 +182,7 @@ fn open_settings(app: &AppHandle) {
         .inner_size(420.0, 640.0)
         .min_inner_size(420.0, 480.0)
         .resizable(true)
+        .title_bar_style(tauri::TitleBarStyle::Visible)
         .build();
 }
 
@@ -202,6 +203,7 @@ fn open_history(app: &AppHandle) {
         .inner_size(460.0, 600.0)
         .min_inner_size(420.0, 480.0)
         .resizable(true)
+        .title_bar_style(tauri::TitleBarStyle::Visible)
         .build();
 }
 
