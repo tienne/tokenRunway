@@ -44,6 +44,11 @@ const dict: Record<Lang, Record<string, string>> = {
     quietHours: "방해금지 시간대",
     quietFrom: "시작",
     quietTo: "종료",
+    taskCheck: "작업 체크",
+    taskOff: "끔",
+    taskMin: "{n}분 작업",
+    taskOk: "{n}분 작업 가능",
+    taskShort: "약 {n}분이면 부족",
     settingsHint:
       "잔여율 또는 예상 소진 시간 중 하나라도 도달하면 알림을 보냅니다. 리셋 임박 알림은 반대로, 곧 리셋되는데 토큰이 많이 남아있을 때 \"지금 더 써도 된다\"고 알려줍니다.",
   },
@@ -89,6 +94,11 @@ const dict: Record<Lang, Record<string, string>> = {
     quietHours: "Quiet hours",
     quietFrom: "From",
     quietTo: "To",
+    taskCheck: "Task check",
+    taskOff: "Off",
+    taskMin: "{n}-min task",
+    taskOk: "OK for {n} min",
+    taskShort: "only ~{n} min left",
     settingsHint:
       "An alert fires when either the remaining percentage or the runs-out time is reached. The reset-soon alert is the opposite — it tells you to use the remaining tokens when a reset is near but plenty is left.",
   },

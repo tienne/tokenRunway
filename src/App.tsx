@@ -102,6 +102,7 @@ function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [pollSeconds, setPollSeconds] = useState(30);
   const [lang, setLang] = useState<Lang>(resolveLang(null));
+  const [taskMin, setTaskMin] = useState(0); // 0 = 작업 체크 끔
 
   async function refresh() {
     try {
@@ -172,6 +173,23 @@ function Dashboard() {
         <p className="muted">{t(lang, "noTools")}</p>
       )}
 
+      {statuses.length > 0 && (
+        <div className="task-check">
+          <span className="task-label">
+            {t(lang, "taskCheck")}:{" "}
+            {taskMin === 0 ? t(lang, "taskOff") : t(lang, "taskMin", { n: taskMin })}
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={120}
+            step={10}
+            value={taskMin}
+            onChange={(e) => setTaskMin(Number(e.target.value))}
+          />
+        </div>
+      )}
+
       {statuses.map((s) => (
         <section className="card" key={s.tool}>
           <div className="card-head">
@@ -236,6 +254,14 @@ function Dashboard() {
               ? `${s.dailyCount} ${t(lang, "requests")}`
               : `${formatAmount(s.dailyUsage)} ${unitLabel(s.unit)} · ${s.dailyCount} ${t(lang, "messages")}`}
           </p>
+
+          {taskMin > 0 && s.etaMinutes != null && (
+            <p className={s.etaMinutes >= taskMin ? "task-ok" : "task-short"}>
+              {s.etaMinutes >= taskMin
+                ? `✓ ${t(lang, "taskOk", { n: taskMin })}`
+                : `⚠️ ${t(lang, "taskShort", { n: Math.round(s.etaMinutes) })}`}
+            </p>
+          )}
 
           {s.sevenDayRemaining != null && (
             <p className="weekly">
