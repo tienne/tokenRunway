@@ -25,6 +25,7 @@ interface RunwayStatus {
   limit: number | null;
   percentRemaining: number | null;
   burnRatePerMin: number;
+  burnTrend: string; // "up" | "down" | "flat"
   etaMinutes: number | null;
   resetsAt: string | null;
   sevenDayRemaining: number | null;
@@ -237,6 +238,12 @@ function Dashboard() {
               <div className="today-item">
                 <span className="today-val">
                   {formatAmount(Math.round(s.burnRatePerMin))}/min
+                  {s.burnTrend === "up" && (
+                    <span className="trend-up"> ↑</span>
+                  )}
+                  {s.burnTrend === "down" && (
+                    <span className="trend-down"> ↓</span>
+                  )}
                 </span>
                 <span className="today-label">{t(lang, "burnRate")}</span>
               </div>

@@ -377,6 +377,15 @@ h1 {
   color: #8e8e93;
 }
 
+/* 소진 속도 추세: 가속(빨강)·감속(초록) */
+.trend-up {
+  color: #d1242f;
+}
+
+.trend-down {
+  color: #30a14e;
+}
+
 .cache-hit {
   margin: 10px 0 0;
   font-size: 11px;

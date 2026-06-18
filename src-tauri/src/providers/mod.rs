@@ -76,6 +76,8 @@ pub struct RunwayStatus {
     pub percent_remaining: Option<f64>,
     /// 최근 구간 소진 속도 (단위/분).
     pub burn_rate_per_min: f64,
+    /// 소진 속도 추세: "up"(가속) | "down"(감속) | "flat" (직전 구간 대비).
+    pub burn_trend: String,
     /// 소진까지 예상 시간(분). 한도와 burn_rate가 유효할 때만.
     pub eta_minutes: Option<f64>,
     /// 5시간 윈도우 리셋 시각 (공식 사용률이 있을 때만).

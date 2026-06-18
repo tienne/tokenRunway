@@ -70,6 +70,26 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
         .sum();
     let burn_rate_per_min = recent_usage as f64 / BURN_WINDOW_MIN;
 
+    // 직전 구간(now-30~now-15분) 속도와 비교해 가속/감속 추세 판단.
+    let prev_since = now_ms - 2 * (BURN_WINDOW_MIN as i64) * 60 * 1000;
+    let prev_until = now_ms - (BURN_WINDOW_MIN as i64) * 60 * 1000;
+    let prev_usage: u64 = samples
+        .iter()
+        .filter(|s| s.timestamp_ms >= prev_since && s.timestamp_ms < prev_until)
+        .map(|s| s.amount)
+        .sum();
+    let prev_rate = prev_usage as f64 / BURN_WINDOW_MIN;
+    let burn_trend = if burn_rate_per_min <= 0.0 && prev_rate <= 0.0 {
+        "flat"
+    } else if burn_rate_per_min > prev_rate * 1.2 {
+        "up"
+    } else if burn_rate_per_min < prev_rate * 0.8 {
+        "down"
+    } else {
+        "flat"
+    }
+    .to_string();
+
     // 윈도우를 SPARK_BUCKETS개 구간으로 나눠 구간별 사용량 집계 (추세 그래프).
     let mut sparkline = vec![0u64; SPARK_BUCKETS];
     let bucket_ms = ((window_secs * 1000) / SPARK_BUCKETS as i64).max(1);
@@ -152,6 +172,7 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
         limit,
         percent_remaining,
         burn_rate_per_min,
+        burn_trend,
         eta_minutes,
         resets_at,
         seven_day_remaining,
