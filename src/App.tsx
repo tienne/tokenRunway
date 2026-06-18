@@ -420,7 +420,8 @@ function SettingsView() {
   }
 
   return (
-    <main className="container settings-window">
+    <main className="container settings-window win-framed">
+      <div className="win-titlebar-bg" />
       <section className="settings">
         <label className="setting-row toggle-row">
           <span>{tr("osNotif")}</span>
@@ -668,7 +669,8 @@ function HistoryView() {
   }, []);
 
   return (
-    <main className="container">
+    <main className="container win-framed">
+      <div className="win-titlebar-bg" />
       {loading && <p className="muted">{t(lang, "loading")}</p>}
       {!loading && history.every((h) => h.days.length === 0) && (
         <p className="muted">{t(lang, "noHistory")}</p>
