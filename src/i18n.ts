@@ -32,6 +32,9 @@ const dict: Record<Lang, Record<string, string>> = {
     noHistory: "기록이 없습니다.",
     cacheHit: "캐시 적중 {n}%",
     apiValue: "API 환산",
+    analytics: "익명 사용 통계 공유",
+    analyticsHint:
+      "기능 사용 같은 익명 행동만 보냅니다. 토큰 수치·잔여율·프로젝트 내용은 절대 전송하지 않아요.",
     osNotif: "OS 알림",
     permWarn: "시스템 알림 권한이 꺼져 있어 알림이 오지 않아요.",
     reqPerm: "권한 요청",
@@ -88,6 +91,9 @@ const dict: Record<Lang, Record<string, string>> = {
     noHistory: "No history yet.",
     cacheHit: "Cache hit {n}%",
     apiValue: "API value",
+    analytics: "Share anonymous usage stats",
+    analyticsHint:
+      "Sends anonymous actions like feature usage only. Never sends token counts, percentages, or project content.",
     osNotif: "OS notifications",
     permWarn: "System notification permission is off, so alerts won't arrive.",
     reqPerm: "Request permission",

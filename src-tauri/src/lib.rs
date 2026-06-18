@@ -1,3 +1,4 @@
+mod analytics;
 mod i18n;
 mod providers;
 mod runway;
@@ -206,6 +207,13 @@ fn open_history_window(app: AppHandle) {
     open_history(&app);
 }
 
+/// 프론트에서 익명 이벤트 전송 (opt-in일 때만 실제 전송됨).
+/// 주의: properties에 토큰 값·잔여율 등 내용은 절대 넣지 말 것 (행동 메타만).
+#[tauri::command]
+fn track_event(event: String, properties: Option<serde_json::Value>) {
+    analytics::track(&event, properties.unwrap_or_else(|| serde_json::json!({})));
+}
+
 /// 현재 언어로 트레이 메뉴를 구성.
 fn build_tray_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let lang = i18n::current();
@@ -285,6 +293,11 @@ fn check_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
                 .title(lang.alert_title())
                 .body(body)
                 .show();
+            // 익명: 어떤 종류 경보가 떴는지 메타만 (값 X)
+            analytics::track(
+                "alert_fired",
+                serde_json::json!({ "kind": if eta_hit && !pct_hit { "eta" } else { "low" } }),
+            );
             alerted.insert(s.tool.clone(), true);
         } else if !should_alert && was_alerted {
             // 리셋 등으로 회복 → 다음 소진 시 다시 알림 가능하게 재무장
@@ -372,6 +385,7 @@ fn check_reset_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
                 .title(lang.reset_title())
                 .body(lang.alert_reset(&s.tool, mins, pct))
                 .show();
+            analytics::track("alert_fired", serde_json::json!({ "kind": "reset" }));
             alerted.insert(s.tool.clone(), true);
         } else if !hit && was {
             // 새 윈도우 시작(리셋 지남) → 재무장
@@ -408,7 +422,8 @@ pub fn run() {
             get_available_tools,
             get_history,
             open_settings_window,
-            open_history_window
+            open_history_window,
+            track_event
         ])
         // 팝오버 UX는 main 창에만 적용 (설정 창은 일반 창으로 동작).
         .on_window_event(|window, event| {
@@ -470,6 +485,16 @@ pub fn run() {
 
             // 백그라운드 경보 루프 시작 (창이 닫혀도 메뉴바 상주 상태로 동작)
             spawn_alert_loop(app.handle().clone());
+
+            // 익명: 실행 + 감지된 도구 수(이름 X)만
+            let tool_count = providers().iter().filter(|p| p.available()).count();
+            analytics::track(
+                "app_launched",
+                serde_json::json!({
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "tool_count": tool_count,
+                }),
+            );
 
             Ok(())
         })

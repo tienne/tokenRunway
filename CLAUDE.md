@@ -115,8 +115,18 @@ cd src-tauri && cargo check     # Rust 컴파일
 pnpm tauri dev                  # 실제 실행 (메뉴바 + 알림 권한 다이얼로그)
 ```
 
+## Analytics (PostHog, opt-in)
+
+- `analytics.rs` — opt-in(`settings.analytics_enabled`)일 때만 PostHog capture로 전송
+- 키는 빌드 시 `POSTHOG_KEY` env로 주입 (레포 미포함, 없으면 완전 비활성)
+- **절대 전송 금지**: 토큰 수치·잔여율 값·프로젝트명·메시지 내용. 행동 메타만
+- 이벤트: `app_launched{version,tool_count}`, `alert_fired{kind}`,
+  `settings_opened`, `history_opened`. 익명 `anon_id`로 구분
+- 새 이벤트 추가 시 properties를 화이트리스트로 엄격히 (값 유출 주의)
+
 ## 주의사항 (회귀 방지)
 
+- **익명 통계는 opt-in·내용 무전송** — properties에 토큰/잔여율 값 절대 금지
 - **Claude Code transcript는 message.id로 dedup 필수** — 세션 재개·worktree·압축으로
   같은 메시지가 여러 번 기록됨. dedup 안 하면 토큰·메시지가 ~2배 부풀려짐
   (`collect_samples`의 `seen` HashSet). 다른 provider도 중복 의심되면 동일 적용.

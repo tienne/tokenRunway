@@ -44,6 +44,7 @@ interface Settings {
   quietEnabled: boolean;
   quietStartHour: number;
   quietEndHour: number;
+  analyticsEnabled: boolean;
 }
 
 interface ToolInfo {
@@ -298,6 +299,7 @@ function SettingsView() {
     quietEnabled: false,
     quietStartHour: 22,
     quietEndHour: 8,
+    analyticsEnabled: false,
   });
   const [tools, setTools] = useState<ToolInfo[]>([]);
   const [permGranted, setPermGranted] = useState<boolean | null>(null);
@@ -311,6 +313,7 @@ function SettingsView() {
     invoke<ToolInfo[]>("get_available_tools").then(setTools).catch(() => {});
     isPermissionGranted().then(setPermGranted).catch(() => {});
     isEnabled().then(setAutostart).catch(() => {});
+    invoke("track_event", { event: "settings_opened" }).catch(() => {});
   }, []);
 
   async function toggleAutostart(value: boolean) {
@@ -535,6 +538,16 @@ function SettingsView() {
           />
         </label>
 
+        <label className="setting-row toggle-row">
+          <span>{tr("analytics")}</span>
+          <input
+            type="checkbox"
+            checked={settings.analyticsEnabled}
+            onChange={(e) => update({ analyticsEnabled: e.target.checked })}
+          />
+        </label>
+        <p className="setting-hint">{tr("analyticsHint")}</p>
+
         {tools.length > 0 && (
           <div className="setting-tools">
             <span className="setting-row">{tr("monitorTools")}</span>
@@ -585,6 +598,7 @@ function HistoryView() {
     invoke<ToolHistory[]>("get_history", { days: 7 })
       .then(setHistory)
       .finally(() => setLoading(false));
+    invoke("track_event", { event: "history_opened" }).catch(() => {});
   }, []);
 
   return (

@@ -60,6 +60,12 @@ pub struct Settings {
     /// 방해금지 종료 시각(0~23시).
     #[serde(default = "default_quiet_end")]
     pub quiet_end_hour: u32,
+    /// 익명 사용 통계 공유 (opt-in, 기본 꺼짐).
+    #[serde(default)]
+    pub analytics_enabled: bool,
+    /// 익명 분석용 랜덤 ID (개인 식별 불가). 최초 1회 생성.
+    #[serde(default)]
+    pub anon_id: Option<String>,
 }
 
 fn default_quiet_start() -> u32 {
@@ -83,6 +89,8 @@ impl Default for Settings {
             quiet_enabled: false,
             quiet_start_hour: default_quiet_start(),
             quiet_end_hour: default_quiet_end(),
+            analytics_enabled: false,
+            anon_id: None,
         }
     }
 }
@@ -162,4 +170,31 @@ pub fn notifications_enabled() -> bool {
 /// 설정 언어 (None이면 auto).
 pub fn language() -> Option<String> {
     SETTINGS.lock().ok().and_then(|s| s.language.clone())
+}
+
+/// 익명 분석 활성화 여부.
+pub fn analytics_enabled() -> bool {
+    SETTINGS.lock().map(|s| s.analytics_enabled).unwrap_or(false)
+}
+
+/// 익명 ID — 없으면 생성·저장 후 반환.
+pub fn anon_id() -> String {
+    if let Some(id) = SETTINGS.lock().ok().and_then(|s| s.anon_id.clone()) {
+        return id;
+    }
+    // 의사난수 기반 익명 ID 생성 (개인 식별 불가).
+    let id = generate_anon_id();
+    let mut current = get();
+    current.anon_id = Some(id.clone());
+    set(current);
+    id
+}
+
+fn generate_anon_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("anon-{nanos:x}")
 }
