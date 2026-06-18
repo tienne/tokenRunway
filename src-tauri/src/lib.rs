@@ -97,10 +97,11 @@ fn get_settings() -> Settings {
     settings::get()
 }
 
-/// 설정을 저장 (디스크 + 전역).
+/// 설정을 저장 (디스크 + 전역). 언어 변경에 대비해 트레이/제목을 다시 현지화.
 #[tauri::command]
-fn set_settings(settings: Settings) {
+fn set_settings(app: AppHandle, settings: Settings) {
     settings::set(settings);
+    refresh_localized_ui(&app);
 }
 
 /// 설정 창을 열거나 포커스. 같은 프론트(label로 화면 분기)를 일반 창으로 띄운다.
@@ -111,7 +112,7 @@ fn open_settings(app: &AppHandle) {
         return;
     }
     let _ = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
-        .title("Token Runway 설정")
+        .title(i18n::current().settings_title())
         .inner_size(420.0, 640.0)
         .min_inner_size(420.0, 480.0)
         .resizable(true)
@@ -121,6 +122,31 @@ fn open_settings(app: &AppHandle) {
 #[tauri::command]
 fn open_settings_window(app: AppHandle) {
     open_settings(&app);
+}
+
+/// 현재 언어로 트레이 메뉴를 구성.
+fn build_tray_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    let lang = i18n::current();
+    let show = MenuItem::with_id(app, "show", lang.menu_open(), true, None::<&str>)?;
+    let settings_item =
+        MenuItem::with_id(app, "settings", lang.menu_settings(), true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", lang.menu_quit(), true, None::<&str>)?;
+    Menu::with_items(app, &[&show, &settings_item, &quit])
+}
+
+/// 언어 변경 등으로 트레이 메뉴·설정 창 제목을 현재 언어로 다시 적용.
+fn refresh_localized_ui(app: &AppHandle) {
+    let app = app.clone();
+    let _ = app.clone().run_on_main_thread(move || {
+        if let Ok(menu) = build_tray_menu(&app) {
+            if let Some(tray) = app.tray_by_id("main") {
+                let _ = tray.set_menu(Some(menu));
+            }
+        }
+        if let Some(win) = app.get_webview_window("settings") {
+            let _ = win.set_title(i18n::current().settings_title());
+        }
+    });
 }
 
 /// 임계치 이하로 떨어진 도구에 네이티브 알림을 발사 (도구별 1회, 회복 시 재무장).
@@ -298,13 +324,8 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            // 우클릭 메뉴 (열기/설정/종료). 언어는 시작 시점 기준(변경 시 재시작 반영).
-            let lang = i18n::current();
-            let show = MenuItem::with_id(app, "show", lang.menu_open(), true, None::<&str>)?;
-            let settings_item =
-                MenuItem::with_id(app, "settings", lang.menu_settings(), true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", lang.menu_quit(), true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &settings_item, &quit])?;
+            // 우클릭 메뉴 (열기/설정/종료). 언어 변경 시 set_settings에서 재생성.
+            let menu = build_tray_menu(&app.handle().clone())?;
 
             // 메뉴바 전용 단색 아이콘 (template 모드 → macOS가 라이트/다크에 맞게 자동 반전)
             let tray_icon = tauri::image::Image::from_bytes(include_bytes!(

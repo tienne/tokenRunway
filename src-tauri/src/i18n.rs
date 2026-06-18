@@ -40,6 +40,12 @@ impl Lang {
             Lang::En => "Quit",
         }
     }
+    pub fn settings_title(self) -> &'static str {
+        match self {
+            Lang::Ko => "Token Runway 설정",
+            Lang::En => "Token Runway Settings",
+        }
+    }
     pub fn alert_title(self) -> &'static str {
         match self {
             Lang::Ko => "🛬 Token Runway 경보",
