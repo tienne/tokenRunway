@@ -354,6 +354,9 @@ fn parse_line(line: &str, since_ms: i64) -> Option<(Option<String>, UsageSample)
             amount: usage.total(),
             cost_usd,
             cache_read: usage.cache_read_input_tokens,
+            input_total: usage.input_tokens
+                + usage.cache_creation_input_tokens
+                + usage.cache_read_input_tokens,
         },
     ))
 }

@@ -57,6 +57,9 @@ struct TokenUsage {
     total_tokens: u64,
     #[serde(default)]
     cached_input_tokens: u64,
+    /// Codex의 input_tokens는 cached_input_tokens를 포함한 입력 총량.
+    #[serde(default)]
+    input_tokens: u64,
 }
 
 /// Codex가 token_count 이벤트에 함께 기록하는 공식 rate limit 상태.
@@ -189,5 +192,6 @@ fn parse_line(line: &str, since_ms: i64) -> Option<UsageSample> {
         amount: usage.total_tokens,
         cost_usd: 0.0, // OpenAI 단가 매핑 불확실 — 추후
         cache_read: usage.cached_input_tokens,
+        input_total: usage.input_tokens, // cached 포함된 입력 총량
     })
 }

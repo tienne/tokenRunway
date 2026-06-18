@@ -44,14 +44,19 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
     let daily_cost: f64 = daily_samples.clone().map(|s| s.cost_usd).sum();
     let daily_count = daily_samples.count() as u64;
 
-    // 윈도우 캐시 적중률 (cache_read / 전체). 캐시 토큰이 0이면 None.
+    // 윈도우 캐시 적중률 = cache_read / 입력 토큰 총량 (output 제외 — 캐시는 입력에만 적용).
     let window_cache_read: u64 = samples
         .iter()
         .filter(|s| s.timestamp_ms >= window_start)
         .map(|s| s.cache_read)
         .sum();
-    let cache_hit_rate = if window_cache_read > 0 && window_usage > 0 {
-        Some((window_cache_read as f64 / window_usage as f64) * 100.0)
+    let window_input: u64 = samples
+        .iter()
+        .filter(|s| s.timestamp_ms >= window_start)
+        .map(|s| s.input_total)
+        .sum();
+    let cache_hit_rate = if window_cache_read > 0 && window_input > 0 {
+        Some((window_cache_read as f64 / window_input as f64) * 100.0)
     } else {
         None
     };

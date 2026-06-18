@@ -25,6 +25,8 @@ pub struct UsageSample {
     pub cost_usd: f64,
     /// 캐시 읽기 토큰 수 (효율 지표용). 해당 없으면 0.
     pub cache_read: u64,
+    /// 입력 토큰 총량 (input + cache_creation + cache_read). 캐시 적중률 분모.
+    pub input_total: u64,
 }
 
 /// 도구가 제공하는 공식(권위) 사용률. Claude Code는 OAuth `/api/oauth/usage`에서 받는다.

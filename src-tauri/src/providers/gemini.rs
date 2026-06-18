@@ -88,6 +88,7 @@ impl UsageProvider for GeminiProvider {
                     amount: 1,
                     cost_usd: 0.0,
                     cache_read: 0,
+                    input_total: 0,
                 });
             }
         }
