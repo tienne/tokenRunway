@@ -157,6 +157,28 @@ h1 {
   color: inherit;
 }
 
+.quiet-range {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
+.quiet-range label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.quiet-range select {
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid rgba(127, 127, 127, 0.3);
+  background: transparent;
+  color: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
 .setting-tools {
   margin-top: 4px;
   padding-top: 10px;

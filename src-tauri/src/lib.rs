@@ -152,8 +152,25 @@ fn refresh_localized_ui(app: &AppHandle) {
 }
 
 /// 임계치 이하로 떨어진 도구에 네이티브 알림을 발사 (도구별 1회, 회복 시 재무장).
+/// 현재 시각이 방해금지 시간대인지 (자정을 넘는 범위도 처리).
+fn is_quiet_now() -> bool {
+    use chrono::Timelike;
+    let s = settings::get();
+    if !s.quiet_enabled {
+        return false;
+    }
+    let h = chrono::Local::now().hour();
+    let (start, end) = (s.quiet_start_hour, s.quiet_end_hour);
+    if start <= end {
+        h >= start && h < end
+    } else {
+        // 예: 22~08시 (자정 넘김)
+        h >= start || h < end
+    }
+}
+
 fn check_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
-    if !settings::notifications_enabled() {
+    if !settings::notifications_enabled() || is_quiet_now() {
         return;
     }
     let threshold = settings::alert_threshold();
@@ -239,7 +256,7 @@ fn minutes_until(iso: &str) -> Option<f64> {
 
 /// 리셋 임박 + 잔여 충분(버려질 토큰 많음) 시 "지금 활용" 알림.
 fn check_reset_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
-    if !settings::notifications_enabled() {
+    if !settings::notifications_enabled() || is_quiet_now() {
         return;
     }
     let reset_min = settings::reset_alert_minutes();

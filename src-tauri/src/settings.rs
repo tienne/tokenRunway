@@ -51,6 +51,22 @@ pub struct Settings {
     /// UI/알림 언어. None이면 시스템 로케일 자동 감지 ("ko" | "en").
     #[serde(default)]
     pub language: Option<String>,
+    /// 방해금지 시간대 사용 여부.
+    #[serde(default)]
+    pub quiet_enabled: bool,
+    /// 방해금지 시작 시각(0~23시).
+    #[serde(default = "default_quiet_start")]
+    pub quiet_start_hour: u32,
+    /// 방해금지 종료 시각(0~23시).
+    #[serde(default = "default_quiet_end")]
+    pub quiet_end_hour: u32,
+}
+
+fn default_quiet_start() -> u32 {
+    22
+}
+fn default_quiet_end() -> u32 {
+    8
 }
 
 impl Default for Settings {
@@ -64,6 +80,9 @@ impl Default for Settings {
             reset_alert_minutes: default_reset_alert_minutes(),
             notifications_enabled: default_notifications_enabled(),
             language: None,
+            quiet_enabled: false,
+            quiet_start_hour: default_quiet_start(),
+            quiet_end_hour: default_quiet_end(),
         }
     }
 }

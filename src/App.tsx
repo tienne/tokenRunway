@@ -38,6 +38,9 @@ interface Settings {
   trayTool: string | null;
   notificationsEnabled: boolean;
   language: string | null;
+  quietEnabled: boolean;
+  quietStartHour: number;
+  quietEndHour: number;
 }
 
 interface ToolInfo {
@@ -242,6 +245,9 @@ function SettingsView() {
     trayTool: null,
     notificationsEnabled: true,
     language: null,
+    quietEnabled: false,
+    quietStartHour: 22,
+    quietEndHour: 8,
   });
   const [tools, setTools] = useState<ToolInfo[]>([]);
   const [permGranted, setPermGranted] = useState<boolean | null>(null);
@@ -328,6 +334,49 @@ function SettingsView() {
         )}
         {settings.notificationsEnabled && permGranted === true && (
           <p className="setting-hint">{tr("permOk")}</p>
+        )}
+
+        <label className="setting-row toggle-row">
+          <span>{tr("quietHours")}</span>
+          <input
+            type="checkbox"
+            checked={settings.quietEnabled}
+            onChange={(e) => update({ quietEnabled: e.target.checked })}
+          />
+        </label>
+        {settings.quietEnabled && (
+          <div className="quiet-range">
+            <label>
+              {tr("quietFrom")}
+              <select
+                value={settings.quietStartHour}
+                onChange={(e) =>
+                  update({ quietStartHour: Number(e.target.value) })
+                }
+              >
+                {Array.from({ length: 24 }, (_, h) => (
+                  <option key={h} value={h}>
+                    {String(h).padStart(2, "0")}:00
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              {tr("quietTo")}
+              <select
+                value={settings.quietEndHour}
+                onChange={(e) =>
+                  update({ quietEndHour: Number(e.target.value) })
+                }
+              >
+                {Array.from({ length: 24 }, (_, h) => (
+                  <option key={h} value={h}>
+                    {String(h).padStart(2, "0")}:00
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
         )}
 
         <hr className="setting-divider" />
