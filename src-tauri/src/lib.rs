@@ -16,7 +16,7 @@ use std::time::Duration;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_positioner::{Position, WindowExt};
@@ -102,6 +102,8 @@ fn get_settings() -> Settings {
 fn set_settings(app: AppHandle, settings: Settings) {
     settings::set(settings);
     refresh_localized_ui(&app);
+    // 다른 창(대시보드)이 즉시 언어·설정을 다시 읽도록 브로드캐스트.
+    let _ = app.emit("settings-changed", ());
 }
 
 /// 설정 창을 열거나 포커스. 같은 프론트(label로 화면 분기)를 일반 창으로 띄운다.

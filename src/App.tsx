@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import {
   isPermissionGranted,
   requestPermission,
@@ -93,14 +94,27 @@ function Dashboard() {
     }
   }
 
+  async function reloadSettings() {
+    try {
+      const s = await invoke<Settings>("get_settings");
+      setPollSeconds(s.pollSeconds);
+      setLang(resolveLang(s.language));
+    } catch {
+      /* noop */
+    }
+  }
+
   useEffect(() => {
     refresh();
-    invoke<Settings>("get_settings")
-      .then((s) => {
-        setPollSeconds(s.pollSeconds);
-        setLang(resolveLang(s.language));
-      })
-      .catch(() => {});
+    reloadSettings();
+    // 설정 창에서 변경하면 즉시 반영 (폴링 기다리지 않음)
+    const unlisten = listen("settings-changed", () => {
+      reloadSettings();
+      refresh();
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
   }, []);
 
   useEffect(() => {
