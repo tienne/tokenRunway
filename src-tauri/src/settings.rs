@@ -48,6 +48,9 @@ pub struct Settings {
     /// 모든 OS 알림 마스터 스위치.
     #[serde(default = "default_notifications_enabled")]
     pub notifications_enabled: bool,
+    /// UI/알림 언어. None이면 시스템 로케일 자동 감지 ("ko" | "en").
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 impl Default for Settings {
@@ -60,6 +63,7 @@ impl Default for Settings {
             tray_tool: None,
             reset_alert_minutes: default_reset_alert_minutes(),
             notifications_enabled: default_notifications_enabled(),
+            language: None,
         }
     }
 }
@@ -134,4 +138,9 @@ pub fn reset_alert_minutes() -> f64 {
 /// OS 알림 마스터 스위치.
 pub fn notifications_enabled() -> bool {
     SETTINGS.lock().map(|s| s.notifications_enabled).unwrap_or(true)
+}
+
+/// 설정 언어 (None이면 auto).
+pub fn language() -> Option<String> {
+    SETTINGS.lock().ok().and_then(|s| s.language.clone())
 }

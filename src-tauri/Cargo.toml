@@ -27,3 +27,4 @@ serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
 ureq = { version = "2", features = ["json"] }
+sys-locale = "0.3"

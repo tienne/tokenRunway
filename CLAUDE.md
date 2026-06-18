@@ -135,5 +135,7 @@ pnpm tauri dev                  # 실제 실행 (메뉴바 + 알림 권한 다�
 - [x] 임계치 설정 UI — `settings.rs`(파일 영속화) + ⚙️ 슬라이더
 - [x] 폴링 주기 / 도구 on·off 설정 — `poll_seconds`·`disabled_tools`
 - [x] ETA 기반 경보 — `eta_alert_minutes` (잔여율 OR ETA 도달 시 알림)
+- [x] 다국어 (한국어/English) — 프론트 `src/i18n.ts`, Rust `i18n.rs`(메뉴·알림),
+  설정에서 언어 선택(시스템 자동 감지 기본). note는 i18n 키로 전달해 프론트 번역
 - [ ] Cursor / Copilot provider — 데이터 소스 스펙 확보(위 참고), 검증 환경에서 구현 필요
 - [ ] 비-macOS Keychain 지원 (`keyring` crate)

@@ -1,3 +1,4 @@
+mod i18n;
 mod providers;
 mod runway;
 mod settings;
@@ -144,21 +145,17 @@ fn check_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
         let should_alert = pct_hit || eta_hit;
 
         if should_alert && !was_alerted {
+            let lang = i18n::current();
             // ETA만 걸렸으면 시간 중심 메시지, 그 외엔 잔여율 메시지
             let body = if eta_hit && !pct_hit {
-                format!(
-                    "{} 약 {:.0}분 후 소진 ({:.0}% 남음)",
-                    s.tool,
-                    s.eta_minutes.unwrap_or(0.0),
-                    pct
-                )
+                lang.alert_eta(&s.tool, s.eta_minutes.unwrap_or(0.0), pct)
             } else {
-                format!("{} 런웨이 {pct:.0}% 남음", s.tool)
+                lang.alert_low(&s.tool, pct)
             };
             let _ = app
                 .notification()
                 .builder()
-                .title("🛬 Token Runway 경보")
+                .title(lang.alert_title())
                 .body(body)
                 .show();
             alerted.insert(s.tool.clone(), true);
@@ -241,14 +238,12 @@ fn check_reset_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
         let was = alerted.get(&s.tool).copied().unwrap_or(false);
 
         if hit && !was {
+            let lang = i18n::current();
             let _ = app
                 .notification()
                 .builder()
-                .title("🛬 토큰 리셋 임박")
-                .body(format!(
-                    "{} 약 {:.0}분 후 리셋 — {:.0}% 남음, 지금 더 써도 됩니다",
-                    s.tool, mins, pct
-                ))
+                .title(lang.reset_title())
+                .body(lang.alert_reset(&s.tool, mins, pct))
                 .show();
             alerted.insert(s.tool.clone(), true);
         } else if !hit && was {
@@ -303,11 +298,12 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            // 우클릭 메뉴 (열기/설정/종료).
-            let show = MenuItem::with_id(app, "show", "열기", true, None::<&str>)?;
+            // 우클릭 메뉴 (열기/설정/종료). 언어는 시작 시점 기준(변경 시 재시작 반영).
+            let lang = i18n::current();
+            let show = MenuItem::with_id(app, "show", lang.menu_open(), true, None::<&str>)?;
             let settings_item =
-                MenuItem::with_id(app, "settings", "설정...", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "종료", true, None::<&str>)?;
+                MenuItem::with_id(app, "settings", lang.menu_settings(), true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", lang.menu_quit(), true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &settings_item, &quit])?;
 
             // 메뉴바 전용 단색 아이콘 (template 모드 → macOS가 라이트/다크에 맞게 자동 반전)

@@ -67,8 +67,9 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
             };
 
             // 요청 수 기반(Gemini)은 공식 한도가 아닌 추정치이므로 명시한다.
+            // note는 i18n 키 — 프론트에서 번역한다.
             let note = if provider.unit() == "requests" {
-                Some("추정치 — 무료티어 1000 req/day 가정".to_string())
+                Some("note.estimate".to_string())
             } else {
                 None
             };
@@ -99,7 +100,7 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
                 _ => None,
             };
             let note = if limit.is_none() {
-                Some("한도 정보 없음 — 사용량/속도만 표시".to_string())
+                Some("note.no_limit".to_string())
             } else {
                 None
             };
