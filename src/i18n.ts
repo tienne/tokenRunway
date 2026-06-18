@@ -35,8 +35,8 @@ const dict: Record<Lang, Record<string, string>> = {
     analytics: "익명 사용 통계 공유",
     analyticsHint:
       "기능 사용 같은 익명 행동만 보냅니다. 토큰 수치·잔여율·프로젝트 내용은 절대 전송하지 않아요.",
-    todayTokens: "오늘 토큰",
-    todayRequests: "오늘 요청",
+    todayTokens: "토큰",
+    todayRequests: "요청",
     todayMessages: "메시지",
     osNotif: "OS 알림",
     permWarn: "시스템 알림 권한이 꺼져 있어 알림이 오지 않아요.",
@@ -97,8 +97,8 @@ const dict: Record<Lang, Record<string, string>> = {
     analytics: "Share anonymous usage stats",
     analyticsHint:
       "Sends anonymous actions like feature usage only. Never sends token counts, percentages, or project content.",
-    todayTokens: "Today tokens",
-    todayRequests: "Today requests",
+    todayTokens: "tokens",
+    todayRequests: "requests",
     todayMessages: "messages",
     osNotif: "OS notifications",
     permWarn: "System notification permission is off, so alerts won't arrive.",

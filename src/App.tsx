@@ -247,30 +247,35 @@ function Dashboard() {
             </div>
           </dl>
 
-          <div className="today">
-            {s.unit === "requests" ? (
-              <div className="today-item">
-                <span className="today-val">{s.dailyCount}</span>
-                <span className="today-label">{t(lang, "todayRequests")}</span>
-              </div>
-            ) : (
-              <>
-                <div className="today-item">
-                  <span className="today-val">{formatAmount(s.dailyUsage)}</span>
-                  <span className="today-label">{t(lang, "todayTokens")}</span>
-                </div>
+          <div className="today-section">
+            <span className="today-title">{t(lang, "today")}</span>
+            <div className="today">
+              {s.unit === "requests" ? (
                 <div className="today-item">
                   <span className="today-val">{s.dailyCount}</span>
-                  <span className="today-label">{t(lang, "todayMessages")}</span>
+                  <span className="today-label">{t(lang, "todayRequests")}</span>
                 </div>
-                {s.dailyCost > 0 && (
+              ) : (
+                <>
                   <div className="today-item">
-                    <span className="today-val">${s.dailyCost.toFixed(2)}</span>
-                    <span className="today-label">{t(lang, "apiValue")}</span>
+                    <span className="today-val">
+                      {formatAmount(s.dailyUsage)}
+                    </span>
+                    <span className="today-label">{t(lang, "todayTokens")}</span>
                   </div>
-                )}
-              </>
-            )}
+                  <div className="today-item">
+                    <span className="today-val">{s.dailyCount}</span>
+                    <span className="today-label">{t(lang, "todayMessages")}</span>
+                  </div>
+                  {s.dailyCost > 0 && (
+                    <div className="today-item">
+                      <span className="today-val">${s.dailyCost.toFixed(2)}</span>
+                      <span className="today-label">{t(lang, "apiValue")}</span>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           </div>
 
           <Sparkline data={s.sparkline} />
