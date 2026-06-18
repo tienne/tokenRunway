@@ -19,6 +19,7 @@ interface RunwayStatus {
   windowUsage: number;
   dailyUsage: number;
   dailyCount: number;
+  sparkline: number[];
   limit: number | null;
   percentRemaining: number | null;
   burnRatePerMin: number;
@@ -68,6 +69,19 @@ function formatEta(min: number | null, lang: Lang): string {
   const h = Math.floor(min / 60);
   const m = Math.round(min % 60);
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+/** 구간별 사용량 미니 막대 스파크라인 */
+function Sparkline({ data }: { data: number[] }) {
+  if (!data.length || data.every((v) => v === 0)) return null;
+  const max = Math.max(...data, 1);
+  return (
+    <div className="spark" aria-hidden>
+      {data.map((v, i) => (
+        <span key={i} style={{ height: `${Math.max(6, (v / max) * 100)}%` }} />
+      ))}
+    </div>
+  );
 }
 
 function formatResetsAt(iso: string | null, lang: Lang): string | null {
@@ -213,6 +227,8 @@ function Dashboard() {
               <dd>{formatEta(s.etaMinutes, lang)}</dd>
             </div>
           </dl>
+
+          <Sparkline data={s.sparkline} />
 
           <p className="daily">
             {t(lang, "today")}{" "}

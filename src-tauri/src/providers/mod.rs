@@ -58,6 +58,8 @@ pub struct RunwayStatus {
     pub daily_usage: u64,
     /// 오늘 메시지/요청 수 (시계열 샘플 개수).
     pub daily_count: u64,
+    /// 윈도우를 균등 분할한 구간별 사용량 (미니 추세 그래프용).
+    pub sparkline: Vec<u64>,
     /// 한도(분모). OAuth 연동 전에는 None → percent/eta 계산 불가.
     pub limit: Option<u64>,
     /// 남은 비율 (%). 공식 사용률 또는 limit이 있을 때만.

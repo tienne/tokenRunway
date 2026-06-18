@@ -9,6 +9,9 @@ use crate::providers::{RunwayStatus, UsageProvider};
 /// 소진 속도 측정 구간 (분). 최근 이 시간의 기울기로 ETA를 추정.
 const BURN_WINDOW_MIN: f64 = 15.0;
 
+/// 추세 스파크라인 구간 수.
+const SPARK_BUCKETS: usize = 12;
+
 /// 오늘(로컬) 자정의 epoch millis.
 fn local_midnight_ms() -> i64 {
     Local::now()
@@ -48,6 +51,14 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
         .map(|s| s.amount)
         .sum();
     let burn_rate_per_min = recent_usage as f64 / BURN_WINDOW_MIN;
+
+    // 윈도우를 SPARK_BUCKETS개 구간으로 나눠 구간별 사용량 집계 (추세 그래프).
+    let mut sparkline = vec![0u64; SPARK_BUCKETS];
+    let bucket_ms = ((window_secs * 1000) / SPARK_BUCKETS as i64).max(1);
+    for s in samples.iter().filter(|s| s.timestamp_ms >= window_start) {
+        let idx = (((s.timestamp_ms - window_start) / bucket_ms) as usize).min(SPARK_BUCKETS - 1);
+        sparkline[idx] += s.amount;
+    }
 
     // 공식 사용률(OAuth)이 있으면 우선 사용 — 로컬 토큰 합산보다 정확하다.
     let official = provider.official_usage();
@@ -118,6 +129,7 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
         window_usage,
         daily_usage,
         daily_count,
+        sparkline,
         limit,
         percent_remaining,
         burn_rate_per_min,

@@ -300,6 +300,21 @@ h1 {
   font-variant-numeric: tabular-nums;
 }
 
+.spark {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 28px;
+  margin-top: 12px;
+}
+
+.spark span {
+  flex: 1;
+  background: linear-gradient(180deg, #0a84ff, #5ac8fa);
+  border-radius: 2px;
+  min-height: 2px;
+}
+
 .daily {
   margin: 10px 0 0;
   font-size: 11px;
