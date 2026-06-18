@@ -149,13 +149,20 @@ function Dashboard() {
     };
   }, []);
 
-  // 콘텐츠 높이에 맞춰 팝오버 창 높이 자동 조정 (줄바꿈으로 길어져도 잘리지 않게)
+  // 콘텐츠 너비에 맞춰 팝오버 창 너비 자동 조정 (텍스트가 줄바꿈되지 않게)
   useEffect(() => {
     const ro = new ResizeObserver(() => {
+      // 줄바꿈 없이 필요한 너비(scrollWidth) + 높이
+      const w = Math.ceil(document.documentElement.scrollWidth);
       const h = Math.ceil(document.documentElement.scrollHeight);
-      const clamped = Math.min(Math.max(h, 160), 760); // 화면 밖으로는 안 나가게
-      getCurrentWindow()
-        .setSize(new LogicalSize(360, clamped))
+      const win = getCurrentWindow();
+      win
+        .setSize(
+          new LogicalSize(
+            Math.min(Math.max(w, 360), 560), // 360~560 범위
+            Math.min(Math.max(h, 160), 760)
+          )
+        )
         .catch(() => {});
     });
     ro.observe(document.body);

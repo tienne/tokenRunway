@@ -27,7 +27,6 @@ body {
 
 .container {
   padding: 16px;
-  max-width: 420px;
 }
 
 /* 설정 창: 콘텐츠가 길면 스크롤, 하단 여백 확보 */
@@ -403,7 +402,7 @@ h1 {
   font-size: 11px;
   font-weight: 600;
   color: #bf8700;
-  line-height: 1.4;
+  white-space: nowrap; /* 줄바꿈 대신 창 너비가 늘어남 */
 }
 
 .weekly {
@@ -417,7 +416,7 @@ h1 {
   margin: 10px 0 0;
   font-size: 11px;
   color: #8e8e93;
-  line-height: 1.4;
+  white-space: nowrap;
 }
 
 .note-error {
