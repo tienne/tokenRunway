@@ -32,6 +32,19 @@ struct CachedUsage {
 /// 전역 사용률 캐시. provider가 매 호출마다 새로 생성돼도 rate limit을 넘지 않도록.
 static USAGE_CACHE: Mutex<Option<CachedUsage>> = Mutex::new(None);
 
+/// 시계열 샘플 캐시 TTL. 통계 기간 토글·대시보드 폴링이 같은 파싱 결과를 재사용.
+const SAMPLES_CACHE_TTL: Duration = Duration::from_secs(60);
+
+/// 파싱한 샘플 캐시. ~/.claude는 수백 MB라 매 호출 재파싱이 비싸다.
+/// 가장 넓은 윈도우를 캐시해두고, 더 좁은 요청은 메모리 필터로 처리한다.
+struct CachedSamples {
+    fetched_at: Instant,
+    since_ms: i64,
+    samples: Vec<UsageSample>,
+}
+
+static SAMPLES_CACHE: Mutex<Option<CachedSamples>> = Mutex::new(None);
+
 pub struct ClaudeCodeProvider {
     projects_dir: PathBuf,
 }
@@ -112,6 +125,21 @@ impl UsageProvider for ClaudeCodeProvider {
     }
 
     fn collect_samples(&self, since_ms: i64) -> Vec<UsageSample> {
+        // 캐시 적중: 신선하고 캐시 윈도우가 요청보다 넓으면(더 과거부터 모았으면)
+        // 메모리 필터만으로 즉시 반환 — 재파싱 없음.
+        if let Ok(cache) = SAMPLES_CACHE.lock() {
+            if let Some(c) = cache.as_ref() {
+                if c.fetched_at.elapsed() < SAMPLES_CACHE_TTL && c.since_ms <= since_ms {
+                    return c
+                        .samples
+                        .iter()
+                        .filter(|s| s.timestamp_ms >= since_ms)
+                        .cloned()
+                        .collect();
+                }
+            }
+        }
+
         let mut samples = Vec::new();
         // Claude Code는 세션 재개·worktree·압축 등으로 같은 메시지를 transcript에
         // 여러 번 기록한다. message.id로 중복 제거해야 사용량이 부풀려지지 않는다.
@@ -135,6 +163,22 @@ impl UsageProvider for ClaudeCodeProvider {
         }
 
         samples.sort_by_key(|s| s.timestamp_ms);
+
+        // 저장 — 단, 더 넓고 신선한 캐시가 이미 있으면 덮지 않는다
+        // (대시보드 5h 폴링이 통계의 30일 캐시를 좁히지 않도록).
+        if let Ok(mut cache) = SAMPLES_CACHE.lock() {
+            let keep = cache
+                .as_ref()
+                .is_some_and(|c| c.fetched_at.elapsed() < SAMPLES_CACHE_TTL && c.since_ms <= since_ms);
+            if !keep {
+                *cache = Some(CachedSamples {
+                    fetched_at: Instant::now(),
+                    since_ms,
+                    samples: samples.clone(),
+                });
+            }
+        }
+
         samples
     }
 
@@ -332,6 +376,11 @@ struct UsageWindow {
 
 /// 한 줄을 파싱해 (중복 제거용 message.id, 샘플)을 반환.
 fn parse_line(line: &str, since_ms: i64) -> Option<(Option<String>, UsageSample)> {
+    // 빠른 사전 필터: usage 블록이 없는 라인(대부분 user/tool 메시지)은
+    // JSON 파싱 비용을 들이지 않고 즉시 건너뛴다. (수백 MB 파싱 → usage 라인만)
+    if !line.contains("\"usage\"") {
+        return None;
+    }
     let parsed: TranscriptLine = serde_json::from_str(line).ok()?;
     let message = parsed.message?;
     let usage = message.usage?;
