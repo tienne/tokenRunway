@@ -386,6 +386,10 @@ h1 {
   color: #30a14e;
 }
 
+.trend-flat {
+  color: #8e8e93;
+}
+
 .cache-hit {
   margin: 10px 0 0;
   font-size: 11px;

@@ -244,6 +244,9 @@ function Dashboard() {
                   {s.burnTrend === "down" && (
                     <span className="trend-down"> ↓</span>
                   )}
+                  {s.burnTrend === "flat" && (
+                    <span className="trend-flat"> →</span>
+                  )}
                 </span>
                 <span className="today-label">{t(lang, "burnRate")}</span>
               </div>
