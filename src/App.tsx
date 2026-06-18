@@ -641,71 +641,219 @@ function SettingsView() {
   );
 }
 
-interface DayUsage {
+interface DayStat {
   date: string;
   usage: number;
   count: number;
+  cost: number;
 }
-interface ToolHistory {
+interface ModelUsage {
+  model: string;
+  usage: number;
+  cost: number;
+  count: number;
+}
+interface ToolStats {
   tool: string;
   unit: string;
-  days: DayUsage[];
+  days: DayStat[];
+  totalUsage: number;
+  totalCost: number;
+  avgUsage: number;
+  peakDate: string;
+  peakUsage: number;
+  models: ModelUsage[];
+  hourly: number[];
+  thisWeekUsage: number;
+  lastWeekUsage: number;
+  thisWeekCost: number;
+  lastWeekCost: number;
 }
 
-/** 히스토리 전용 창 — 도구별 일별 사용량 막대 */
+const PERIODS = [7, 14, 30];
+
+/** 도구 하나의 통계 카드 — 요약·일별·주간비교·모델별·시간대별 */
+function StatsCard({ s, lang }: { s: ToolStats; lang: Lang }) {
+  const isReq = s.unit === "requests";
+  const fmt = (n: number) => (isReq ? `${n}` : formatAmount(n));
+  const maxDay = Math.max(...s.days.map((d) => d.usage), 1);
+  const maxHour = Math.max(...s.hourly, 1);
+  const maxModel = Math.max(...s.models.map((m) => m.usage), 1);
+
+  // 이번주 vs 지난주 증감률
+  const wDelta =
+    s.lastWeekUsage > 0
+      ? ((s.thisWeekUsage - s.lastWeekUsage) / s.lastWeekUsage) * 100
+      : null;
+  const wClass =
+    wDelta == null
+      ? "trend-flat"
+      : wDelta > 0
+      ? "trend-up"
+      : wDelta < 0
+      ? "trend-down"
+      : "trend-flat";
+
+  return (
+    <section className="card">
+      <div className="card-head">
+        <span className="tool">{s.tool}</span>
+      </div>
+
+      {/* 요약 */}
+      <div className="today">
+        <div className="today-item">
+          <span className="today-val">{fmt(s.totalUsage)}</span>
+          <span className="today-label">{t(lang, "statTotal")}</span>
+        </div>
+        <div className="today-item">
+          <span className="today-val">{fmt(s.avgUsage)}</span>
+          <span className="today-label">{t(lang, "statAvg")}</span>
+        </div>
+        <div className="today-item">
+          <span className="today-val">{fmt(s.peakUsage)}</span>
+          <span className="today-label">
+            {t(lang, "statPeak")}
+            {s.peakDate ? ` ${s.peakDate}` : ""}
+          </span>
+        </div>
+        {s.totalCost > 0 && (
+          <div className="today-item">
+            <span className="today-val">${s.totalCost.toFixed(2)}</span>
+            <span className="today-label">{t(lang, "apiValue")}</span>
+          </div>
+        )}
+      </div>
+
+      {/* 일별 막대 */}
+      <div className="hist-bars">
+        {s.days.map((d) => (
+          <div className="hist-col" key={d.date}>
+            <span className="hist-val">{fmt(d.usage)}</span>
+            <div
+              className="hist-bar"
+              style={{ height: `${Math.max(4, (d.usage / maxDay) * 100)}%` }}
+              title={`${d.date}: ${fmt(d.usage)} ${unitLabel(s.unit)} · ${d.count}${
+                d.cost > 0 ? ` · $${d.cost.toFixed(2)}` : ""
+              }`}
+            />
+            <span className="hist-date">{d.date}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* 주간 비교 */}
+      <div className="stat-block">
+        <span className="stat-title">{t(lang, "weekCompare")}</span>
+        <div className="week-cmp">
+          <span>
+            {t(lang, "thisWeek")} <b>{fmt(s.thisWeekUsage)}</b>
+          </span>
+          <span className="week-vs">vs</span>
+          <span>
+            {t(lang, "lastWeek")} <b>{fmt(s.lastWeekUsage)}</b>
+          </span>
+          {wDelta != null && (
+            <span className={`week-delta ${wClass}`}>
+              {wDelta > 0 ? "▲" : wDelta < 0 ? "▼" : "—"}{" "}
+              {Math.abs(wDelta).toFixed(0)}%
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* 모델별 분해 */}
+      {s.models.length > 0 && (
+        <div className="stat-block">
+          <span className="stat-title">{t(lang, "modelBreakdown")}</span>
+          {s.models.map((m) => (
+            <div className="model-row" key={m.model}>
+              <span className="model-name">{m.model}</span>
+              <div className="model-track">
+                <div
+                  className="model-fill"
+                  style={{ width: `${(m.usage / maxModel) * 100}%` }}
+                />
+              </div>
+              <span className="model-val">
+                {fmt(m.usage)}
+                {m.cost > 0 ? ` · $${m.cost.toFixed(2)}` : ""}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 시간대별 패턴 */}
+      <div className="stat-block">
+        <span className="stat-title">{t(lang, "hourlyPattern")}</span>
+        <div className="hourly-bars">
+          {s.hourly.map((h, i) => (
+            <div
+              className="hourly-bar"
+              key={i}
+              style={{ height: `${Math.max(3, (h / maxHour) * 100)}%` }}
+              title={`${i}–${i + 1}: ${fmt(h)} ${unitLabel(s.unit)}`}
+            />
+          ))}
+        </div>
+        <div className="hourly-axis">
+          <span>0</span>
+          <span>6</span>
+          <span>12</span>
+          <span>18</span>
+          <span>23</span>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** 통계 전용 창 — 기간 토글 + 도구별 요약·추세 */
 function HistoryView() {
-  const [history, setHistory] = useState<ToolHistory[]>([]);
+  const [stats, setStats] = useState<ToolStats[]>([]);
   const [lang, setLang] = useState<Lang>(resolveLang(null));
   const [loading, setLoading] = useState(true);
+  const [days, setDays] = useState(7);
 
   useEffect(() => {
     invoke<Settings>("get_settings")
       .then((s) => setLang(resolveLang(s.language)))
       .catch(() => {});
-    invoke<ToolHistory[]>("get_history", { days: 7 })
-      .then(setHistory)
-      .finally(() => setLoading(false));
     invoke("track_event", { event: "history_opened" }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    setLoading(true);
+    invoke<ToolStats[]>("get_stats", { days })
+      .then(setStats)
+      .finally(() => setLoading(false));
+  }, [days]);
+
+  const active = stats.filter((s) => s.days.length > 0);
 
   return (
     <main className="container win-framed">
       <div className="win-titlebar-bg" />
+      <div className="period-toggle">
+        {PERIODS.map((p) => (
+          <button
+            key={p}
+            className={p === days ? "period-btn active" : "period-btn"}
+            onClick={() => setDays(p)}
+          >
+            {t(lang, "nDays", { n: p })}
+          </button>
+        ))}
+      </div>
+
       {loading && <p className="muted">{t(lang, "loading")}</p>}
-      {!loading && history.every((h) => h.days.length === 0) && (
+      {!loading && active.length === 0 && (
         <p className="muted">{t(lang, "noHistory")}</p>
       )}
 
-      {history
-        .filter((h) => h.days.length > 0)
-        .map((h) => {
-          const max = Math.max(...h.days.map((d) => d.usage), 1);
-          return (
-            <section className="card" key={h.tool}>
-              <div className="card-head">
-                <span className="tool">{h.tool}</span>
-                <span className="hist-period">{t(lang, "last7days")}</span>
-              </div>
-              <div className="hist-bars">
-                {h.days.map((d) => (
-                  <div className="hist-col" key={d.date}>
-                    <span className="hist-val">
-                      {h.unit === "requests"
-                        ? d.count
-                        : formatAmount(d.usage)}
-                    </span>
-                    <div
-                      className="hist-bar"
-                      style={{ height: `${Math.max(4, (d.usage / max) * 100)}%` }}
-                      title={`${d.date}: ${formatAmount(d.usage)} ${unitLabel(h.unit)} · ${d.count}`}
-                    />
-                    <span className="hist-date">{d.date}</span>
-                  </div>
-                ))}
-              </div>
-            </section>
-          );
-        })}
+      {!loading &&
+        active.map((s) => <StatsCard key={s.tool} s={s} lang={lang} />)}
     </main>
   );
 }

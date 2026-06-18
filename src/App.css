@@ -296,6 +296,135 @@ h1 {
   color: #8e8e93;
 }
 
+/* 기간 토글 (7/14/30일) */
+.period-toggle {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.period-btn {
+  flex: 1;
+  font-size: 12px;
+  padding: 6px 0;
+  border: 1px solid rgba(127, 127, 127, 0.25);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+.period-btn.active {
+  background: #0a84ff;
+  border-color: #0a84ff;
+  color: white;
+  font-weight: 600;
+}
+
+/* 통계 섹션 블록 (주간/모델/시간대) */
+.stat-block {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(127, 127, 127, 0.15);
+}
+
+.stat-title {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: #8e8e93;
+  margin-bottom: 8px;
+}
+
+/* 주간 비교 */
+.week-cmp {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  flex-wrap: wrap;
+}
+
+.week-vs {
+  color: #8e8e93;
+  font-size: 11px;
+}
+
+.week-delta {
+  margin-left: auto;
+  font-weight: 700;
+}
+
+/* 모델별 분해 */
+.model-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+
+.model-name {
+  flex: 0 0 80px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-track {
+  flex: 1;
+  height: 8px;
+  background: #e5e5ea;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+@media (prefers-color-scheme: dark) {
+  .model-track {
+    background: #3a3a3c;
+  }
+}
+
+.model-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #0a84ff, #5ac8fa);
+  border-radius: 4px;
+}
+
+.model-val {
+  flex: 0 0 auto;
+  color: #8e8e93;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 시간대별 패턴 */
+.hourly-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 48px;
+}
+
+.hourly-bar {
+  flex: 1;
+  background: linear-gradient(180deg, #30d158, #5ac8fa);
+  border-radius: 2px;
+  min-height: 2px;
+}
+
+.hourly-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  font-size: 9px;
+  color: #8e8e93;
+  font-variant-numeric: tabular-nums;
+}
+
 .hist-bars {
   display: flex;
   align-items: flex-end;

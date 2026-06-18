@@ -29,6 +29,8 @@ pub struct UsageSample {
     pub cache_write: u64,
     /// 입력 토큰 총량 (input + cache_creation + cache_read). 캐시 적중률 분모.
     pub input_total: u64,
+    /// 사용 모델명 (Claude만 채움). 모델별 분해용. 모르면 None.
+    pub model: Option<String>,
 }
 
 /// 도구가 제공하는 공식(권위) 사용률. Claude Code는 OAuth `/api/oauth/usage`에서 받는다.

@@ -90,6 +90,7 @@ impl UsageProvider for GeminiProvider {
                     cache_read: 0,
                     cache_write: 0,
                     input_total: 0,
+                    model: None,
                 });
             }
         }

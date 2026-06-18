@@ -79,18 +79,44 @@ struct ToolInfo {
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DayUsage {
+struct DayStat {
     date: String, // "MM/DD"
     usage: u64,
+    count: u64,
+    cost: f64,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelUsage {
+    model: String, // 단축 표시명 ("opus-4-8")
+    usage: u64,
+    cost: f64,
     count: u64,
 }
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ToolHistory {
+struct ToolStats {
     tool: String,
     unit: String,
-    days: Vec<DayUsage>,
+    /// 선택 기간 일별 사용량 (오름차순).
+    days: Vec<DayStat>,
+    total_usage: u64,
+    total_cost: f64,
+    /// 활동일(사용량>0) 평균.
+    avg_usage: u64,
+    peak_date: String,
+    peak_usage: u64,
+    /// 모델별 분해 (사용량 내림차순). Claude만 채워짐.
+    models: Vec<ModelUsage>,
+    /// 시간대(0~23시)별 사용량.
+    hourly: Vec<u64>,
+    /// 최근 7일 vs 직전 7일 비교.
+    this_week_usage: u64,
+    last_week_usage: u64,
+    this_week_cost: f64,
+    last_week_cost: f64,
 }
 
 /// epoch millis → 로컬 "YYYY-MM-DD".
@@ -103,35 +129,132 @@ fn local_date_full(ms: i64) -> String {
         .unwrap_or_default()
 }
 
-/// 최근 `days`일 일별 사용량 (JSONL 시계열 집계, 영속 저장 없이 원본에서).
+/// epoch millis → 로컬 시(0~23).
+fn local_hour(ms: i64) -> usize {
+    use chrono::{TimeZone, Timelike};
+    chrono::Local
+        .timestamp_millis_opt(ms)
+        .single()
+        .map(|d| d.hour() as usize)
+        .unwrap_or(0)
+}
+
+/// 모델 문자열 단축 ("claude-opus-4-8" → "opus-4-8", 날짜 suffix 제거).
+fn short_model(m: &str) -> String {
+    let base = m.strip_prefix("claude-").unwrap_or(m);
+    let parts: Vec<&str> = base
+        .split('-')
+        .filter(|p| !(p.len() == 8 && p.chars().all(|c| c.is_ascii_digit())))
+        .collect();
+    if parts.is_empty() {
+        m.to_string()
+    } else {
+        parts.join("-")
+    }
+}
+
+/// 최근 `days`일 통계 — 일별·모델별·시간대별·주간 비교 (JSONL 원본 집계, 영속 저장 없음).
 #[tauri::command]
-fn get_history(days: u32) -> Vec<ToolHistory> {
+fn get_stats(days: u32) -> Vec<ToolStats> {
     let now_ms = chrono::Utc::now().timestamp_millis();
-    let since = now_ms - (days as i64) * 24 * 3600 * 1000;
+    let day = 24 * 3600 * 1000i64;
+    // 주간 비교(직전 7일)를 위해 최소 14일 수집.
+    let span_days = (days as i64).max(14);
+    let since = now_ms - span_days * day;
+    let window_start = now_ms - (days as i64) * day; // 일별/모델/시간대 집계 범위
+    let week_start = now_ms - 7 * day;
+    let prev_week_start = now_ms - 14 * day;
     let disabled = settings::disabled_tools();
+
     providers()
         .iter()
         .filter(|p| p.available() && !disabled.iter().any(|d| d == p.tool_name()))
         .map(|p| {
-            let mut map: std::collections::BTreeMap<String, (u64, u64)> =
+            let samples = p.collect_samples(since);
+
+            let mut day_map: std::collections::BTreeMap<String, (u64, u64, f64)> =
                 std::collections::BTreeMap::new();
-            for s in p.collect_samples(since) {
-                let e = map.entry(local_date_full(s.timestamp_ms)).or_default();
-                e.0 += s.amount;
-                e.1 += 1;
+            let mut model_map: std::collections::HashMap<String, (u64, f64, u64)> =
+                std::collections::HashMap::new();
+            let mut hourly = vec![0u64; 24];
+            let (mut this_week_usage, mut last_week_usage) = (0u64, 0u64);
+            let (mut this_week_cost, mut last_week_cost) = (0f64, 0f64);
+
+            for s in &samples {
+                // 주간 비교 (전체 14일 윈도우)
+                if s.timestamp_ms >= week_start {
+                    this_week_usage += s.amount;
+                    this_week_cost += s.cost_usd;
+                } else if s.timestamp_ms >= prev_week_start {
+                    last_week_usage += s.amount;
+                    last_week_cost += s.cost_usd;
+                }
+                // 일별/모델/시간대 (선택 기간 윈도우)
+                if s.timestamp_ms >= window_start {
+                    let e = day_map.entry(local_date_full(s.timestamp_ms)).or_default();
+                    e.0 += s.amount;
+                    e.1 += 1;
+                    e.2 += s.cost_usd;
+                    hourly[local_hour(s.timestamp_ms)] += s.amount;
+                    if let Some(m) = &s.model {
+                        let me = model_map.entry(short_model(m)).or_default();
+                        me.0 += s.amount;
+                        me.1 += s.cost_usd;
+                        me.2 += 1;
+                    }
+                }
             }
-            ToolHistory {
+
+            let days_vec: Vec<DayStat> = day_map
+                .into_iter()
+                .map(|(full, (usage, count, cost))| DayStat {
+                    date: full.get(5..).unwrap_or(&full).replace('-', "/"),
+                    usage,
+                    count,
+                    cost,
+                })
+                .collect();
+
+            let total_usage: u64 = days_vec.iter().map(|d| d.usage).sum();
+            let total_cost: f64 = days_vec.iter().map(|d| d.cost).sum();
+            let active_days = days_vec.iter().filter(|d| d.usage > 0).count() as u64;
+            let avg_usage = if active_days > 0 {
+                total_usage / active_days
+            } else {
+                0
+            };
+            let (peak_date, peak_usage) = days_vec
+                .iter()
+                .max_by_key(|d| d.usage)
+                .map(|d| (d.date.clone(), d.usage))
+                .unwrap_or_default();
+
+            let mut models: Vec<ModelUsage> = model_map
+                .into_iter()
+                .map(|(model, (usage, cost, count))| ModelUsage {
+                    model,
+                    usage,
+                    cost,
+                    count,
+                })
+                .collect();
+            models.sort_by(|a, b| b.usage.cmp(&a.usage));
+
+            ToolStats {
                 tool: p.tool_name().to_string(),
                 unit: p.unit().to_string(),
-                days: map
-                    .into_iter()
-                    .map(|(full, (usage, count))| DayUsage {
-                        // "YYYY-MM-DD" → "MM/DD"
-                        date: full.get(5..).unwrap_or(&full).replace('-', "/"),
-                        usage,
-                        count,
-                    })
-                    .collect(),
+                days: days_vec,
+                total_usage,
+                total_cost,
+                avg_usage,
+                peak_date,
+                peak_usage,
+                models,
+                hourly,
+                this_week_usage,
+                last_week_usage,
+                this_week_cost,
+                last_week_cost,
             }
         })
         .collect()
@@ -425,7 +548,7 @@ pub fn run() {
             get_settings,
             set_settings,
             get_available_tools,
-            get_history,
+            get_stats,
             open_settings_window,
             open_history_window,
             track_event

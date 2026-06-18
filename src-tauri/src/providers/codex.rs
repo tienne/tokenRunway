@@ -194,5 +194,6 @@ fn parse_line(line: &str, since_ms: i64) -> Option<UsageSample> {
         cache_read: usage.cached_input_tokens,
         cache_write: 0,
         input_total: usage.input_tokens, // cached 포함된 입력 총량
+        model: None,
     })
 }
