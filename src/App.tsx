@@ -247,6 +247,32 @@ function Dashboard() {
             </div>
           </dl>
 
+          <div className="today">
+            {s.unit === "requests" ? (
+              <div className="today-item">
+                <span className="today-val">{s.dailyCount}</span>
+                <span className="today-label">{t(lang, "todayRequests")}</span>
+              </div>
+            ) : (
+              <>
+                <div className="today-item">
+                  <span className="today-val">{formatAmount(s.dailyUsage)}</span>
+                  <span className="today-label">{t(lang, "todayTokens")}</span>
+                </div>
+                <div className="today-item">
+                  <span className="today-val">{s.dailyCount}</span>
+                  <span className="today-label">{t(lang, "todayMessages")}</span>
+                </div>
+                {s.dailyCost > 0 && (
+                  <div className="today-item">
+                    <span className="today-val">${s.dailyCost.toFixed(2)}</span>
+                    <span className="today-label">{t(lang, "apiValue")}</span>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
           <Sparkline data={s.sparkline} />
 
           {s.cacheHitRate != null && (
@@ -254,15 +280,6 @@ function Dashboard() {
               ⚡ {t(lang, "cacheHit", { n: s.cacheHitRate.toFixed(0) })}
             </p>
           )}
-
-          <p className="daily">
-            {t(lang, "today")}{" "}
-            {s.unit === "requests"
-              ? `${s.dailyCount} ${t(lang, "requests")}`
-              : `${formatAmount(s.dailyUsage)} ${unitLabel(s.unit)} · ${s.dailyCount} ${t(lang, "messages")}`}
-            {s.dailyCost > 0 &&
-              ` · $${s.dailyCost.toFixed(2)} ${t(lang, "apiValue")}`}
-          </p>
 
           {s.sevenDayRemaining != null && (
             <p className="weekly">

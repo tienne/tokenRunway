@@ -357,18 +357,39 @@ h1 {
   min-height: 2px;
 }
 
-.cache-hit {
-  margin: 8px 0 0;
-  font-size: 11px;
-  font-weight: 600;
-  color: #30a14e;
+.today {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 0;
+  border-top: 1px solid rgba(127, 127, 127, 0.15);
+  border-bottom: 1px solid rgba(127, 127, 127, 0.15);
+}
+
+.today-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.today-val {
+  font-size: 19px;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 
-.daily {
-  margin: 6px 0 0;
-  font-size: 11px;
+.today-label {
+  font-size: 10px;
   color: #8e8e93;
+}
+
+.cache-hit {
+  margin: 10px 0 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: #30a14e;
   font-variant-numeric: tabular-nums;
 }
 
