@@ -225,27 +225,27 @@ function Dashboard() {
             <p className="resets">⏱ {formatResetsAt(s.resetsAt, lang)}</p>
           )}
 
-          <dl className="metrics">
-            <div>
-              <dt>
-                {windowLabel(s.windowHours)} {t(lang, "used")}
-              </dt>
-              <dd>
-                {formatAmount(s.windowUsage)} {unitLabel(s.unit)}
-              </dd>
+          <div className="today-section">
+            <span className="today-title">
+              {t(lang, "session")} ({windowLabel(s.windowHours)})
+            </span>
+            <div className="today">
+              <div className="today-item">
+                <span className="today-val">{formatAmount(s.windowUsage)}</span>
+                <span className="today-label">{t(lang, "used")}</span>
+              </div>
+              <div className="today-item">
+                <span className="today-val">
+                  {formatAmount(Math.round(s.burnRatePerMin))}/min
+                </span>
+                <span className="today-label">{t(lang, "burnRate")}</span>
+              </div>
+              <div className="today-item">
+                <span className="today-val">{formatEta(s.etaMinutes, lang)}</span>
+                <span className="today-label">{t(lang, "eta")}</span>
+              </div>
             </div>
-            <div>
-              <dt>{t(lang, "burnRate")}</dt>
-              <dd>
-                {formatAmount(Math.round(s.burnRatePerMin))} {unitLabel(s.unit)}
-                /min
-              </dd>
-            </div>
-            <div>
-              <dt>{t(lang, "eta")}</dt>
-              <dd>{formatEta(s.etaMinutes, lang)}</dd>
-            </div>
-          </dl>
+          </div>
 
           <div className="today-section">
             <span className="today-title">{t(lang, "today")}</span>

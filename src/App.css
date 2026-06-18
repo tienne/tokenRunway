@@ -268,31 +268,6 @@ h1 {
   transition: width 0.4s ease;
 }
 
-.metrics {
-  display: flex;
-  justify-content: space-between;
-  margin: 0;
-  gap: 8px;
-}
-
-.metrics div {
-  flex: 1;
-  text-align: center;
-}
-
-.metrics dt {
-  font-size: 11px;
-  color: #8e8e93;
-  margin-bottom: 2px;
-}
-
-.metrics dd {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
 .resets {
   margin: 0 0 10px;
   font-size: 11px;
@@ -370,6 +345,12 @@ h1 {
   font-weight: 600;
   color: #8e8e93;
   margin-bottom: 8px;
+}
+
+/* 세션·오늘 블록이 연속될 때 가운데 테두리 중복 제거 */
+.today-section + .today-section {
+  border-top: none;
+  margin-top: 0;
 }
 
 .today {
