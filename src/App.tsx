@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import {
   isPermissionGranted,
@@ -147,6 +147,19 @@ function Dashboard() {
     return () => {
       unlisten.then((f) => f());
     };
+  }, []);
+
+  // 콘텐츠 높이에 맞춰 팝오버 창 높이 자동 조정 (줄바꿈으로 길어져도 잘리지 않게)
+  useEffect(() => {
+    const ro = new ResizeObserver(() => {
+      const h = Math.ceil(document.documentElement.scrollHeight);
+      const clamped = Math.min(Math.max(h, 160), 760); // 화면 밖으로는 안 나가게
+      getCurrentWindow()
+        .setSize(new LogicalSize(360, clamped))
+        .catch(() => {});
+    });
+    ro.observe(document.body);
+    return () => ro.disconnect();
   }, []);
 
   useEffect(() => {
