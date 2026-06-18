@@ -7,6 +7,7 @@ import {
   requestPermission,
 } from "@tauri-apps/plugin-notification";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { t, resolveLang, type Lang } from "./i18n";
 import "./App.css";
 
@@ -244,6 +245,7 @@ function SettingsView() {
   });
   const [tools, setTools] = useState<ToolInfo[]>([]);
   const [permGranted, setPermGranted] = useState<boolean | null>(null);
+  const [autostart, setAutostart] = useState(false);
 
   const lang = resolveLang(settings.language);
   const tr = (k: string, p?: Record<string, string | number>) => t(lang, k, p);
@@ -252,7 +254,18 @@ function SettingsView() {
     invoke<Settings>("get_settings").then(setSettings).catch(() => {});
     invoke<ToolInfo[]>("get_available_tools").then(setTools).catch(() => {});
     isPermissionGranted().then(setPermGranted).catch(() => {});
+    isEnabled().then(setAutostart).catch(() => {});
   }, []);
+
+  async function toggleAutostart(value: boolean) {
+    try {
+      if (value) await enable();
+      else await disable();
+      setAutostart(value);
+    } catch {
+      /* noop */
+    }
+  }
 
   async function update(patch: Partial<Settings>) {
     const next = { ...settings, ...patch };
@@ -413,6 +426,15 @@ function SettingsView() {
           <option value="ko">한국어</option>
           <option value="en">English</option>
         </select>
+
+        <label className="setting-row toggle-row">
+          <span>{tr("autostart")}</span>
+          <input
+            type="checkbox"
+            checked={autostart}
+            onChange={(e) => toggleAutostart(e.target.checked)}
+          />
+        </label>
 
         {tools.length > 0 && (
           <div className="setting-tools">
