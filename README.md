@@ -77,6 +77,20 @@ Node 버전은 `.nvmrc`(22.21.1)에 고정 — `nvm use`로 전환.
 `design/app-icon.svg`(컬러)·`design/tray-icon.svg`(단색 트레이)가 소스.
 수정 후 `pnpm tauri icon design/app-icon.svg`로 전체 세트 재생성.
 
+## 릴리스
+
+`v*` 태그를 푸시하면 GitHub Actions가 macOS universal `.dmg`를 빌드해 **Release 초안**을 만들어요:
+
+```bash
+# 버전 태그 → 자동 빌드·릴리스
+git tag v0.1.0
+git push origin v0.1.0
+# → Actions가 빌드 후 Release(draft) 생성 → 검토 후 publish
+```
+
+> 현재는 **미서명** 빌드라 받는 사람이 Gatekeeper 경고를 봐요. Apple Developer 가입 후
+> 서명·공증 secret(`APPLE_*`)을 등록하면 `.github/workflows/release.yml`에서 활성화됩니다.
+
 ## 상태
 
 MVP 핵심 기능 구현 완료 (멀티툴 잔여율·플랜 배지·ETA·임계치 경보).
