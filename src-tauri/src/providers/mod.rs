@@ -21,6 +21,10 @@ pub struct UsageSample {
     pub timestamp_ms: i64,
     /// 해당 시점에 소비된 사용량 (토큰 수 또는 요청 수).
     pub amount: u64,
+    /// API 기준 환산 비용 (USD). 단가를 모르는 도구는 0.
+    pub cost_usd: f64,
+    /// 캐시 읽기 토큰 수 (효율 지표용). 해당 없으면 0.
+    pub cache_read: u64,
 }
 
 /// 도구가 제공하는 공식(권위) 사용률. Claude Code는 OAuth `/api/oauth/usage`에서 받는다.
@@ -58,6 +62,10 @@ pub struct RunwayStatus {
     pub daily_usage: u64,
     /// 오늘 메시지/요청 수 (시계열 샘플 개수).
     pub daily_count: u64,
+    /// 오늘 API 기준 환산 비용 (USD). 단가 미상 도구는 0.
+    pub daily_cost: f64,
+    /// 윈도우 캐시 적중률 (%) — cache_read / 전체. 캐시 개념 없으면 None.
+    pub cache_hit_rate: Option<f64>,
     /// 윈도우를 균등 분할한 구간별 사용량 (미니 추세 그래프용).
     pub sparkline: Vec<u64>,
     /// 한도(분모). OAuth 연동 전에는 None → percent/eta 계산 불가.

@@ -61,7 +61,22 @@ struct TranscriptLine {
 #[derive(Deserialize)]
 struct Message {
     id: Option<String>,
+    model: Option<String>,
     usage: Option<Usage>,
+}
+
+/// 모델별 단가 (USD per MTok): (input, output, cache_read, cache_write).
+/// claude-api 가격표 기준 (cache_write는 5분 TTL 1.25x 근사).
+fn price_per_mtok(model: &str) -> (f64, f64, f64, f64) {
+    let m = model.to_lowercase();
+    if m.contains("opus") {
+        (5.0, 25.0, 0.5, 6.25)
+    } else if m.contains("haiku") {
+        (1.0, 5.0, 0.1, 1.25)
+    } else {
+        // sonnet 및 기타 기본
+        (3.0, 15.0, 0.3, 3.75)
+    }
 }
 
 /// Claude Code transcript의 usage 블록.
@@ -325,11 +340,20 @@ fn parse_line(line: &str, since_ms: i64) -> Option<(Option<String>, UsageSample)
     if timestamp_ms < since_ms {
         return None;
     }
+    let (pin, pout, pcr, pcw) = price_per_mtok(message.model.as_deref().unwrap_or(""));
+    let cost_usd = (usage.input_tokens as f64 * pin
+        + usage.output_tokens as f64 * pout
+        + usage.cache_read_input_tokens as f64 * pcr
+        + usage.cache_creation_input_tokens as f64 * pcw)
+        / 1_000_000.0;
+
     Some((
         message.id,
         UsageSample {
             timestamp_ms,
             amount: usage.total(),
+            cost_usd,
+            cache_read: usage.cache_read_input_tokens,
         },
     ))
 }

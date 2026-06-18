@@ -86,6 +86,8 @@ impl UsageProvider for GeminiProvider {
                 samples.push(UsageSample {
                     timestamp_ms,
                     amount: 1,
+                    cost_usd: 0.0,
+                    cache_read: 0,
                 });
             }
         }

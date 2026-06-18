@@ -38,10 +38,23 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
         .map(|s| s.amount)
         .sum();
 
-    // 오늘(자정 이후) 누적 사용량 + 메시지/요청 수.
+    // 오늘(자정 이후) 누적 사용량 + 메시지/요청 수 + 비용.
     let daily_samples = samples.iter().filter(|s| s.timestamp_ms >= day_start);
     let daily_usage: u64 = daily_samples.clone().map(|s| s.amount).sum();
+    let daily_cost: f64 = daily_samples.clone().map(|s| s.cost_usd).sum();
     let daily_count = daily_samples.count() as u64;
+
+    // 윈도우 캐시 적중률 (cache_read / 전체). 캐시 토큰이 0이면 None.
+    let window_cache_read: u64 = samples
+        .iter()
+        .filter(|s| s.timestamp_ms >= window_start)
+        .map(|s| s.cache_read)
+        .sum();
+    let cache_hit_rate = if window_cache_read > 0 && window_usage > 0 {
+        Some((window_cache_read as f64 / window_usage as f64) * 100.0)
+    } else {
+        None
+    };
 
     // 소진 속도: 최근 BURN_WINDOW_MIN 분간 사용량 / 분
     let recent_since = now_ms - (BURN_WINDOW_MIN as i64) * 60 * 1000;
@@ -128,6 +141,8 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
         window_usage,
         daily_usage,
         daily_count,
+        daily_cost,
+        cache_hit_rate,
         sparkline,
         limit,
         percent_remaining,

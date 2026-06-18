@@ -144,6 +144,8 @@ pnpm tauri dev                  # 실제 실행 (메뉴바 + 알림 권한 다�
   `status_note` i18n 키), 마지막 갱신 시각("방금/N분 전")
 - [x] 히스토리 — 최근 7일 일별 사용량(JSONL 집계, 영속저장 X) 전용 창 + 일별 막대
   (`get_history`, HistoryView, 트레이 메뉴·📅 버튼)
+- [x] 비용 환산 — model별 단가로 일별 API 환산 비용($) (Claude; Codex/Gemini 0)
+- [x] 효율 인사이트 — 윈도우 캐시 적중률(cache_read/전체) "캐시 적중 N%"
 - [ ] 자동 업데이트 — 배포 인프라(업데이트 서버·서명·공증) 필요, 배포 단계에서
 - [ ] Cursor / Copilot provider — 데이터 소스 스펙 확보(위 참고), 검증 환경에서 구현 필요
 - [ ] 비-macOS Keychain 지원 (`keyring` crate)

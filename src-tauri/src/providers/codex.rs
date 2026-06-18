@@ -55,6 +55,8 @@ struct Info {
 struct TokenUsage {
     #[serde(default)]
     total_tokens: u64,
+    #[serde(default)]
+    cached_input_tokens: u64,
 }
 
 /// Codex가 token_count 이벤트에 함께 기록하는 공식 rate limit 상태.
@@ -176,7 +178,7 @@ fn parse_line(line: &str, since_ms: i64) -> Option<UsageSample> {
     if payload.kind.as_deref() != Some("token_count") {
         return None;
     }
-    let tokens = payload.info?.last_token_usage?.total_tokens;
+    let usage = payload.info?.last_token_usage?;
     let ts = parsed.timestamp?;
     let timestamp_ms = DateTime::parse_from_rfc3339(&ts).ok()?.timestamp_millis();
     if timestamp_ms < since_ms {
@@ -184,6 +186,8 @@ fn parse_line(line: &str, since_ms: i64) -> Option<UsageSample> {
     }
     Some(UsageSample {
         timestamp_ms,
-        amount: tokens,
+        amount: usage.total_tokens,
+        cost_usd: 0.0, // OpenAI 단가 매핑 불확실 — 추후
+        cache_read: usage.cached_input_tokens,
     })
 }

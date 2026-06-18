@@ -19,6 +19,8 @@ interface RunwayStatus {
   windowUsage: number;
   dailyUsage: number;
   dailyCount: number;
+  dailyCost: number;
+  cacheHitRate: number | null;
   sparkline: number[];
   limit: number | null;
   percentRemaining: number | null;
@@ -246,11 +248,19 @@ function Dashboard() {
 
           <Sparkline data={s.sparkline} />
 
+          {s.cacheHitRate != null && (
+            <p className="cache-hit">
+              ⚡ {t(lang, "cacheHit", { n: s.cacheHitRate.toFixed(0) })}
+            </p>
+          )}
+
           <p className="daily">
             {t(lang, "today")}{" "}
             {s.unit === "requests"
               ? `${s.dailyCount} ${t(lang, "requests")}`
               : `${formatAmount(s.dailyUsage)} ${unitLabel(s.unit)} · ${s.dailyCount} ${t(lang, "messages")}`}
+            {s.dailyCost > 0 &&
+              ` · $${s.dailyCost.toFixed(2)} ${t(lang, "apiValue")}`}
           </p>
 
           {s.sevenDayRemaining != null && (
