@@ -300,39 +300,6 @@ h1 {
   font-variant-numeric: tabular-nums;
 }
 
-.task-check {
-  background: rgba(127, 127, 127, 0.1);
-  border-radius: 10px;
-  padding: 10px 12px;
-  margin-bottom: 12px;
-}
-
-.task-label {
-  font-size: 12px;
-  font-weight: 600;
-  display: block;
-  margin-bottom: 6px;
-}
-
-.task-check input[type="range"] {
-  width: 100%;
-  accent-color: #0a84ff;
-}
-
-.task-ok {
-  margin: 8px 0 0;
-  font-size: 12px;
-  font-weight: 600;
-  color: #30a14e;
-}
-
-.task-short {
-  margin: 8px 0 0;
-  font-size: 12px;
-  font-weight: 600;
-  color: #d1242f;
-}
-
 .spark {
   display: flex;
   align-items: flex-end;

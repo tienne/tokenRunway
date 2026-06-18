@@ -140,7 +140,6 @@ pnpm tauri dev                  # 실제 실행 (메뉴바 + 알림 권한 다�
 - [x] 시작 시 자동 실행 — `tauri-plugin-autostart`(LaunchAgent) + 설정 토글
 - [x] 방해금지 시간대 — 지정 시간(자정 넘김 처리)엔 경보 무음 (`is_quiet_now`)
 - [x] 추세 스파크라인 — 윈도우 12구간 사용량 미니 막대 (`sparkline`, RunwayEngine)
-- [x] 작업 사전 체크 — "N분 작업 가능?" 슬라이더 → 도구별 ETA 비교(프론트, taskMin)
 - [ ] 자동 업데이트 — 배포 인프라(업데이트 서버·서명·공증) 필요, 배포 단계에서
 - [ ] Cursor / Copilot provider — 데이터 소스 스펙 확보(위 참고), 검증 환경에서 구현 필요
 - [ ] 비-macOS Keychain 지원 (`keyring` crate)
