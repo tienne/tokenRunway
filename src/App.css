@@ -335,3 +335,19 @@ h1 {
   color: #8e8e93;
   line-height: 1.4;
 }
+
+.note-error {
+  margin: 10px 0 0;
+  font-size: 11px;
+  color: #ff9500;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.updated {
+  text-align: center;
+  font-size: 11px;
+  color: #8e8e93;
+  margin: 4px 0 0;
+  font-variant-numeric: tabular-nums;
+}

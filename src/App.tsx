@@ -84,6 +84,13 @@ function Sparkline({ data }: { data: number[] }) {
   );
 }
 
+function formatUpdated(ts: number, lang: Lang): string {
+  const diffSec = Math.round((Date.now() - ts) / 1000);
+  if (diffSec < 60) return t(lang, "updatedJustNow");
+  const m = Math.floor(diffSec / 60);
+  return t(lang, "updatedAgo", { t: `${m}m` });
+}
+
 function formatResetsAt(iso: string | null, lang: Lang): string | null {
   if (!iso) return null;
   const d = new Date(iso);
@@ -102,11 +109,13 @@ function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [pollSeconds, setPollSeconds] = useState(30);
   const [lang, setLang] = useState<Lang>(resolveLang(null));
+  const [lastUpdated, setLastUpdated] = useState<number | null>(null);
 
   async function refresh() {
     try {
       const data = await invoke<RunwayStatus[]>("get_runway");
       setStatuses(data);
+      setLastUpdated(Date.now());
     } finally {
       setLoading(false);
     }
@@ -243,9 +252,17 @@ function Dashboard() {
             </p>
           )}
 
-          {s.note && <p className="note">{t(lang, s.note)}</p>}
+          {s.note && (
+            <p className={s.note.startsWith("error.") ? "note-error" : "note"}>
+              {t(lang, s.note)}
+            </p>
+          )}
         </section>
       ))}
+
+      {lastUpdated && (
+        <p className="updated">{formatUpdated(lastUpdated, lang)}</p>
+      )}
     </main>
   );
 }

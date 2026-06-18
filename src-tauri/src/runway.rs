@@ -110,11 +110,10 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
                 }
                 _ => None,
             };
-            let note = if limit.is_none() {
-                Some("note.no_limit".to_string())
-            } else {
-                None
-            };
+            // 공식 사용률 실패 사유(에러)가 있으면 그걸 우선 표시.
+            let note = provider
+                .status_note()
+                .or_else(|| limit.is_none().then(|| "note.no_limit".to_string()));
             (pct, eta, None, None, note)
         }
     };

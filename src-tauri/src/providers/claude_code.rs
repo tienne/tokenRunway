@@ -25,6 +25,8 @@ const FALLBACK_VERSION: &str = "2.1.178";
 struct CachedUsage {
     fetched_at: Instant,
     usage: Option<OfficialUsage>,
+    /// 실패 사유 (i18n 키). 성공 시 None.
+    error: Option<&'static str>,
 }
 
 /// 전역 사용률 캐시. provider가 매 호출마다 새로 생성돼도 rate limit을 넘지 않도록.
@@ -122,29 +124,38 @@ impl UsageProvider for ClaudeCodeProvider {
     }
 
     fn official_usage(&self) -> Option<OfficialUsage> {
-        fetch_official_usage_cached()
+        fetch_cached().0
+    }
+
+    fn status_note(&self) -> Option<String> {
+        fetch_cached().1.map(|s| s.to_string())
     }
 }
 
-/// 180초 캐시를 적용해 공식 사용률을 반환. 캐시가 신선하면 HTTP 호출을 건너뛴다.
-fn fetch_official_usage_cached() -> Option<OfficialUsage> {
-    let mut cache = USAGE_CACHE.lock().ok()?;
+/// 180초 캐시를 적용해 (사용률, 실패사유) 반환. 캐시가 신선하면 HTTP 호출 생략.
+fn fetch_cached() -> (Option<OfficialUsage>, Option<&'static str>) {
+    let Ok(mut cache) = USAGE_CACHE.lock() else {
+        return (None, None);
+    };
     if let Some(c) = cache.as_ref() {
         if c.fetched_at.elapsed() < USAGE_CACHE_TTL {
-            return c.usage.clone();
+            return (c.usage.clone(), c.error);
         }
     }
-    let usage = fetch_official_usage();
+    let (usage, error) = fetch_official_usage();
     *cache = Some(CachedUsage {
         fetched_at: Instant::now(),
         usage: usage.clone(),
+        error,
     });
-    usage
+    (usage, error)
 }
 
-/// OAuth `/api/oauth/usage`를 호출해 5시간/주간 사용률을 가져온다.
-fn fetch_official_usage() -> Option<OfficialUsage> {
-    let (token, plan) = read_oauth_credentials()?;
+/// OAuth `/api/oauth/usage`를 호출. 실패 시 사유(i18n 키)를 함께 반환.
+fn fetch_official_usage() -> (Option<OfficialUsage>, Option<&'static str>) {
+    let Some((token, plan)) = read_oauth_credentials() else {
+        return (None, Some("error.no_token"));
+    };
     let version = claude_version();
     let user_agent = format!("claude-code/{version}");
 
@@ -154,23 +165,37 @@ fn fetch_official_usage() -> Option<OfficialUsage> {
         .set("anthropic-beta", "oauth-2025-04-20")
         .set("User-Agent", &user_agent)
         .set("Content-Type", "application/json")
-        .call()
-        .ok()?;
+        .call();
 
-    let parsed: UsageResponse = resp.into_json().ok()?;
-    let five = parsed.five_hour?;
+    let resp = match resp {
+        Ok(r) => r,
+        // 토큰 만료(401), rate limit(429), 기타 구분
+        Err(ureq::Error::Status(401, _)) => return (None, Some("error.expired")),
+        Err(ureq::Error::Status(429, _)) => return (None, Some("error.rate_limit")),
+        Err(_) => return (None, Some("error.unavailable")),
+    };
+
+    let Ok(parsed) = resp.into_json::<UsageResponse>() else {
+        return (None, Some("error.unavailable"));
+    };
+    let Some(five) = parsed.five_hour else {
+        return (None, Some("error.unavailable"));
+    };
     let seven = parsed.seven_day.unwrap_or(UsageWindow {
         utilization: 0.0,
         resets_at: String::new(),
     });
 
-    Some(OfficialUsage {
-        five_hour_utilization: five.utilization,
-        five_hour_resets_at: five.resets_at,
-        seven_day_utilization: seven.utilization,
-        seven_day_resets_at: seven.resets_at,
-        plan,
-    })
+    (
+        Some(OfficialUsage {
+            five_hour_utilization: five.utilization,
+            five_hour_resets_at: five.resets_at,
+            seven_day_utilization: seven.utilization,
+            seven_day_resets_at: seven.resets_at,
+            plan,
+        }),
+        None,
+    )
 }
 
 /// Keychain `Claude Code-credentials`에서 OAuth access token을 읽는다 (macOS).

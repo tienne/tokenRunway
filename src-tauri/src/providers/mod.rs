@@ -103,6 +103,12 @@ pub trait UsageProvider: Send + Sync {
     fn official_usage(&self) -> Option<OfficialUsage> {
         None
     }
+
+    /// 공식 사용률을 못 받은 이유 (i18n 키). 정상이거나 해당 없으면 None.
+    /// 예: "error.expired", "error.rate_limit", "error.no_token".
+    fn status_note(&self) -> Option<String> {
+        None
+    }
 }
 
 /// `root` 아래의 모든 `.jsonl` 파일을 재귀적으로 수집한다.
