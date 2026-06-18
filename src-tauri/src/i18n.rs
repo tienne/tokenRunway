@@ -46,6 +46,18 @@ impl Lang {
             Lang::En => "Token Runway Settings",
         }
     }
+    pub fn menu_history(self) -> &'static str {
+        match self {
+            Lang::Ko => "히스토리...",
+            Lang::En => "History...",
+        }
+    }
+    pub fn history_title(self) -> &'static str {
+        match self {
+            Lang::Ko => "Token Runway 히스토리",
+            Lang::En => "Token Runway History",
+        }
+    }
     pub fn alert_title(self) -> &'static str {
         match self {
             Lang::Ko => "🛬 Token Runway 경보",

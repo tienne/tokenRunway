@@ -73,6 +73,66 @@ struct ToolInfo {
     available: bool,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DayUsage {
+    date: String, // "MM/DD"
+    usage: u64,
+    count: u64,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ToolHistory {
+    tool: String,
+    unit: String,
+    days: Vec<DayUsage>,
+}
+
+/// epoch millis → 로컬 "YYYY-MM-DD".
+fn local_date_full(ms: i64) -> String {
+    use chrono::TimeZone;
+    chrono::Local
+        .timestamp_millis_opt(ms)
+        .single()
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_default()
+}
+
+/// 최근 `days`일 일별 사용량 (JSONL 시계열 집계, 영속 저장 없이 원본에서).
+#[tauri::command]
+fn get_history(days: u32) -> Vec<ToolHistory> {
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let since = now_ms - (days as i64) * 24 * 3600 * 1000;
+    let disabled = settings::disabled_tools();
+    providers()
+        .iter()
+        .filter(|p| p.available() && !disabled.iter().any(|d| d == p.tool_name()))
+        .map(|p| {
+            let mut map: std::collections::BTreeMap<String, (u64, u64)> =
+                std::collections::BTreeMap::new();
+            for s in p.collect_samples(since) {
+                let e = map.entry(local_date_full(s.timestamp_ms)).or_default();
+                e.0 += s.amount;
+                e.1 += 1;
+            }
+            ToolHistory {
+                tool: p.tool_name().to_string(),
+                unit: p.unit().to_string(),
+                days: map
+                    .into_iter()
+                    .map(|(full, (usage, count))| DayUsage {
+                        // "YYYY-MM-DD" → "MM/DD"
+                        date: full.get(5..).unwrap_or(&full).replace('-', "/"),
+                        usage,
+                        count,
+                    })
+                    .collect(),
+            }
+        })
+        .collect()
+}
+
 /// 등록된 모든 도구와 가용 여부 (비활성 필터 전).
 #[tauri::command]
 fn get_available_tools() -> Vec<ToolInfo> {
@@ -126,14 +186,36 @@ fn open_settings_window(app: AppHandle) {
     open_settings(&app);
 }
 
+/// 히스토리 창을 열거나 포커스.
+fn open_history(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("history") {
+        let _ = win.show();
+        let _ = win.set_focus();
+        return;
+    }
+    let _ = WebviewWindowBuilder::new(app, "history", WebviewUrl::App("index.html".into()))
+        .title(i18n::current().history_title())
+        .inner_size(460.0, 600.0)
+        .min_inner_size(420.0, 480.0)
+        .resizable(true)
+        .build();
+}
+
+#[tauri::command]
+fn open_history_window(app: AppHandle) {
+    open_history(&app);
+}
+
 /// 현재 언어로 트레이 메뉴를 구성.
 fn build_tray_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let lang = i18n::current();
     let show = MenuItem::with_id(app, "show", lang.menu_open(), true, None::<&str>)?;
+    let history_item =
+        MenuItem::with_id(app, "history", lang.menu_history(), true, None::<&str>)?;
     let settings_item =
         MenuItem::with_id(app, "settings", lang.menu_settings(), true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", lang.menu_quit(), true, None::<&str>)?;
-    Menu::with_items(app, &[&show, &settings_item, &quit])
+    Menu::with_items(app, &[&show, &history_item, &settings_item, &quit])
 }
 
 /// 언어 변경 등으로 트레이 메뉴·설정 창 제목을 현재 언어로 다시 적용.
@@ -324,7 +406,9 @@ pub fn run() {
             get_settings,
             set_settings,
             get_available_tools,
-            open_settings_window
+            get_history,
+            open_settings_window,
+            open_history_window
         ])
         // 팝오버 UX는 main 창에만 적용 (설정 창은 일반 창으로 동작).
         .on_window_event(|window, event| {
@@ -366,6 +450,7 @@ pub fn run() {
                     "quit" => app.exit(0),
                     "show" => toggle_popover(app, true),
                     "settings" => open_settings(app),
+                    "history" => open_history(app),
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {

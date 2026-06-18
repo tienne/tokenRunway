@@ -142,6 +142,8 @@ pnpm tauri dev                  # 실제 실행 (메뉴바 + 알림 권한 다�
 - [x] 추세 스파크라인 — 윈도우 12구간 사용량 미니 막대 (`sparkline`, RunwayEngine)
 - [x] 견고성/에러 가시성 — OAuth 실패 사유 표시(토큰만료/rate limit/미로그인,
   `status_note` i18n 키), 마지막 갱신 시각("방금/N분 전")
+- [x] 히스토리 — 최근 7일 일별 사용량(JSONL 집계, 영속저장 X) 전용 창 + 일별 막대
+  (`get_history`, HistoryView, 트레이 메뉴·📅 버튼)
 - [ ] 자동 업데이트 — 배포 인프라(업데이트 서버·서명·공증) 필요, 배포 단계에서
 - [ ] Cursor / Copilot provider — 데이터 소스 스펙 확보(위 참고), 검증 환경에서 구현 필요
 - [ ] 비-macOS Keychain 지원 (`keyring` crate)

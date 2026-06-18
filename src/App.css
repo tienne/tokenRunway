@@ -300,6 +300,48 @@ h1 {
   font-variant-numeric: tabular-nums;
 }
 
+.hist-period {
+  font-size: 11px;
+  color: #8e8e93;
+}
+
+.hist-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 90px;
+  margin-top: 10px;
+}
+
+.hist-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  height: 100%;
+  gap: 3px;
+}
+
+.hist-val {
+  font-size: 9px;
+  color: #8e8e93;
+  font-variant-numeric: tabular-nums;
+}
+
+.hist-bar {
+  width: 70%;
+  background: linear-gradient(180deg, #0a84ff, #5ac8fa);
+  border-radius: 3px;
+  min-height: 4px;
+}
+
+.hist-date {
+  font-size: 9px;
+  color: #8e8e93;
+  font-variant-numeric: tabular-nums;
+}
+
 .spark {
   display: flex;
   align-items: flex-end;

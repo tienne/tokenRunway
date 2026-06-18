@@ -167,6 +167,13 @@ function Dashboard() {
             {t(lang, "refresh")}
           </button>
           <button
+            onClick={() => invoke("open_history_window")}
+            className="icon-btn"
+            title={t(lang, "history")}
+          >
+            📅
+          </button>
+          <button
             onClick={() => invoke("open_settings_window")}
             className="icon-btn"
             title={t(lang, "settings")}
@@ -544,9 +551,78 @@ function SettingsView() {
   );
 }
 
+interface DayUsage {
+  date: string;
+  usage: number;
+  count: number;
+}
+interface ToolHistory {
+  tool: string;
+  unit: string;
+  days: DayUsage[];
+}
+
+/** 히스토리 전용 창 — 도구별 일별 사용량 막대 */
+function HistoryView() {
+  const [history, setHistory] = useState<ToolHistory[]>([]);
+  const [lang, setLang] = useState<Lang>(resolveLang(null));
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    invoke<Settings>("get_settings")
+      .then((s) => setLang(resolveLang(s.language)))
+      .catch(() => {});
+    invoke<ToolHistory[]>("get_history", { days: 7 })
+      .then(setHistory)
+      .finally(() => setLoading(false));
+  }, []);
+
+  return (
+    <main className="container">
+      {loading && <p className="muted">{t(lang, "loading")}</p>}
+      {!loading && history.every((h) => h.days.length === 0) && (
+        <p className="muted">{t(lang, "noHistory")}</p>
+      )}
+
+      {history
+        .filter((h) => h.days.length > 0)
+        .map((h) => {
+          const max = Math.max(...h.days.map((d) => d.usage), 1);
+          return (
+            <section className="card" key={h.tool}>
+              <div className="card-head">
+                <span className="tool">{h.tool}</span>
+                <span className="hist-period">{t(lang, "last7days")}</span>
+              </div>
+              <div className="hist-bars">
+                {h.days.map((d) => (
+                  <div className="hist-col" key={d.date}>
+                    <span className="hist-val">
+                      {h.unit === "requests"
+                        ? d.count
+                        : formatAmount(d.usage)}
+                    </span>
+                    <div
+                      className="hist-bar"
+                      style={{ height: `${Math.max(4, (d.usage / max) * 100)}%` }}
+                      title={`${d.date}: ${formatAmount(d.usage)} ${unitLabel(h.unit)} · ${d.count}`}
+                    />
+                    <span className="hist-date">{d.date}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          );
+        })}
+    </main>
+  );
+}
+
 function App() {
-  const isSettings = getCurrentWindow().label === "settings";
-  return isSettings ? <SettingsView /> : <Dashboard />;
+  const label = getCurrentWindow().label;
+  if (label === "settings") return <SettingsView />;
+  if (label === "history") return <HistoryView />;
+  return <Dashboard />;
 }
 
 export default App;
