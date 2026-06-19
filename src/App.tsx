@@ -671,7 +671,7 @@ interface ToolStats {
   lastWeekCost: number;
 }
 
-const PERIODS = [7, 30, 90, 0]; // 0 = 전체
+const PERIODS = [7, 14, 30, 60, 90, 180, 365];
 
 /** 통계 로딩 중 표시할 스켈레톤 카드 (shimmer) */
 function StatsCardSkeleton() {
@@ -979,16 +979,19 @@ function HistoryView() {
   return (
     <main className="container win-framed">
       <div className="win-titlebar-bg" />
-      <div className="period-toggle">
-        {PERIODS.map((p) => (
-          <button
-            key={p}
-            className={p === days ? "period-btn active" : "period-btn"}
-            onClick={() => setDays(p)}
-          >
-            {p === 0 ? t(lang, "periodAll") : t(lang, "nDays", { n: p })}
-          </button>
-        ))}
+      <div className="period-bar">
+        <span className="period-label">{t(lang, "period")}</span>
+        <select
+          className="period-select"
+          value={days}
+          onChange={(e) => setDays(Number(e.target.value))}
+        >
+          {PERIODS.map((p) => (
+            <option key={p} value={p}>
+              {p === 365 ? t(lang, "period1y") : t(lang, "nDays", { n: p })}
+            </option>
+          ))}
+        </select>
       </div>
 
       {loading && (

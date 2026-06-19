@@ -354,30 +354,29 @@ h1 {
   margin-top: 12px;
 }
 
-/* 기간 토글 (7/14/30일) */
-.period-toggle {
+/* 기간 선택 (드롭다운) */
+.period-bar {
   display: flex;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
   margin-bottom: 12px;
 }
 
-.period-btn {
-  flex: 1;
+.period-label {
   font-size: 12px;
-  padding: 6px 0;
-  border: 1px solid rgba(127, 127, 127, 0.25);
-  border-radius: 8px;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: #8e8e93;
 }
 
-.period-btn.active {
-  background: #0a84ff;
-  border-color: #0a84ff;
-  color: white;
-  font-weight: 600;
+.period-select {
+  flex: 1;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(127, 127, 127, 0.3);
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* 통계 섹션 블록 (주간/모델/시간대) */
