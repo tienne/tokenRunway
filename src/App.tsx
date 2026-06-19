@@ -848,9 +848,16 @@ function HistoryView() {
 
   useEffect(() => {
     setLoading(true);
+    const start = Date.now();
     invoke<ToolStats[]>("get_stats", { days })
       .then(setStats)
-      .finally(() => setLoading(false));
+      .catch(() => {})
+      .finally(() => {
+        // 캐시 적중 시 즉시 반환되면 스켈레톤이 깜빡일 새도 없다.
+        // 최소 350ms는 유지해 로딩 상태가 인지되게 한다.
+        const wait = Math.max(0, 350 - (Date.now() - start));
+        setTimeout(() => setLoading(false), wait);
+      });
   }, [days]);
 
   const active = stats.filter((s) => s.days.length > 0);
