@@ -505,17 +505,30 @@ fn check_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
 /// 설정에 지정 도구가 있으면 그 도구를, 없으면 잔여율 최저(가장 임박)를 표시.
 /// 임계치 이하면 빨간 경고 아이콘으로 교체한다.
 fn update_tray_title(app: &AppHandle, statuses: &[RunwayStatus]) {
-    let pct = match settings::tray_tool() {
-        Some(tool) => statuses
-            .iter()
-            .find(|s| s.tool == tool)
-            .and_then(|s| s.percent_remaining),
+    // 표시 대상 도구: 지정값 우선, 없으면 잔여율 최저(가장 임박).
+    let status = match settings::tray_tool() {
+        Some(tool) => statuses.iter().find(|s| s.tool == tool),
         None => statuses
             .iter()
-            .filter_map(|s| s.percent_remaining)
-            .min_by(|a, b| a.total_cmp(b)),
+            .filter(|s| s.percent_remaining.is_some())
+            .min_by(|a, b| {
+                a.percent_remaining
+                    .unwrap_or(f64::MAX)
+                    .total_cmp(&b.percent_remaining.unwrap_or(f64::MAX))
+            }),
     };
-    let title = pct.map(|p| format!("{p:.0}%"));
+    let pct = status.and_then(|s| s.percent_remaining);
+    // "23% · 2h30m" — 잔여율 + 리셋까지 남은 시간(있으면).
+    let title = status.and_then(|s| {
+        let p = s.percent_remaining?;
+        let mut t = format!("{p:.0}%");
+        if let Some(mins) = s.resets_at.as_deref().and_then(minutes_until) {
+            if mins >= 1.0 {
+                t.push_str(&format!(" · {}", fmt_tray_duration(mins)));
+            }
+        }
+        Some(t)
+    });
     let danger = pct.is_some_and(|p| p <= settings::alert_threshold());
 
     // 트레이 UI 갱신은 메인 스레드에서.
@@ -535,6 +548,22 @@ fn update_tray_title(app: &AppHandle, statuses: &[RunwayStatus]) {
             let _ = tray.set_icon_as_template(!danger);
         }
     });
+}
+
+/// 트레이용 짧은 시간 표기 (예: 150분 → "2h30m", 45분 → "45m").
+fn fmt_tray_duration(mins: f64) -> String {
+    let total = mins.round() as i64;
+    let h = total / 60;
+    let m = total % 60;
+    if h > 0 {
+        if m > 0 {
+            format!("{h}h{m}m")
+        } else {
+            format!("{h}h")
+        }
+    } else {
+        format!("{m}m")
+    }
 }
 
 /// RFC3339 시각까지 남은 분(分). 과거면 음수.
