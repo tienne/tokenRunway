@@ -154,8 +154,17 @@ fn short_model(m: &str) -> String {
 }
 
 /// 최근 `days`일 통계 — 일별·모델별·시간대별·주간 비교 (JSONL 원본 집계, 영속 저장 없음).
+///
+/// 수백 MB 파싱이 걸릴 수 있어 blocking 스레드 풀에서 실행한다.
+/// 동기 command로 두면 메인 이벤트 루프(웹뷰 페인트 포함)가 멈춰 UI가 프리즈된다.
 #[tauri::command]
-fn get_stats(days: u32) -> Vec<ToolStats> {
+async fn get_stats(days: u32) -> Vec<ToolStats> {
+    tauri::async_runtime::spawn_blocking(move || compute_stats(days))
+        .await
+        .unwrap_or_default()
+}
+
+fn compute_stats(days: u32) -> Vec<ToolStats> {
     let now_ms = chrono::Utc::now().timestamp_millis();
     let day = 24 * 3600 * 1000i64;
     // 주간 비교(직전 7일)를 위해 최소 14일 수집.
