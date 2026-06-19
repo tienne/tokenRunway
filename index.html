@@ -5,10 +5,53 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Token Runway</title>
+    <style>
+      /* 부트 로더 — 웹뷰가 번들을 로드·실행하기 전(React 마운트 전)에 보인다.
+         createRoot.render가 #root를 채우면 자동 교체된다. OS 스피너를 가려
+         "바로 반응한다"는 인상을 준다. 인라인이라 외부 CSS를 기다리지 않는다. */
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+      #boot {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #f5f5f7;
+      }
+      #boot .ring {
+        width: 26px;
+        height: 26px;
+        border: 3px solid rgba(127, 127, 127, 0.22);
+        border-top-color: #0a84ff;
+        border-radius: 50%;
+        animation: boot-spin 0.7s linear infinite;
+      }
+      @keyframes boot-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @media (prefers-color-scheme: dark) {
+        #boot {
+          background: #1c1c1e;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #boot .ring {
+          animation-duration: 1.6s;
+        }
+      }
+    </style>
   </head>
 
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="boot"><div class="ring"></div></div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
