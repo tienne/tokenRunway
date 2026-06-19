@@ -690,6 +690,73 @@ function StatsCardSkeleton() {
   );
 }
 
+/** 일수가 많을 때의 일별 추세 — 영역+꺾은선 (막대보다 촘촘함을 잘 견딘다) */
+function TrendChart({
+  days,
+  fmt,
+  unit,
+}: {
+  days: DayStat[];
+  fmt: (n: number) => string;
+  unit: string;
+}) {
+  const W = 100;
+  const H = 40;
+  const max = Math.max(...days.map((d) => d.usage), 1);
+  const pts = days.map((d, i): [number, number] => [
+    days.length > 1 ? (i / (days.length - 1)) * W : W / 2,
+    H - (d.usage / max) * H,
+  ]);
+  const line = pts
+    .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`)
+    .join(" ");
+  const area = `${line} L${W},${H} L0,${H} Z`;
+  const mid = Math.floor((days.length - 1) / 2);
+
+  return (
+    <div className="trend">
+      <svg
+        className="trend-svg"
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="none"
+      >
+        <defs>
+          <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#0a84ff" stopOpacity="0.35" />
+            <stop offset="100%" stopColor="#0a84ff" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <path d={area} fill="url(#trendFill)" />
+        <path
+          d={line}
+          fill="none"
+          stroke="#0a84ff"
+          strokeWidth="1.5"
+          strokeLinejoin="round"
+          vectorEffect="non-scaling-stroke"
+        />
+      </svg>
+      <div className="trend-dots">
+        {pts.map(([x, y], i) => (
+          <span
+            key={i}
+            className="trend-dot"
+            style={{ left: `${x}%`, top: `${(y / H) * 100}%` }}
+            title={`${days[i].date}: ${fmt(days[i].usage)} ${unitLabel(unit)} · ${
+              days[i].count
+            }${days[i].cost > 0 ? ` · $${days[i].cost.toFixed(2)}` : ""}`}
+          />
+        ))}
+      </div>
+      <div className="trend-axis">
+        <span>{days[0]?.date}</span>
+        <span>{days[mid]?.date}</span>
+        <span>{days[days.length - 1]?.date}</span>
+      </div>
+    </div>
+  );
+}
+
 /** 도구 하나의 통계 카드 — 요약·일별·주간비교·모델별·시간대별 */
 function StatsCard({ s, lang }: { s: ToolStats; lang: Lang }) {
   const isReq = s.unit === "requests";
@@ -746,25 +813,26 @@ function StatsCard({ s, lang }: { s: ToolStats; lang: Lang }) {
         )}
       </div>
 
-      {/* 일별 막대 */}
-      <div className={dense ? "hist-bars dense" : "hist-bars"}>
-        {s.days.map((d, i) => (
-          <div className="hist-col" key={d.date}>
-            {!dense && <span className="hist-val">{fmt(d.usage)}</span>}
-            <div
-              className="hist-bar"
-              style={{ height: `${Math.max(4, (d.usage / maxDay) * 100)}%` }}
-              title={`${d.date}: ${fmt(d.usage)} ${unitLabel(s.unit)} · ${d.count}${
-                d.cost > 0 ? ` · $${d.cost.toFixed(2)}` : ""
-              }`}
-            />
-            {/* dense일 때는 5일 간격(과 마지막)만 날짜 표시 */}
-            {(!dense || i % 5 === 0 || i === s.days.length - 1) && (
+      {/* 일별: 일수 많으면 추세 차트, 적으면 막대 */}
+      {dense ? (
+        <TrendChart days={s.days} fmt={fmt} unit={s.unit} />
+      ) : (
+        <div className="hist-bars">
+          {s.days.map((d) => (
+            <div className="hist-col" key={d.date}>
+              <span className="hist-val">{fmt(d.usage)}</span>
+              <div
+                className="hist-bar"
+                style={{ height: `${Math.max(4, (d.usage / maxDay) * 100)}%` }}
+                title={`${d.date}: ${fmt(d.usage)} ${unitLabel(s.unit)} · ${d.count}${
+                  d.cost > 0 ? ` · $${d.cost.toFixed(2)}` : ""
+                }`}
+              />
               <span className="hist-date">{d.date}</span>
-            )}
-          </div>
-        ))}
-      </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* 주간 비교 */}
       <div className="stat-block">
