@@ -10,8 +10,9 @@ JSONL 시계열로 소진 속도·ETA를 더한다(차별점). 사용자 로그�
 
 ```
 src-tauri/src/
-├ lib.rs            앱 진입점: provider 등록, get_runway command, tray, AlertManager
+├ lib.rs            앱 진입점: provider 등록, get_runway/get_stats command, tray, AlertManager
 ├ runway.rs         RunwayEngine — 샘플/공식사용률 → RunwayStatus 계산
+├ rollup.rs         일별 사용량 롤업 영속화(rollup.json) — 30일+ 히스토리용
 └ providers/
    ├ mod.rs         UsageProvider trait + 공용 타입 + find_recent_jsonl 헬퍼
    ├ claude_code.rs Keychain OAuth + ~/.claude JSONL
@@ -152,8 +153,13 @@ pnpm tauri dev                  # 실제 실행 (메뉴바 + 알림 권한 다�
 - [x] 추세 스파크라인 — 윈도우 12구간 사용량 미니 막대 (`sparkline`, RunwayEngine)
 - [x] 견고성/에러 가시성 — OAuth 실패 사유 표시(토큰만료/rate limit/미로그인,
   `status_note` i18n 키), 마지막 갱신 시각("방금/N분 전")
-- [x] 히스토리 — 최근 7일 일별 사용량(JSONL 집계, 영속저장 X) 전용 창 + 일별 막대
-  (`get_history`, HistoryView, 트레이 메뉴·📅 버튼)
+- [x] 히스토리 — 통계 전용 창(`get_stats`, HistoryView, 트레이 메뉴·📅). 기간 토글
+  7/30/90/전체 + 요약 카드·모델별 분해·시간대 패턴·주간 비교. 7일은 막대,
+  그 이상은 영역+꺾은선 추세 차트(호버/클릭 툴팁)
+- [x] 히스토리 영속화 — `rollup.rs`가 일별 요약(사용량·메시지·비용·모델별·시간대별)을
+  `<config_dir>/token-runway/rollup.json`에 누적. 백그라운드(60초)가 어제까지 확정분
+  증분 저장(첫 회만 백필 ~180일). `get_stats`는 과거=롤업, 오늘만 실시간 파싱해 병합.
+  원본 JSONL이 사라져도 과거 유지 → 30일 이상 조회 가능. (이전의 "영속저장 X" 결정 대체)
 - [x] 비용 환산 — model별 단가로 일별 API 환산 비용($) (Claude; Codex/Gemini 0)
 - [x] 효율 인사이트 — 캐시 적중률 + 코칭 신호(캐시 재생성 과다·요청당 토큰 과다, `insight` 키)
 - [x] 소진 속도 추세 화살표 — 가속(↑)/감속(↓)/일정(→), '소진 속도' 라벨 옆
