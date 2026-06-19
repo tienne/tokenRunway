@@ -524,7 +524,7 @@ fn update_tray_title(app: &AppHandle, statuses: &[RunwayStatus]) {
         let mut t = format!("{p:.0}%");
         if let Some(mins) = s.resets_at.as_deref().and_then(minutes_until) {
             if mins >= 1.0 {
-                t.push_str(&format!(" · {}", fmt_tray_duration(mins)));
+                t.push_str(&format!(" {}", fmt_tray_duration(mins)));
             }
         }
         Some(t)
@@ -550,19 +550,17 @@ fn update_tray_title(app: &AppHandle, statuses: &[RunwayStatus]) {
     });
 }
 
-/// 트레이용 짧은 시간 표기 (예: 150분 → "2h30m", 45분 → "45m").
+/// 트레이용 짧은 시간 표기 (예: 150분 → "2.5h", 120분 → "2h", 45분 → "45m").
 fn fmt_tray_duration(mins: f64) -> String {
-    let total = mins.round() as i64;
-    let h = total / 60;
-    let m = total % 60;
-    if h > 0 {
-        if m > 0 {
-            format!("{h}h{m}m")
+    if mins >= 60.0 {
+        let h = mins / 60.0;
+        if h.fract().abs() < 0.05 {
+            format!("{h:.0}h")
         } else {
-            format!("{h}h")
+            format!("{h:.1}h")
         }
     } else {
-        format!("{m}m")
+        format!("{mins:.0}m")
     }
 }
 
