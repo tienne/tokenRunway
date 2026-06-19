@@ -1,11 +1,21 @@
 <svg width="44" height="44" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- 단색 template image: 검정 fill만, macOS가 메뉴바 테마에 맞게 자동 반전 -->
-  <!-- 빈 슬롯 (소진) — 외곽선 -->
-  <rect x="13" y="6" width="14" height="6" rx="2" fill="none" stroke="#FF453A" stroke-width="1.6"/>
-  <rect x="13" y="15" width="14" height="6" rx="2" fill="none" stroke="#FF453A" stroke-width="1.6"/>
-  <!-- 채워진 토큰 (잔여) -->
-  <rect x="13" y="24" width="14" height="6" rx="2" fill="#FF453A"/>
-  <rect x="13" y="33" width="14" height="6" rx="2" fill="#FF453A"/>
-  <!-- 스파클 (AI) -->
-  <path d="M0,-1 C0.12,-0.35 0.35,-0.12 1,0 C0.35,0.12 0.12,0.35 0,1 C-0.12,0.35 -0.35,0.12 -1,0 C-0.35,-0.12 -0.12,-0.35 0,-1 Z" transform="translate(33 9) scale(5.5)" fill="#FF453A"/>
+  <!-- 위험(잔여 임박) — 빨강. set_icon_as_template(false)로 컬러 그대로 표시 -->
+  <!-- Token Runway — 착륙하는 비행기 + 활주로 -->
+
+  <!-- 활주로: 원근으로 수렴하는 양쪽 가장자리 -->
+  <path d="M16 41 L21 25" stroke="#FF453A" stroke-width="1.6" stroke-linecap="round"/>
+  <path d="M28 41 L23 25" stroke="#FF453A" stroke-width="1.6" stroke-linecap="round"/>
+  <!-- 중앙 점선 (위로 갈수록 작게 — 원근) -->
+  <rect x="21.4" y="26" width="1.2" height="2.0" rx="0.6" fill="#FF453A"/>
+  <rect x="21.2" y="30" width="1.6" height="2.6" rx="0.8" fill="#FF453A"/>
+  <rect x="20.9" y="35.5" width="2.2" height="3.0" rx="1.0" fill="#FF453A"/>
+
+  <!-- 착륙하는 비행기 (하강 40°) -->
+  <g transform="translate(20 13) rotate(40)">
+    <path d="M0 -8 C1.3 -8 1.8 -5.5 1.8 -2.5 L1.8 4 L0.9 8 L-0.9 8 L-1.8 4 L-1.8 -2.5 C-1.8 -5.5 -1.3 -8 0 -8 Z" fill="#FF453A"/>
+    <path d="M-1.8 -1 L-9 3 L-9 4.5 L-1.8 2.5 Z" fill="#FF453A"/>
+    <path d="M1.8 -1 L9 3 L9 4.5 L1.8 2.5 Z" fill="#FF453A"/>
+    <path d="M-1.5 5.5 L-4 7.5 L-4 8.5 L-1.4 7.5 Z" fill="#FF453A"/>
+    <path d="M1.5 5.5 L4 7.5 L4 8.5 L1.4 7.5 Z" fill="#FF453A"/>
+  </g>
 </svg>
