@@ -690,16 +690,19 @@ function StatsCardSkeleton() {
   );
 }
 
-/** 일수가 많을 때의 일별 추세 — 영역+꺾은선 (막대보다 촘촘함을 잘 견딘다) */
+/** 일수가 많을 때의 일별 추세 — 영역+꺾은선 + 호버/클릭 툴팁 */
 function TrendChart({
   days,
   fmt,
   unit,
+  lang,
 }: {
   days: DayStat[];
   fmt: (n: number) => string;
   unit: string;
+  lang: Lang;
 }) {
+  const [active, setActive] = useState<number | null>(null);
   const W = 100;
   const H = 40;
   const max = Math.max(...days.map((d) => d.usage), 1);
@@ -713,40 +716,69 @@ function TrendChart({
   const area = `${line} L${W},${H} L0,${H} Z`;
   const mid = Math.floor((days.length - 1) / 2);
 
+  // 포인터 x → 가장 가까운 데이터 인덱스
+  const pick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (rect.width === 0) return;
+    const ratio = (e.clientX - rect.left) / rect.width;
+    const idx = Math.round(ratio * (days.length - 1));
+    setActive(Math.max(0, Math.min(days.length - 1, idx)));
+  };
+
+  const a = active != null ? days[active] : null;
+  const ax = active != null ? pts[active][0] : 0;
+  const ay = active != null ? (pts[active][1] / H) * 100 : 0;
+  const tipLeft = Math.min(82, Math.max(18, ax)); // 좌우 끝 잘림 방지
+
   return (
     <div className="trend">
-      <svg
-        className="trend-svg"
-        viewBox={`0 0 ${W} ${H}`}
-        preserveAspectRatio="none"
+      <div
+        className="trend-plot"
+        onMouseMove={pick}
+        onMouseLeave={() => setActive(null)}
+        onClick={pick}
       >
-        <defs>
-          <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#0a84ff" stopOpacity="0.35" />
-            <stop offset="100%" stopColor="#0a84ff" stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        <path d={area} fill="url(#trendFill)" />
-        <path
-          d={line}
-          fill="none"
-          stroke="#0a84ff"
-          strokeWidth="1.5"
-          strokeLinejoin="round"
-          vectorEffect="non-scaling-stroke"
-        />
-      </svg>
-      <div className="trend-dots">
-        {pts.map(([x, y], i) => (
-          <span
-            key={i}
-            className="trend-dot"
-            style={{ left: `${x}%`, top: `${(y / H) * 100}%` }}
-            title={`${days[i].date}: ${fmt(days[i].usage)} ${unitLabel(unit)} · ${
-              days[i].count
-            }${days[i].cost > 0 ? ` · $${days[i].cost.toFixed(2)}` : ""}`}
+        <svg
+          className="trend-svg"
+          viewBox={`0 0 ${W} ${H}`}
+          preserveAspectRatio="none"
+        >
+          <defs>
+            <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#0a84ff" stopOpacity="0.35" />
+              <stop offset="100%" stopColor="#0a84ff" stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          <path d={area} fill="url(#trendFill)" />
+          <path
+            d={line}
+            fill="none"
+            stroke="#0a84ff"
+            strokeWidth="1.5"
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke"
           />
-        ))}
+        </svg>
+        {a && (
+          <>
+            <div className="trend-guide" style={{ left: `${ax}%` }} />
+            <div
+              className="trend-active-dot"
+              style={{ left: `${ax}%`, top: `${ay}%` }}
+            />
+            <div className="trend-tip" style={{ left: `${tipLeft}%` }}>
+              <span className="trend-tip-date">{a.date}</span>
+              <span>
+                {fmt(a.usage)} {unitLabel(unit)}
+              </span>
+              <span>
+                {a.count}{" "}
+                {t(lang, unit === "requests" ? "requests" : "messages")}
+              </span>
+              {a.cost > 0 && <span>${a.cost.toFixed(2)}</span>}
+            </div>
+          </>
+        )}
       </div>
       <div className="trend-axis">
         <span>{days[0]?.date}</span>
@@ -815,7 +847,7 @@ function StatsCard({ s, lang }: { s: ToolStats; lang: Lang }) {
 
       {/* 일별: 일수 많으면 추세 차트, 적으면 막대 */}
       {dense ? (
-        <TrendChart days={s.days} fmt={fmt} unit={s.unit} />
+        <TrendChart days={s.days} fmt={fmt} unit={s.unit} lang={lang} />
       ) : (
         <div className="hist-bars">
           {s.days.map((d) => (
