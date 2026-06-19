@@ -672,6 +672,23 @@ interface ToolStats {
 
 const PERIODS = [7, 14, 30];
 
+/** 통계 로딩 중 표시할 스켈레톤 카드 (shimmer) */
+function StatsCardSkeleton() {
+  return (
+    <section className="card" aria-hidden="true">
+      <div className="sk sk-title" />
+      <div className="sk-summary">
+        {[0, 1, 2, 3].map((i) => (
+          <div className="sk sk-stat" key={i} />
+        ))}
+      </div>
+      <div className="sk sk-bars" />
+      <div className="sk sk-block" />
+      <div className="sk sk-block" />
+    </section>
+  );
+}
+
 /** 도구 하나의 통계 카드 — 요약·일별·주간비교·모델별·시간대별 */
 function StatsCard({ s, lang }: { s: ToolStats; lang: Lang }) {
   const isReq = s.unit === "requests";
@@ -853,7 +870,12 @@ function HistoryView() {
         ))}
       </div>
 
-      {loading && <p className="muted">{t(lang, "loading")}</p>}
+      {loading && (
+        <>
+          <StatsCardSkeleton />
+          <StatsCardSkeleton />
+        </>
+      )}
       {!loading && active.length === 0 && (
         <p className="muted">{t(lang, "noHistory")}</p>
       )}

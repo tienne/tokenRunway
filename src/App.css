@@ -299,6 +299,61 @@ h1 {
   color: #8e8e93;
 }
 
+/* 통계 로딩 스켈레톤 (shimmer) */
+.sk {
+  background: linear-gradient(
+    90deg,
+    rgba(127, 127, 127, 0.1) 25%,
+    rgba(127, 127, 127, 0.22) 37%,
+    rgba(127, 127, 127, 0.1) 63%
+  );
+  background-size: 400% 100%;
+  animation: shimmer 1.4s ease infinite;
+  border-radius: 6px;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: 0 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sk {
+    animation: none;
+  }
+}
+
+.sk-title {
+  width: 96px;
+  height: 16px;
+  margin-bottom: 14px;
+}
+
+.sk-summary {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.sk-stat {
+  flex: 1;
+  height: 36px;
+}
+
+.sk-bars {
+  height: 90px;
+  margin-bottom: 14px;
+}
+
+.sk-block {
+  height: 40px;
+  margin-top: 12px;
+}
+
 /* 기간 토글 (7/14/30일) */
 .period-toggle {
   display: flex;
