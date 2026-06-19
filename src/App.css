@@ -49,6 +49,9 @@ body {
   height: 28px;
   background: var(--app-bg);
   z-index: 1000;
+  /* 독립 합성 레이어로 승격 — 본문 스크롤 시 매 프레임 재페인트 방지 */
+  transform: translateZ(0);
+  will-change: transform;
 }
 
 header {
