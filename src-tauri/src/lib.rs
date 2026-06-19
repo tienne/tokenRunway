@@ -1,6 +1,7 @@
 mod analytics;
 mod i18n;
 mod providers;
+mod rollup;
 mod runway;
 mod settings;
 
@@ -120,7 +121,7 @@ struct ToolStats {
 }
 
 /// epoch millis → 로컬 "YYYY-MM-DD".
-fn local_date_full(ms: i64) -> String {
+pub(crate) fn local_date_full(ms: i64) -> String {
     use chrono::TimeZone;
     chrono::Local
         .timestamp_millis_opt(ms)
@@ -130,7 +131,7 @@ fn local_date_full(ms: i64) -> String {
 }
 
 /// epoch millis → 로컬 시(0~23).
-fn local_hour(ms: i64) -> usize {
+pub(crate) fn local_hour(ms: i64) -> usize {
     use chrono::{TimeZone, Timelike};
     chrono::Local
         .timestamp_millis_opt(ms)
@@ -140,7 +141,7 @@ fn local_hour(ms: i64) -> usize {
 }
 
 /// 모델 문자열 단축 ("claude-opus-4-8" → "opus-4-8", 날짜 suffix 제거).
-fn short_model(m: &str) -> String {
+pub(crate) fn short_model(m: &str) -> String {
     let base = m.strip_prefix("claude-").unwrap_or(m);
     let parts: Vec<&str> = base
         .split('-')
@@ -164,63 +165,71 @@ async fn get_stats(days: u32) -> Vec<ToolStats> {
         .unwrap_or_default()
 }
 
+/// 통계 집계 — 과거는 영속 롤업, 오늘(미확정)은 실시간 파싱해 병합한다.
+/// `days == 0`이면 롤업 전체 기간.
 fn compute_stats(days: u32) -> Vec<ToolStats> {
+    use std::collections::{BTreeMap, HashMap};
+
     let now_ms = chrono::Utc::now().timestamp_millis();
     let day = 24 * 3600 * 1000i64;
-    // 주간 비교(직전 7일)를 위해 최소 14일 수집.
-    let span_days = (days as i64).max(14);
-    let since = now_ms - span_days * day;
-    let window_start = now_ms - (days as i64) * day; // 일별/모델/시간대 집계 범위
-    let week_start = now_ms - 7 * day;
-    let prev_week_start = now_ms - 14 * day;
+    let today = local_date_full(now_ms);
+    let today_start = rollup::date_start_ms(&today).unwrap_or(now_ms - day);
+
+    // 날짜 문자열 비교 경계 (YYYY-MM-DD는 사전순=시간순).
+    let window_start_date = if days == 0 {
+        String::new() // 전체
+    } else {
+        local_date_full(now_ms - (days as i64 - 1) * day)
+    };
+    let week_start_date = local_date_full(now_ms - 6 * day); // 최근 7일(오늘 포함)
+    let prev_week_start_date = local_date_full(now_ms - 13 * day); // 직전 7일
+
+    let rollup = rollup::get();
     let disabled = settings::disabled_tools();
 
     providers()
         .iter()
         .filter(|p| p.available() && !disabled.iter().any(|d| d == p.tool_name()))
         .map(|p| {
-            let samples = p.collect_samples(since);
+            // 과거(롤업) + 오늘(실시간) 통합 일별 맵
+            let mut all: BTreeMap<String, rollup::DayRollup> =
+                rollup.get(p.tool_name()).cloned().unwrap_or_default();
 
-            let mut day_map: std::collections::BTreeMap<String, (u64, u64, f64)> =
-                std::collections::BTreeMap::new();
-            let mut model_map: std::collections::HashMap<String, (u64, f64, u64)> =
-                std::collections::HashMap::new();
-            let mut hourly = vec![0u64; 24];
-            let (mut this_week_usage, mut last_week_usage) = (0u64, 0u64);
-            let (mut this_week_cost, mut last_week_cost) = (0f64, 0f64);
-
-            for s in &samples {
-                // 주간 비교 (전체 14일 윈도우)
-                if s.timestamp_ms >= week_start {
-                    this_week_usage += s.amount;
-                    this_week_cost += s.cost_usd;
-                } else if s.timestamp_ms >= prev_week_start {
-                    last_week_usage += s.amount;
-                    last_week_cost += s.cost_usd;
+            // 오늘 실시간 집계 (롤업엔 오늘이 없다)
+            let mut today_roll = rollup::DayRollup {
+                hourly: vec![0; 24],
+                ..Default::default()
+            };
+            for s in p.collect_samples(today_start) {
+                if local_date_full(s.timestamp_ms) != today {
+                    continue;
                 }
-                // 일별/모델/시간대 (선택 기간 윈도우)
-                if s.timestamp_ms >= window_start {
-                    let e = day_map.entry(local_date_full(s.timestamp_ms)).or_default();
-                    e.0 += s.amount;
-                    e.1 += 1;
-                    e.2 += s.cost_usd;
-                    hourly[local_hour(s.timestamp_ms)] += s.amount;
-                    if let Some(m) = &s.model {
-                        let me = model_map.entry(short_model(m)).or_default();
-                        me.0 += s.amount;
-                        me.1 += s.cost_usd;
-                        me.2 += 1;
-                    }
+                today_roll.usage += s.amount;
+                today_roll.count += 1;
+                today_roll.cost += s.cost_usd;
+                today_roll.hourly[local_hour(s.timestamp_ms)] += s.amount;
+                if let Some(m) = &s.model {
+                    let me = today_roll.models.entry(short_model(m)).or_default();
+                    me.0 += s.amount;
+                    me.1 += s.cost_usd;
+                    me.2 += 1;
                 }
             }
+            all.insert(today.clone(), today_roll);
 
-            let days_vec: Vec<DayStat> = day_map
-                .into_iter()
-                .map(|(full, (usage, count, cost))| DayStat {
-                    date: full.get(5..).unwrap_or(&full).replace('-', "/"),
-                    usage,
-                    count,
-                    cost,
+            // 선택 기간 윈도우 내 날들
+            let in_window: Vec<(&String, &rollup::DayRollup)> = all
+                .iter()
+                .filter(|(d, _)| d.as_str() >= window_start_date.as_str())
+                .collect();
+
+            let days_vec: Vec<DayStat> = in_window
+                .iter()
+                .map(|(d, r)| DayStat {
+                    date: d.get(5..).unwrap_or(d).replace('-', "/"),
+                    usage: r.usage,
+                    count: r.count,
+                    cost: r.cost,
                 })
                 .collect();
 
@@ -238,6 +247,20 @@ fn compute_stats(days: u32) -> Vec<ToolStats> {
                 .map(|d| (d.date.clone(), d.usage))
                 .unwrap_or_default();
 
+            // 모델·시간대: 윈도우 내 합산
+            let mut model_map: HashMap<String, (u64, f64, u64)> = HashMap::new();
+            let mut hourly = vec![0u64; 24];
+            for (_, r) in &in_window {
+                for (m, (u, c, n)) in &r.models {
+                    let e = model_map.entry(m.clone()).or_default();
+                    e.0 += u;
+                    e.1 += c;
+                    e.2 += n;
+                }
+                for (h, v) in r.hourly.iter().enumerate().take(24) {
+                    hourly[h] += v;
+                }
+            }
             let mut models: Vec<ModelUsage> = model_map
                 .into_iter()
                 .map(|(model, (usage, cost, count))| ModelUsage {
@@ -248,6 +271,22 @@ fn compute_stats(days: u32) -> Vec<ToolStats> {
                 })
                 .collect();
             models.sort_by(|a, b| b.usage.cmp(&a.usage));
+
+            // 주간 비교 (기간 토글과 무관, 항상 최근 7일 vs 직전 7일)
+            let (mut this_week_usage, mut last_week_usage) = (0u64, 0u64);
+            let (mut this_week_cost, mut last_week_cost) = (0f64, 0f64);
+            for (d, r) in &all {
+                if d.as_str() > today.as_str() {
+                    continue;
+                }
+                if d.as_str() >= week_start_date.as_str() {
+                    this_week_usage += r.usage;
+                    this_week_cost += r.cost;
+                } else if d.as_str() >= prev_week_start_date.as_str() {
+                    last_week_usage += r.usage;
+                    last_week_cost += r.cost;
+                }
+            }
 
             ToolStats {
                 tool: p.tool_name().to_string(),
@@ -557,6 +596,8 @@ fn spawn_alert_loop(app: AppHandle) {
         update_tray_title(&app, &statuses);
         check_alerts(&app, &statuses);
         check_reset_alerts(&app, &statuses);
+        // 일별 롤업 누적 (첫 회만 백필로 무겁고 이후는 어제치 증분).
+        rollup::update(&providers());
         std::thread::sleep(Duration::from_secs(ALERT_CHECK_SECS));
     });
 }
