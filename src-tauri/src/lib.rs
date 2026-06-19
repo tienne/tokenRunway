@@ -293,6 +293,17 @@ fn set_settings(app: AppHandle, settings: Settings) {
     let _ = app.emit("settings-changed", ());
 }
 
+/// 창을 닫을 때 파괴하지 않고 숨긴다 — 재오픈 시 웹뷰 재부팅(OS 로딩) 회피.
+fn hide_on_close(win: &tauri::WebviewWindow) {
+    let w = win.clone();
+    win.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            let _ = w.hide();
+        }
+    });
+}
+
 /// 설정 창을 열거나 포커스. 같은 프론트(label로 화면 분기)를 일반 창으로 띄운다.
 fn open_settings(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("settings") {
@@ -300,13 +311,16 @@ fn open_settings(app: &AppHandle) {
         let _ = win.set_focus();
         return;
     }
-    let _ = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
+    if let Ok(win) = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
         .title(i18n::current().settings_title())
         .inner_size(420.0, 640.0)
         .min_inner_size(420.0, 480.0)
         .resizable(true)
         .title_bar_style(tauri::TitleBarStyle::Visible)
-        .build();
+        .build()
+    {
+        hide_on_close(&win);
+    }
 }
 
 #[tauri::command]
@@ -319,15 +333,20 @@ fn open_history(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("history") {
         let _ = win.show();
         let _ = win.set_focus();
+        // 숨겨뒀던 창 재사용 시 마운트가 다시 안 일어나므로 갱신을 트리거.
+        let _ = win.emit("history-refresh", ());
         return;
     }
-    let _ = WebviewWindowBuilder::new(app, "history", WebviewUrl::App("index.html".into()))
+    if let Ok(win) = WebviewWindowBuilder::new(app, "history", WebviewUrl::App("index.html".into()))
         .title(i18n::current().history_title())
         .inner_size(460.0, 600.0)
         .min_inner_size(420.0, 480.0)
         .resizable(true)
         .title_bar_style(tauri::TitleBarStyle::Visible)
-        .build();
+        .build()
+    {
+        hide_on_close(&win);
+    }
 }
 
 #[tauri::command]

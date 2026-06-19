@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
@@ -846,7 +846,7 @@ function HistoryView() {
     invoke("track_event", { event: "history_opened" }).catch(() => {});
   }, []);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     setLoading(true);
     const start = Date.now();
     invoke<ToolStats[]>("get_stats", { days })
@@ -859,6 +859,19 @@ function HistoryView() {
         setTimeout(() => setLoading(false), wait);
       });
   }, [days]);
+
+  // 마운트 + 기간 변경 시 조회
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // 숨겨뒀던 창이 다시 열릴 때(웹뷰 재부팅 없이 show) 데이터 갱신
+  useEffect(() => {
+    const un = listen("history-refresh", () => load());
+    return () => {
+      un.then((f) => f());
+    };
+  }, [load]);
 
   const active = stats.filter((s) => s.days.length > 0);
 
