@@ -48,6 +48,8 @@ interface Settings {
   quietEndHour: number;
   analyticsEnabled: boolean;
   hideInactive: boolean;
+  trayShowPercent: boolean;
+  trayShowReset: boolean;
 }
 
 interface ToolInfo {
@@ -358,6 +360,8 @@ function SettingsView() {
     quietEndHour: 8,
     analyticsEnabled: false,
     hideInactive: false,
+    trayShowPercent: true,
+    trayShowReset: true,
   });
   const [tools, setTools] = useState<ToolInfo[]>([]);
   const [permGranted, setPermGranted] = useState<boolean | null>(null);
@@ -574,6 +578,26 @@ function SettingsView() {
               </option>
             ))}
         </select>
+
+        <label className="setting-row">
+          <span>{tr("trayInfo")}</span>
+        </label>
+        <label className="tool-toggle">
+          <input
+            type="checkbox"
+            checked={settings.trayShowPercent}
+            onChange={(e) => update({ trayShowPercent: e.target.checked })}
+          />
+          <span>{tr("trayShowPercent")}</span>
+        </label>
+        <label className="tool-toggle">
+          <input
+            type="checkbox"
+            checked={settings.trayShowReset}
+            onChange={(e) => update({ trayShowReset: e.target.checked })}
+          />
+          <span>{tr("trayShowReset")}</span>
+        </label>
 
         <label className="setting-row">
           <span>{tr("language")}</span>

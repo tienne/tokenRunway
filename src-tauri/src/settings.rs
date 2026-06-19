@@ -69,6 +69,16 @@ pub struct Settings {
     /// 최근 사용량이 0인(현재 윈도우에서 안 쓴) 도구 카드 숨김.
     #[serde(default)]
     pub hide_inactive: bool,
+    /// 트레이 타이틀에 남은 토큰 비율(%) 표시.
+    #[serde(default = "default_true")]
+    pub tray_show_percent: bool,
+    /// 트레이 타이틀에 리셋까지 남은 시간 표시.
+    #[serde(default = "default_true")]
+    pub tray_show_reset: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_quiet_start() -> u32 {
@@ -95,6 +105,8 @@ impl Default for Settings {
             analytics_enabled: false,
             anon_id: None,
             hide_inactive: false,
+            tray_show_percent: true,
+            tray_show_reset: true,
         }
     }
 }
@@ -159,6 +171,16 @@ pub fn disabled_tools() -> Vec<String> {
 /// 비활성(최근 사용량 0) 도구 숨김 여부.
 pub fn hide_inactive() -> bool {
     SETTINGS.lock().map(|s| s.hide_inactive).unwrap_or(false)
+}
+
+/// 트레이에 남은 비율(%) 표시 여부.
+pub fn tray_show_percent() -> bool {
+    SETTINGS.lock().map(|s| s.tray_show_percent).unwrap_or(true)
+}
+
+/// 트레이에 리셋까지 시간 표시 여부.
+pub fn tray_show_reset() -> bool {
+    SETTINGS.lock().map(|s| s.tray_show_reset).unwrap_or(true)
 }
 
 /// 트레이 표시 도구 (None이면 자동).

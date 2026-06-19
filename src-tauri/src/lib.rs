@@ -518,16 +518,28 @@ fn update_tray_title(app: &AppHandle, statuses: &[RunwayStatus]) {
             }),
     };
     let pct = status.and_then(|s| s.percent_remaining);
-    // "23% · 2h30m" — 잔여율 + 리셋까지 남은 시간(있으면).
+    // 설정에 따라 비율·시간을 조합. 둘 다면 2줄(\n)로 시도.
+    let show_pct = settings::tray_show_percent();
+    let show_reset = settings::tray_show_reset();
     let title = status.and_then(|s| {
-        let p = s.percent_remaining?;
-        let mut t = format!("{p:.0}%");
-        if let Some(mins) = s.resets_at.as_deref().and_then(minutes_until) {
-            if mins >= 1.0 {
-                t.push_str(&format!(" {}", fmt_tray_duration(mins)));
+        let mut parts: Vec<String> = Vec::new();
+        if show_pct {
+            if let Some(p) = s.percent_remaining {
+                parts.push(format!("{p:.0}%"));
             }
         }
-        Some(t)
+        if show_reset {
+            if let Some(mins) = s.resets_at.as_deref().and_then(minutes_until) {
+                if mins >= 1.0 {
+                    parts.push(fmt_tray_duration(mins));
+                }
+            }
+        }
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join("\n"))
+        }
     });
     let danger = pct.is_some_and(|p| p <= settings::alert_threshold());
 
