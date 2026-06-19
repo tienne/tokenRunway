@@ -538,7 +538,8 @@ fn update_tray_title(app: &AppHandle, statuses: &[RunwayStatus]) {
         if parts.is_empty() {
             None
         } else {
-            Some(parts.join("\n"))
+            // macOS 메뉴바는 1줄만 렌더 — 공백으로 구분 (예: "23% 2.5h").
+            Some(parts.join(" "))
         }
     });
     let danger = pct.is_some_and(|p| p <= settings::alert_threshold());
