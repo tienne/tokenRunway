@@ -51,6 +51,24 @@ pub struct OfficialUsage {
     pub plan: Option<String>,
 }
 
+/// 효율 인사이트 한 건 — i18n 키 + 레벨(색 구분용).
+#[derive(Debug, Clone, Serialize)]
+pub struct Insight {
+    /// i18n 키 (예: "insight.cache_write").
+    pub key: String,
+    /// "good"(긍정) | "warn"(주의) | "tip"(팁).
+    pub level: String,
+}
+
+impl Insight {
+    pub fn new(key: &str, level: &str) -> Self {
+        Self {
+            key: key.to_string(),
+            level: level.to_string(),
+        }
+    }
+}
+
 /// 도구 하나의 런웨이 상태 — UI로 그대로 전달되는 뷰 모델.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,8 +90,8 @@ pub struct RunwayStatus {
     pub daily_cost: f64,
     /// 윈도우 캐시 적중률 (%) — cache_read / 전체. 캐시 개념 없으면 None.
     pub cache_hit_rate: Option<f64>,
-    /// 효율 인사이트 (i18n 키). 없으면 None. 예: "insight.cache_write".
-    pub insight: Option<String>,
+    /// 효율 인사이트 목록 (코칭/칭찬). 비어있을 수 있음.
+    pub insights: Vec<Insight>,
     /// 윈도우를 균등 분할한 구간별 사용량 (미니 추세 그래프용).
     pub sparkline: Vec<u64>,
     /// 한도(분모). OAuth 연동 전에는 None → percent/eta 계산 불가.

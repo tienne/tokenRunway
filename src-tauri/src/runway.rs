@@ -4,7 +4,7 @@
 //! Token Runway의 핵심 차별점이다.
 
 use chrono::Local;
-use crate::providers::{RunwayStatus, UsageProvider};
+use crate::providers::{Insight, RunwayStatus, UsageProvider};
 
 /// 소진 속도 측정 구간 (분). 최근 이 시간의 기울기로 ETA를 추정.
 const BURN_WINDOW_MIN: f64 = 15.0;
@@ -76,20 +76,37 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
     } else {
         0.0
     };
-    let avg_per_msg = if window_count > 0 {
-        window_usage / window_count
+    // 요청당 "실제 새로 처리한" 토큰 = 전체에서 캐시 읽기 제외.
+    // (캐시 read는 매 요청 컨텍스트 재전송분이라 포함하면 정상 세션도 무겁게 잡힘)
+    let fresh_per_msg = if window_count > 0 {
+        window_usage.saturating_sub(window_cache_read) / window_count
     } else {
         0
     };
-    let insight = if cache_write_ratio > 0.5 && window_cache_write > 50_000 {
-        // 입력의 절반 이상이 캐시 재생성 = 캐시가 잘 안 먹힘
-        Some("insight.cache_write".to_string())
-    } else if avg_per_msg > 80_000 {
-        // 메시지당 평균 토큰 과다 = 무거운 컨텍스트
-        Some("insight.heavy".to_string())
-    } else {
-        None
-    };
+
+    // 효율 인사이트(코칭/칭찬) — 해당하는 것을 모두 모은다(최대 3개).
+    let mut insights: Vec<Insight> = Vec::new();
+    // 캐시 재생성 과다 = 컨텍스트가 자주 바뀜
+    if cache_write_ratio > 0.5 && window_cache_write > 50_000 {
+        insights.push(Insight::new("insight.cache_write", "warn"));
+    }
+    // 요청당 새 토큰 과다 = 무거운 컨텍스트
+    if fresh_per_msg > 40_000 {
+        insights.push(Insight::new("insight.heavy", "warn"));
+    }
+    // 캐시 적중률: 충분히 입력이 쌓였을 때만 평가
+    if window_input > 50_000 {
+        match cache_hit_rate {
+            Some(hit) if hit >= 80.0 => {
+                insights.push(Insight::new("insight.good_cache", "good"));
+            }
+            Some(hit) if hit < 30.0 => {
+                insights.push(Insight::new("insight.low_cache", "tip"));
+            }
+            _ => {}
+        }
+    }
+    insights.truncate(3);
 
     // 소진 속도: 최근 BURN_WINDOW_MIN 분간 사용량 / 분
     let recent_since = now_ms - (BURN_WINDOW_MIN as i64) * 60 * 1000;
@@ -198,7 +215,7 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
         daily_count,
         daily_cost,
         cache_hit_rate,
-        insight,
+        insights,
         sparkline,
         limit,
         percent_remaining,

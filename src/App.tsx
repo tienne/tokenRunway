@@ -11,6 +11,11 @@ import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { t, resolveLang, type Lang } from "./i18n";
 import "./App.css";
 
+interface Insight {
+  key: string;
+  level: "good" | "warn" | "tip";
+}
+
 interface RunwayStatus {
   tool: string;
   available: boolean;
@@ -21,7 +26,7 @@ interface RunwayStatus {
   dailyCount: number;
   dailyCost: number;
   cacheHitRate: number | null;
-  insight: string | null;
+  insights: Insight[];
   sparkline: number[];
   limit: number | null;
   percentRemaining: number | null;
@@ -321,7 +326,11 @@ function Dashboard() {
             </p>
           )}
 
-          {s.insight && <p className="insight">{t(lang, s.insight)}</p>}
+          {s.insights.map((ins) => (
+            <p key={ins.key} className={`insight insight-${ins.level}`}>
+              {t(lang, ins.key)}
+            </p>
+          ))}
 
           {s.sevenDayRemaining != null && (
             <p className="weekly">

@@ -684,8 +684,20 @@ h1 {
   margin: 6px 0 0;
   font-size: 11px;
   font-weight: 600;
-  color: #bf8700;
   white-space: nowrap; /* 줄바꿈 대신 창 너비가 늘어남 */
+}
+
+/* 인사이트 레벨별 색 */
+.insight-warn {
+  color: #bf8700; /* 주의 — 황색 */
+}
+
+.insight-tip {
+  color: #0a84ff; /* 팁 — 파랑 */
+}
+
+.insight-good {
+  color: #30a14e; /* 긍정 — 초록 */
 }
 
 .weekly {
