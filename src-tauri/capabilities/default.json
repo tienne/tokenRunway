@@ -9,6 +9,7 @@
     "notification:default",
     "positioner:default",
     "autostart:default",
-    "core:window:allow-set-size"
+    "core:window:allow-set-size",
+    "updater:default"
   ]
 }

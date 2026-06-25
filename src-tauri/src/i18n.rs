@@ -52,6 +52,43 @@ impl Lang {
             Lang::En => "History...",
         }
     }
+    pub fn menu_check_update(self) -> &'static str {
+        match self {
+            Lang::Ko => "업데이트 확인...",
+            Lang::En => "Check for Updates...",
+        }
+    }
+    /// 시작 시 새 버전 감지 알림 제목 (뒤에 버전 붙임)
+    pub fn update_available_title(self) -> &'static str {
+        match self {
+            Lang::Ko => "새 버전 사용 가능",
+            Lang::En => "Update available",
+        }
+    }
+    pub fn update_available_body(self) -> &'static str {
+        match self {
+            Lang::Ko => "트레이 메뉴 '업데이트 확인'에서 설치하세요.",
+            Lang::En => "Install it from the tray menu — 'Check for Updates'.",
+        }
+    }
+    pub fn update_installing(self) -> &'static str {
+        match self {
+            Lang::Ko => "업데이트 설치 중... 완료되면 자동 재시작됩니다.",
+            Lang::En => "Installing update... the app will restart when done.",
+        }
+    }
+    pub fn update_uptodate(self) -> &'static str {
+        match self {
+            Lang::Ko => "이미 최신 버전입니다.",
+            Lang::En => "You're on the latest version.",
+        }
+    }
+    pub fn update_failed(self) -> &'static str {
+        match self {
+            Lang::Ko => "업데이트 확인 실패 — 네트워크를 확인하세요.",
+            Lang::En => "Update check failed — check your network.",
+        }
+    }
     pub fn history_title(self) -> &'static str {
         match self {
             Lang::Ko => "Token Runway 히스토리",

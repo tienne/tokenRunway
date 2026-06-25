@@ -80,6 +80,20 @@ Node 버전은 `.nvmrc`(22.21.1)에 고정 — `nvm use`로 전환.
 트레이는 모래시계 잔여율 프레임(단색 template)으로, `design/gen-tray-frames.py`가
 `src-tauri/icons/anim/`의 PNG 세트(`level-00~20`·`danger`)를 생성한다 (`rsvg-convert` 필요).
 
+## 설치 (미서명 빌드)
+
+현재는 **미서명** 빌드라 macOS Gatekeeper가 "확인되지 않은 개발자" 경고를 띄워요.
+`.dmg`로 앱을 옮긴 뒤 아래 중 하나로 한 번만 허용하면 됩니다 (이후엔 정상 실행):
+
+- **앱 실행 → 차단 경고 → 시스템 설정 → 개인정보 보호 및 보안 → "확인 없이 열기"**
+  (macOS 15 Sequoia부터는 우클릭→열기가 막혀 이 경로가 유일합니다)
+- 또는 터미널에서 격리 속성 제거:
+  ```bash
+  xattr -dr com.apple.quarantine "/Applications/Token Runway.app"
+  ```
+
+> Apple Developer 가입 후 서명·공증하면 이 단계 없이 더블클릭으로 바로 열립니다.
+
 ## 릴리스
 
 `v*` 태그를 푸시하면 GitHub Actions가 macOS universal `.dmg`를 빌드해 **Release 초안**을 만들어요:
@@ -93,6 +107,25 @@ git push origin v0.1.0
 
 > 현재는 **미서명** 빌드라 받는 사람이 Gatekeeper 경고를 봐요. Apple Developer 가입 후
 > 서명·공증 secret(`APPLE_*`)을 등록하면 `.github/workflows/release.yml`에서 활성화됩니다.
+
+### 자동 업데이트 (Apple과 무관 — 이미 활성)
+
+업데이트 서명은 minisign 키페어를 쓰므로 애플 공증과 별개로 동작합니다. 앱은 시작 시
+새 버전을 확인해 알림을 띄우고, 트레이 메뉴 **"업데이트 확인..."**에서 다운로드·설치·재시작합니다.
+
+빌드 머신에 키페어는 이미 생성돼 있어요 (`~/.tauri/token-runway.key{,.pub}`).
+공개키는 `tauri.conf.json`의 `plugins.updater.pubkey`에 박혀 있고, **개인키는 repo 밖**입니다.
+릴리스 빌드에서 서명하려면 GitHub Secrets에 등록하세요:
+
+```bash
+# 개인키 문자열 → 클립보드 (GitHub → Settings → Secrets → Actions)
+cat ~/.tauri/token-runway.key | pbcopy
+#   TAURI_SIGNING_PRIVATE_KEY          ← 위 값
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD ← 빈 문자열 (키 생성 시 비번 없음)
+```
+
+> ⚠️ 개인키·비밀번호를 잃으면 더 이상 업데이트에 서명할 수 없어 기존 사용자의 자동
+> 업데이트가 끊깁니다. 안전한 곳에 백업하세요.
 
 ## 상태
 

@@ -22,6 +22,7 @@ use tauri::{
     AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_updater::UpdaterExt;
 use tauri_plugin_positioner::{Position, WindowExt};
 
 /// 백그라운드 경보 체크 주기.
@@ -460,8 +461,13 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wr
         MenuItem::with_id(app, "history", lang.menu_history(), true, None::<&str>)?;
     let settings_item =
         MenuItem::with_id(app, "settings", lang.menu_settings(), true, None::<&str>)?;
+    let update_item =
+        MenuItem::with_id(app, "check_update", lang.menu_check_update(), true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", lang.menu_quit(), true, None::<&str>)?;
-    Menu::with_items(app, &[&show, &history_item, &settings_item, &quit])
+    Menu::with_items(
+        app,
+        &[&show, &history_item, &settings_item, &update_item, &quit],
+    )
 }
 
 /// 언어 변경 등으로 트레이 메뉴·설정 창 제목을 현재 언어로 다시 적용.
@@ -772,6 +778,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_positioner::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -827,6 +834,12 @@ pub fn run() {
                     "show" => toggle_popover(app, true),
                     "settings" => open_settings(app),
                     "history" => open_history(app),
+                    "check_update" => {
+                        let app = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            run_update(app, true).await;
+                        });
+                    }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -847,8 +860,14 @@ pub fn run() {
             // 백그라운드 경보 루프 시작 (창이 닫혀도 메뉴바 상주 상태로 동작)
             spawn_alert_loop(app.handle().clone());
 
-            // 트레이 아이콘 애니메이터 (잔여율 레벨 / 위험 펄스 / 충전)
+            // 트레이 아이콘 애니메이터 (상시 활주 / 위험 펄스 / 업데이트 흐름)
             spawn_tray_animator(app.handle().clone());
+
+            // 시작 시 업데이트 확인 (있으면 알림만, 설치는 트레이 메뉴에서)
+            let update_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                run_update(update_handle, false).await;
+            });
 
             // 익명: 실행 + 감지된 도구 수(이름 X)만
             let tool_count = providers().iter().filter(|p| p.available()).count();
@@ -864,6 +883,68 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// 업데이트 확인. `install`이면 발견 시 다운로드·설치 후 재시작(메뉴용),
+/// 아니면 발견 알림만(시작 시 백그라운드용).
+async fn run_update(app: AppHandle, install: bool) {
+    let lang = i18n::current();
+    let Ok(updater) = app.updater() else {
+        return;
+    };
+    match updater.check().await {
+        Ok(Some(update)) => {
+            if install {
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("Token Runway")
+                    .body(lang.update_installing())
+                    .show();
+                // 설치 중엔 트레이를 충전 차오름으로 — 진행 표시.
+                set_tray_mode(TRAY_MODE_CHARGE);
+                if update
+                    .download_and_install(|_, _| {}, || {})
+                    .await
+                    .is_ok()
+                {
+                    app.restart();
+                }
+                // 실패 시 직전 상태로 복귀 (재시작했다면 여기 도달 안 함).
+                set_tray_mode(if TRAY_DANGER.load(Ordering::Relaxed) {
+                    TRAY_MODE_DANGER
+                } else {
+                    TRAY_MODE_STATIC
+                });
+            } else {
+                let title = format!("{} v{}", lang.update_available_title(), update.version);
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title(title)
+                    .body(lang.update_available_body())
+                    .show();
+            }
+        }
+        // 최신 버전 / 실패는 수동 확인(메뉴)일 때만 알림 — 시작 시엔 조용히 넘어감
+        Ok(None) if install => {
+            let _ = app
+                .notification()
+                .builder()
+                .title("Token Runway")
+                .body(lang.update_uptodate())
+                .show();
+        }
+        Err(_) if install => {
+            let _ = app
+                .notification()
+                .builder()
+                .title("Token Runway")
+                .body(lang.update_failed())
+                .show();
+        }
+        _ => {}
+    }
 }
 
 /// 트레이 팝오버 토글. `force_show`면 항상 표시(메뉴 "열기"용), 아니면 토글.
