@@ -17,7 +17,8 @@ src-tauri/src/
    ├ mod.rs         UsageProvider trait + 공용 타입 + find_recent_jsonl 헬퍼
    ├ claude_code.rs Keychain OAuth + ~/.claude JSONL
    ├ codex.rs       ~/.codex JSONL (token_count + rate_limits)
-   └ gemini.rs      ~/.gemini 로그 요청 수
+   ├ gemini.rs      ~/.gemini 로그 요청 수
+   └ antigravity.rs ~/.gemini/antigravity-cli 전송 로그
 src/                React UI (App.tsx 대시보드)
 design/             아이콘 SVG 소스
 ```
@@ -80,6 +81,13 @@ trait UsageProvider {
   오늘 자정(로컬) 이후 요청 수 ÷ `DAILY_REQUEST_LIMIT`(1000) = 추정 사용률
   - 단위 `requests`, 윈도우 일간(24h), 추정이므로 note로 명시
   - 플랜 배지 없음 (무료티어 가정)
+
+### Antigravity (`antigravity.rs`) — 로컬 요청 추세
+- **시계열**: `~/.gemini/antigravity-cli/log/cli-*.log`의
+  `Sending user message to conversation` 로그 카운트
+- 단위 `requests`, 윈도우 일간(24h)
+- **잔여율 없음** — 절대 quota/credit 한도가 로컬 파일이나 공개 API로
+  제공되지 않아 임의 추정하지 않음
 
 ### 향후 provider (데이터 소스 스펙 — 미구현)
 

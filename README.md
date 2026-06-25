@@ -2,7 +2,7 @@
 
 AI 코딩 어시스턴트 세션 소진 경보 앱 — **"지금 세션 runway 20% 남았습니다"**
 
-Claude Code·Codex·Gemini를 쓰다 갑자기 한도에 걸려 작업이 끊기는 경험을 막는 게 목표.
+Claude Code·Codex·Gemini·Antigravity를 쓰다 갑자기 한도에 걸려 작업이 끊기는 경험을 막는 게 목표.
 "얼마나 썼어?"가 아니라 **"얼마나 남았어?"** 에 집중한다.
 
 ## 차별점
@@ -14,7 +14,7 @@ Token Runway는 **시계열**을 분석해 소진 속도와 ETA까지 만든다:
 
 ## 기능
 
-- **멀티툴 잔여율** — Claude Code / Codex / Gemini를 한 화면에
+- **멀티툴 잔여율** — Claude Code / Codex / Gemini / Antigravity를 한 화면에
 - **플랜 자동 인식** — 설정 없이 Keychain·로그에서 구독 등급 배지 (Max 5x, Plus 등)
 - **소진 속도 · ETA** — 최근 사용 추세로 "언제 끊길지" 예측
 - **리셋 시각 · 주간 잔여율** — 5시간/주간 윈도우별
@@ -28,6 +28,7 @@ Token Runway는 **시계열**을 분석해 소진 속도와 ETA까지 만든다:
 | **Claude Code** | Keychain OAuth → `api/oauth/usage` | 토큰 | 5h + 주간 | 정확 (공식) |
 | **Codex** | JSONL `rate_limits` (로컬) | 토큰 | 5h + 주간 | 정확 (공식) |
 | **Gemini** | 로그 요청 수 ÷ 1000 (자정 리셋) | 요청 | 일간 | **추정** (무료티어 가정) |
+| **Antigravity** | `agy` 로컬 로그의 사용자 메시지 전송 수 | 요청 | 일간 | 로컬 실측 (잔여율 미제공) |
 
 > 핵심: Claude Code·Codex는 공식 사용률을 직접 받고, Gemini는 로컬에 사용량 데이터가
 > 없어 AgentBar 방식(일일 1000 요청 가정)으로 추정한다. 추정 카드는 note로 구분 표시.
@@ -49,7 +50,8 @@ Token Runway는 **시계열**을 분석해 소진 속도와 ETA까지 만든다:
    └─ 백그라운드  │  ├ providers/   UsageProvider trait    │
       경보 루프 ──│  │   ├ claude_code  OAuth + JSONL      │
       (60s)      │  │   ├ codex        JSONL rate_limits  │
-                 │  │   └ gemini       로그 요청 수        │
+                 │  │   ├ gemini       로그 요청 수        │
+                 │  │   └ antigravity  CLI 메시지 전송 수  │
                  │  ├ runway       RunwayEngine (속도·ETA)│
                  │  └ AlertManager 임계치 → 네이티브 알림  │
                  └──────────────────────────────────────┘

@@ -3,6 +3,7 @@
 //! 새 AI 도구(Codex, Cursor 등)를 붙일 때는 이 모듈에 파일을 추가하고
 //! `UsageProvider`를 구현한 뒤 `lib.rs`의 provider 목록에 등록하면 된다.
 
+pub mod antigravity;
 pub mod claude_code;
 pub mod codex;
 pub mod gemini;

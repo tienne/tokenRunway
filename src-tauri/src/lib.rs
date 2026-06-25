@@ -7,6 +7,7 @@ mod settings;
 
 use settings::Settings;
 
+use providers::antigravity::AntigravityProvider;
 use providers::claude_code::ClaudeCodeProvider;
 use providers::codex::CodexProvider;
 use providers::gemini::GeminiProvider;
@@ -47,6 +48,7 @@ fn providers() -> Vec<Box<dyn UsageProvider>> {
         Box::new(ClaudeCodeProvider::new()),
         Box::new(CodexProvider::new()),
         Box::new(GeminiProvider::new()),
+        Box::new(AntigravityProvider::new()),
     ]
 }
 
