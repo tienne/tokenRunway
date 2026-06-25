@@ -13,7 +13,7 @@ use providers::codex::CodexProvider;
 use providers::gemini::GeminiProvider;
 use providers::{RunwayStatus, UsageProvider};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 use tauri::{
@@ -27,11 +27,52 @@ use tauri_plugin_positioner::{Position, WindowExt};
 /// 백그라운드 경보 체크 주기.
 const ALERT_CHECK_SECS: u64 = 60;
 
-/// 트레이 아이콘 — 평소(단색 template) / 위험(빨강).
-const TRAY_NORMAL_ICON: &[u8] = include_bytes!("../icons/tray@2x.png");
-const TRAY_ALERT_ICON: &[u8] = include_bytes!("../icons/tray-alert@2x.png");
+/// 트레이 모래시계 아이콘 — 평소(단색 template, 윗모래 가득) / 위험(빨강).
+const TRAY_NORMAL_ICON: &[u8] = include_bytes!("../icons/anim/level-20@2x.png");
+const TRAY_ALERT_ICON: &[u8] = include_bytes!("../icons/anim/danger@2x.png");
+/// 위험 펄스용 흐릿한 빨강 모래시계 (alert ↔ dim 교차).
+const TRAY_ALERT_DIM_ICON: &[u8] = include_bytes!("../icons/anim/danger-dim@2x.png");
 
-/// 직전 위험 상태 — 변할 때만 아이콘을 교체(깜빡임 방지).
+/// 모래시계 윗모래 레벨 0(다 흐름)~20(가득) — 잔여율 5% 단위. 단색 template.
+const TRAY_LEVEL_FRAMES: [&[u8]; 21] = [
+    include_bytes!("../icons/anim/level-00@2x.png"),
+    include_bytes!("../icons/anim/level-01@2x.png"),
+    include_bytes!("../icons/anim/level-02@2x.png"),
+    include_bytes!("../icons/anim/level-03@2x.png"),
+    include_bytes!("../icons/anim/level-04@2x.png"),
+    include_bytes!("../icons/anim/level-05@2x.png"),
+    include_bytes!("../icons/anim/level-06@2x.png"),
+    include_bytes!("../icons/anim/level-07@2x.png"),
+    include_bytes!("../icons/anim/level-08@2x.png"),
+    include_bytes!("../icons/anim/level-09@2x.png"),
+    include_bytes!("../icons/anim/level-10@2x.png"),
+    include_bytes!("../icons/anim/level-11@2x.png"),
+    include_bytes!("../icons/anim/level-12@2x.png"),
+    include_bytes!("../icons/anim/level-13@2x.png"),
+    include_bytes!("../icons/anim/level-14@2x.png"),
+    include_bytes!("../icons/anim/level-15@2x.png"),
+    include_bytes!("../icons/anim/level-16@2x.png"),
+    include_bytes!("../icons/anim/level-17@2x.png"),
+    include_bytes!("../icons/anim/level-18@2x.png"),
+    include_bytes!("../icons/anim/level-19@2x.png"),
+    include_bytes!("../icons/anim/level-20@2x.png"),
+];
+const TRAY_LEVEL_MAX: u8 = 20;
+
+/// 트레이 모드. Danger > Charge > Static 우선.
+const TRAY_MODE_STATIC: u8 = 0; // 잔여율 레벨 정적 표시 (애니메이션 없음)
+const TRAY_MODE_CHARGE: u8 = 1; // 업데이트 설치 중 (충전 차오름)
+const TRAY_MODE_DANGER: u8 = 2; // 위험 경보 (빨강 펄스)
+static TRAY_ANIM_MODE: AtomicU8 = AtomicU8::new(TRAY_MODE_STATIC);
+
+/// 현재 배터리 레벨(0~20) — update_tray_title이 잔여율로 갱신.
+static TRAY_LEVEL: AtomicU8 = AtomicU8::new(TRAY_LEVEL_MAX);
+
+fn set_tray_mode(mode: u8) {
+    TRAY_ANIM_MODE.store(mode, Ordering::Relaxed);
+}
+
+/// 직전 위험 상태 — 변할 때만 모드를 전환(중복 set 방지).
 static TRAY_DANGER: AtomicBool = AtomicBool::new(false);
 
 /// 도구별 소진 경보 발사 여부 (임계치 아래에서 1회만, 회복 시 리셋).
@@ -546,6 +587,28 @@ fn update_tray_title(app: &AppHandle, statuses: &[RunwayStatus]) {
     });
     let danger = pct.is_some_and(|p| p <= settings::alert_threshold());
 
+    // 잔여율 → 배터리 레벨(0~20). 잔여율이 없으면 풀로 표시.
+    let level = match pct {
+        Some(p) => ((p / 100.0 * TRAY_LEVEL_MAX as f64).round() as i64)
+            .clamp(0, TRAY_LEVEL_MAX as i64) as u8,
+        None => TRAY_LEVEL_MAX,
+    };
+    TRAY_LEVEL.store(level, Ordering::Relaxed);
+
+    // 위험 상태가 바뀌면 모드 전환 (충전 중이면 그대로 둠).
+    if TRAY_DANGER.swap(danger, Ordering::Relaxed) != danger
+        && TRAY_ANIM_MODE.load(Ordering::Relaxed) != TRAY_MODE_CHARGE
+    {
+        set_tray_mode(if danger {
+            TRAY_MODE_DANGER
+        } else {
+            TRAY_MODE_STATIC
+        });
+    }
+
+    // 정적 모드면 잔여율 레벨을 직접 그린다 (애니메이터는 쉬는 상태).
+    let draw_level = TRAY_ANIM_MODE.load(Ordering::Relaxed) == TRAY_MODE_STATIC;
+
     // 트레이 UI 갱신은 메인 스레드에서.
     let app_for_tray = app.clone();
     let _ = app.run_on_main_thread(move || {
@@ -553,14 +616,74 @@ fn update_tray_title(app: &AppHandle, statuses: &[RunwayStatus]) {
             return;
         };
         let _ = tray.set_title(title);
-
-        // 위험 상태가 바뀔 때만 아이콘 교체 (위험=빨강 컬러, 평소=단색 template).
-        if TRAY_DANGER.swap(danger, Ordering::Relaxed) != danger {
-            let bytes = if danger { TRAY_ALERT_ICON } else { TRAY_NORMAL_ICON };
-            if let Ok(img) = tauri::image::Image::from_bytes(bytes) {
+        if draw_level {
+            if let Ok(img) = tauri::image::Image::from_bytes(TRAY_LEVEL_FRAMES[level as usize]) {
                 let _ = tray.set_icon(Some(img));
             }
-            let _ = tray.set_icon_as_template(!danger);
+            let _ = tray.set_icon_as_template(true);
+        }
+    });
+}
+
+/// 트레이 아이콘 애니메이터 — 모드에 따라 프레임을 순환 교체한다.
+/// 별도 스레드에서 돌며 set_icon은 메인 스레드로 위임. (창이 닫혀도 동작)
+fn spawn_tray_animator(app: AppHandle) {
+    std::thread::spawn(move || {
+        let mut charge = 0usize;
+        let mut pulse_on = true;
+        let mut last_mode = u8::MAX;
+        loop {
+            let mode = TRAY_ANIM_MODE.load(Ordering::Relaxed);
+            let mode_changed = mode != last_mode;
+            last_mode = mode;
+
+            let (bytes, is_template, sleep_ms): (&[u8], bool, u64) = match mode {
+                TRAY_MODE_DANGER => {
+                    pulse_on = !pulse_on;
+                    let b = if pulse_on {
+                        TRAY_ALERT_ICON
+                    } else {
+                        TRAY_ALERT_DIM_ICON
+                    };
+                    (b, false, 550)
+                }
+                TRAY_MODE_CHARGE => {
+                    // 윗모래가 찼다 빠졌다 왕복 (설치 진행 표시).
+                    let n = TRAY_LEVEL_FRAMES.len() - 1; // 20
+                    charge = if mode_changed {
+                        0
+                    } else {
+                        (charge + 1) % (n * 2)
+                    };
+                    let idx = if charge <= n { charge } else { n * 2 - charge };
+                    (TRAY_LEVEL_FRAMES[idx], true, 70)
+                }
+                _ => {
+                    // STATIC — 모드 진입 직후 1회만 현재 레벨을 그리고 이후엔 쉰다(전력 절약).
+                    // 레벨 변화는 update_tray_title이 직접 반영한다.
+                    if !mode_changed {
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                        continue;
+                    }
+                    let lvl = TRAY_LEVEL.load(Ordering::Relaxed).min(TRAY_LEVEL_MAX) as usize;
+                    (TRAY_LEVEL_FRAMES[lvl], true, 200)
+                }
+            };
+
+            let app2 = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                let Some(tray) = app2.tray_by_id("main") else {
+                    return;
+                };
+                if let Ok(img) = tauri::image::Image::from_bytes(bytes) {
+                    let _ = tray.set_icon(Some(img));
+                }
+                // template 여부는 모드 전환 시에만 (빨강 위험 ↔ 단색 배터리).
+                if mode_changed {
+                    let _ = tray.set_icon_as_template(is_template);
+                }
+            });
+            std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
         }
     });
 }
@@ -689,9 +812,8 @@ pub fn run() {
             let menu = build_tray_menu(&app.handle().clone())?;
 
             // 메뉴바 전용 단색 아이콘 (template 모드 → macOS가 라이트/다크에 맞게 자동 반전)
-            let tray_icon = tauri::image::Image::from_bytes(include_bytes!(
-                "../icons/tray@2x.png"
-            ))?;
+            // 시작 직후 애니메이터가 프레임으로 덮어쓴다.
+            let tray_icon = tauri::image::Image::from_bytes(TRAY_NORMAL_ICON)?;
 
             TrayIconBuilder::with_id("main")
                 .icon(tray_icon)
@@ -724,6 +846,9 @@ pub fn run() {
 
             // 백그라운드 경보 루프 시작 (창이 닫혀도 메뉴바 상주 상태로 동작)
             spawn_alert_loop(app.handle().clone());
+
+            // 트레이 아이콘 애니메이터 (잔여율 레벨 / 위험 펄스 / 충전)
+            spawn_tray_animator(app.handle().clone());
 
             // 익명: 실행 + 감지된 도구 수(이름 X)만
             let tool_count = providers().iter().filter(|p| p.available()).count();

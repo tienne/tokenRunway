@@ -76,8 +76,9 @@ Node 버전은 `.nvmrc`(22.21.1)에 고정 — `nvm use`로 전환.
 
 ## 아이콘
 
-`design/app-icon.svg`(컬러)·`design/tray-icon.svg`(단색 트레이)가 소스.
-수정 후 `pnpm tauri icon design/app-icon.svg`로 전체 세트 재생성.
+앱 아이콘은 `design/app-icon.svg`(컬러)가 소스 — `pnpm tauri icon design/app-icon.svg`로 전체 세트 재생성.
+트레이는 모래시계 잔여율 프레임(단색 template)으로, `design/gen-tray-frames.py`가
+`src-tauri/icons/anim/`의 PNG 세트(`level-00~20`·`danger`)를 생성한다 (`rsvg-convert` 필요).
 
 ## 릴리스
 
