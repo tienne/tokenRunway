@@ -527,14 +527,14 @@ fn check_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
             let lang = i18n::current();
             // ETA만 걸렸으면 시간 중심 메시지, 그 외엔 잔여율 메시지
             let body = if eta_hit && !pct_hit {
-                lang.alert_eta(&s.tool, s.eta_minutes.unwrap_or(0.0), pct)
+                lang.alert_eta(s.eta_minutes.unwrap_or(0.0), pct)
             } else {
-                lang.alert_low(&s.tool, pct)
+                lang.alert_low(pct)
             };
             let _ = app
                 .notification()
                 .builder()
-                .title(lang.alert_title())
+                .title(lang.alert_title(&s.tool))
                 .body(body)
                 .show();
             // 익명: 어떤 종류 경보가 떴는지 메타만 (값 X)
@@ -748,8 +748,8 @@ fn check_reset_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
             let _ = app
                 .notification()
                 .builder()
-                .title(lang.reset_title())
-                .body(lang.alert_reset(&s.tool, mins, pct))
+                .title(lang.reset_title(&s.tool))
+                .body(lang.alert_reset(mins, pct))
                 .show();
             analytics::track("alert_fired", serde_json::json!({ "kind": "reset" }));
             alerted.insert(s.tool.clone(), true);
