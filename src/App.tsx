@@ -16,6 +16,12 @@ interface Insight {
   level: "good" | "warn" | "tip";
 }
 
+interface ModelBreakdown {
+  model: string;
+  usage: number;
+  cost: number;
+}
+
 interface RunwayStatus {
   tool: string;
   available: boolean;
@@ -27,6 +33,8 @@ interface RunwayStatus {
   dailyCost: number;
   cacheHitRate: number | null;
   insights: Insight[];
+  planHint: Insight | null;
+  models: ModelBreakdown[];
   sparkline: number[];
   limit: number | null;
   percentRemaining: number | null;
@@ -331,6 +339,37 @@ function Dashboard() {
               {t(lang, ins.key)}
             </p>
           ))}
+
+          {s.planHint && (
+            <p className={`insight plan-hint insight-${s.planHint.level}`}>
+              {t(lang, s.planHint.key)}
+            </p>
+          )}
+
+          {s.models.length > 0 && (
+            <div className="model-mini">
+              <span className="model-mini-title">
+                {t(lang, "modelBreakdown")}
+              </span>
+              {s.models.map((m) => (
+                <div className="model-row" key={m.model}>
+                  <span className="model-name">{m.model}</span>
+                  <div className="model-track">
+                    <div
+                      className="model-fill"
+                      style={{
+                        width: `${(m.usage / (s.models[0].usage || 1)) * 100}%`,
+                      }}
+                    />
+                  </div>
+                  <span className="model-val">
+                    {formatAmount(m.usage)}
+                    {m.cost > 0 ? ` · $${m.cost.toFixed(2)}` : ""}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
 
           {s.sevenDayRemaining != null && (
             <p className="weekly">
@@ -687,6 +726,25 @@ interface ModelUsage {
   cost: number;
   count: number;
 }
+interface PlanTier {
+  plan: string;
+  projectedUtil: number;
+  current: boolean;
+  recommended: boolean;
+}
+interface LimitEstimate {
+  limitTokens: number;
+  usedTokens: number;
+  messages: number;
+}
+interface PlanAdvice {
+  currentPlan: string;
+  recommendedPlan: string;
+  direction: "upgrade" | "downgrade" | "keep" | "managed" | "na";
+  managed: boolean;
+  tiers: PlanTier[];
+  estimate: LimitEstimate | null;
+}
 interface ToolStats {
   tool: string;
   unit: string;
@@ -702,6 +760,7 @@ interface ToolStats {
   lastWeekUsage: number;
   thisWeekCost: number;
   lastWeekCost: number;
+  planAdvice: PlanAdvice | null;
 }
 
 const PERIODS = [7, 14, 30, 60, 90, 180, 365];
@@ -822,7 +881,102 @@ function TrendChart({
   );
 }
 
-/** 도구 하나의 통계 카드 — 요약·일별·주간비교·모델별·시간대별 */
+/** 요금제 티어 한 줄 — 예상 소진율 막대 */
+function TierBar({
+  tier,
+  lang,
+  managed,
+}: {
+  tier: PlanTier;
+  lang: Lang;
+  managed?: boolean;
+}) {
+  const lvl =
+    tier.projectedUtil > 90 ? "over" : tier.projectedUtil > 75 ? "tight" : "ok";
+  return (
+    <div className="plan-tier">
+      <span className="plan-tier-name">
+        {tier.plan}
+        {tier.current && (
+          <span className="plan-tag">{t(lang, "planCurrent")}</span>
+        )}
+        {tier.recommended && (
+          <span className="plan-tag plan-tag-rec">
+            ★ {t(lang, managed ? "planEquivTag" : "planRecommended")}
+          </span>
+        )}
+      </span>
+      <div className="model-track">
+        <div
+          className={`plan-fill plan-fill-${lvl}`}
+          style={{ width: `${Math.min(100, tier.projectedUtil)}%` }}
+        />
+      </div>
+      <span className="model-val">{tier.projectedUtil.toFixed(0)}%</span>
+    </div>
+  );
+}
+
+/** 사용량 기반 요금제 추천 — 티어별 예상 소진율 막대 */
+function PlanAdviceBlock({ a, lang }: { a: PlanAdvice; lang: Lang }) {
+  // 관리형(Enterprise/Team) — 추정 5시간 한도 + 개인 플랜 환산(참고용, 전환 추천 아님).
+  if (a.managed) {
+    const e = a.estimate;
+    const hasTiers = a.tiers.length > 0;
+    return (
+      <div className="stat-block">
+        <span className="stat-title">{t(lang, "planManagedTitle")}</span>
+        {e ? (
+          <>
+            <p className="plan-est">
+              {t(lang, "est5hLimit", { n: formatAmount(e.limitTokens) })}
+            </p>
+            <p className="plan-est-sub">
+              {t(lang, "est5hDetail", {
+                used: formatAmount(e.usedTokens),
+                msg: e.messages,
+              })}
+            </p>
+          </>
+        ) : (
+          <p className="plan-note">{t(lang, "planNA", { plan: a.currentPlan })}</p>
+        )}
+        {hasTiers && (
+          <>
+            <p className="plan-rec-headline plan-rec-managed">
+              {t(lang, "planEquiv", { rec: a.recommendedPlan })}
+            </p>
+            {a.tiers.map((tier) => (
+              <TierBar key={tier.plan} tier={tier} lang={lang} managed />
+            ))}
+          </>
+        )}
+        {(e || hasTiers) && (
+          <p className="plan-note">{t(lang, "est5hNote")}</p>
+        )}
+      </div>
+    );
+  }
+
+  const headline =
+    a.direction === "keep"
+      ? t(lang, "planKeep")
+      : a.direction === "upgrade"
+      ? t(lang, "planUpgrade", { rec: a.recommendedPlan })
+      : t(lang, "planDowngrade", { rec: a.recommendedPlan });
+  return (
+    <div className="stat-block">
+      <span className="stat-title">{t(lang, "planRec")}</span>
+      <p className={`plan-rec-headline plan-rec-${a.direction}`}>{headline}</p>
+      {a.tiers.map((tier) => (
+        <TierBar key={tier.plan} tier={tier} lang={lang} />
+      ))}
+      <p className="plan-note">{t(lang, "planEstimateNote")}</p>
+    </div>
+  );
+}
+
+/** 도구 하나의 통계 카드 — 요약·요금제추천·일별·주간비교·모델별·시간대별 */
 function StatsCard({ s, lang }: { s: ToolStats; lang: Lang }) {
   const isReq = s.unit === "requests";
   const fmt = (n: number) => (isReq ? `${n}` : formatAmount(n));
@@ -877,6 +1031,9 @@ function StatsCard({ s, lang }: { s: ToolStats; lang: Lang }) {
           </div>
         )}
       </div>
+
+      {/* 사용량 기반 요금제 추천 */}
+      {s.planAdvice && <PlanAdviceBlock a={s.planAdvice} lang={lang} />}
 
       {/* 일별: 일수 많으면 추세 차트, 적으면 막대 */}
       {dense ? (

@@ -460,6 +460,102 @@ h1 {
   white-space: nowrap;
 }
 
+/* 요금제 추천 (히스토리) */
+.plan-rec-headline {
+  margin: 4px 0 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.plan-rec-upgrade {
+  color: #bf8700;
+}
+.plan-rec-downgrade {
+  color: #0a84ff;
+}
+.plan-rec-keep {
+  color: #30a14e;
+}
+.plan-rec-managed {
+  color: #0a84ff;
+}
+
+.plan-tier {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.plan-tier-name {
+  flex: 0 0 128px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.plan-tag {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(142, 142, 147, 0.2);
+  color: #8e8e93;
+}
+.plan-tag-rec {
+  background: rgba(48, 161, 78, 0.18);
+  color: #30a14e;
+}
+
+.plan-fill {
+  height: 100%;
+  border-radius: 4px;
+}
+.plan-fill-ok {
+  background: #30a14e;
+}
+.plan-fill-tight {
+  background: #bf8700;
+}
+.plan-fill-over {
+  background: #ff453a;
+}
+
+.plan-note {
+  margin: 6px 0 0;
+  font-size: 10px;
+  color: #8e8e93;
+}
+
+.plan-est {
+  margin: 8px 0 0;
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.plan-est-sub {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: #8e8e93;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 실시간 카드 내 모델별 사용량 (인사이트 아래) */
+.model-mini {
+  margin-top: 8px;
+}
+
+.model-mini-title {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #8e8e93;
+}
+
 /* 시간대별 패턴 */
 .hourly-bars {
   display: flex;
@@ -698,6 +794,14 @@ h1 {
 
 .insight-good {
   color: #30a14e; /* 긍정 — 초록 */
+}
+
+/* 요금제 추천 — 인사이트와 구분되게 위쪽에 옅은 구분선 */
+.plan-hint {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(142, 142, 147, 0.2);
+  white-space: normal; /* 문장이 길어 줄바꿈 허용 */
 }
 
 .weekly {

@@ -212,7 +212,7 @@ fn fetch_cached() -> (Option<OfficialUsage>, Option<&'static str>) {
 
 /// OAuth `/api/oauth/usage`를 호출. 실패 시 사유(i18n 키)를 함께 반환.
 fn fetch_official_usage() -> (Option<OfficialUsage>, Option<&'static str>) {
-    let Some((token, plan)) = read_oauth_credentials() else {
+    let Some((token, plan, rate_mult)) = read_oauth_credentials() else {
         return (None, Some("error.no_token"));
     };
     let version = claude_version();
@@ -252,6 +252,7 @@ fn fetch_official_usage() -> (Option<OfficialUsage>, Option<&'static str>) {
             seven_day_utilization: seven.utilization,
             seven_day_resets_at: seven.resets_at,
             plan,
+            rate_limit_multiplier: rate_mult,
         }),
         None,
     )
@@ -262,7 +263,7 @@ fn fetch_official_usage() -> (Option<OfficialUsage>, Option<&'static str>) {
 /// macOS의 `security` CLI를 쓴다 — account 이름 추정 없이 service만으로 조회 가능.
 /// 다른 OS는 추후 `keyring` crate로 확장한다.
 #[cfg(target_os = "macos")]
-fn read_oauth_credentials() -> Option<(String, Option<String>)> {
+fn read_oauth_credentials() -> Option<(String, Option<String>, Option<f64>)> {
     let out = Command::new("security")
         .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
         .output()
@@ -274,16 +275,49 @@ fn read_oauth_credentials() -> Option<(String, Option<String>)> {
     let creds: Credentials = serde_json::from_str(raw.trim()).ok()?;
     let o = creds.claude_ai_oauth;
     let plan = format_claude_plan(o.rate_limit_tier.as_deref(), o.subscription_type.as_deref());
-    Some((o.access_token, plan))
+    let rate_mult = tier_multiplier(o.rate_limit_tier.as_deref());
+    Some((o.access_token, plan, rate_mult))
 }
 
 #[cfg(not(target_os = "macos"))]
-fn read_oauth_credentials() -> Option<(String, Option<String>)> {
+fn read_oauth_credentials() -> Option<(String, Option<String>, Option<f64>)> {
     None
 }
 
-/// rateLimitTier("default_claude_max_5x") → "Max 5x". 없으면 subscriptionType.
+/// rateLimitTier("default_claude_max_5x") → 5.0. "..._pro"→1.0. 모르면 None.
+///
+/// 엔터프라이즈 좌석도 rateLimitTier(예: max_5x)가 있어, 이 배수로 개인 플랜 환산의
+/// 기준선(Pro=1x)을 역산할 수 있다.
+fn tier_multiplier(tier: Option<&str>) -> Option<f64> {
+    let rest = tier?
+        .strip_prefix("default_claude_")
+        .unwrap_or("")
+        .to_lowercase();
+    if rest == "pro" {
+        return Some(1.0);
+    }
+    if rest.contains("max") {
+        let digits: String = rest.chars().filter(|c| c.is_ascii_digit()).collect();
+        return digits.parse::<f64>().ok();
+    }
+    None
+}
+
+/// 플랜 표시명 결정.
+///
+/// `subscriptionType`(청구 플랜)과 `rateLimitTier`(레이트리밋 등급)는 엔터프라이즈에서
+/// 갈린다 — enterprise 좌석도 rateLimitTier는 `default_claude_max_5x`로 내려온다. 이때
+/// 등급을 그대로 쓰면 "Max 5x"로 오표시되고 요금제 추천도 오판하므로, 관리형 플랜
+/// (enterprise/team)은 subscriptionType을 우선한다. 개인 구독자는 rateLimitTier가 더
+/// granular(5x/20x 구분)해서 그대로 쓴다.
 fn format_claude_plan(tier: Option<&str>, sub: Option<&str>) -> Option<String> {
+    // 관리형(청구) 플랜은 subscriptionType이 진실 — 등급(max_5x)보다 우선.
+    if let Some(s) = sub {
+        let low = s.to_lowercase();
+        if low == "enterprise" || low == "team" {
+            return Some(capitalize_word(s));
+        }
+    }
     if let Some(t) = tier {
         if let Some(rest) = t.strip_prefix("default_claude_") {
             let joined = rest

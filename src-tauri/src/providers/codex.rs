@@ -141,6 +141,7 @@ impl UsageProvider for CodexProvider {
                 .map(|s| epoch_to_rfc3339(s.resets_at))
                 .unwrap_or_default(),
             plan,
+            rate_limit_multiplier: None, // Codex는 소비자 사다리 배수 미상.
         })
     }
 }

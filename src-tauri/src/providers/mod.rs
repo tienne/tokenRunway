@@ -50,6 +50,9 @@ pub struct OfficialUsage {
     pub seven_day_resets_at: String,
     /// 구독 플랜/등급 (예: "Plus", "Max 5x"). 표시용.
     pub plan: Option<String>,
+    /// 레이트리밋 등급 배수 (Pro 대비). "max_5x"→5. 요금제 사다리 앵커용.
+    /// 엔터프라이즈도 좌석 등급(예: max_5x)이 있어 개인 플랜 환산의 기준이 된다.
+    pub rate_limit_multiplier: Option<f64>,
 }
 
 /// 효율 인사이트 한 건 — i18n 키 + 레벨(색 구분용).
@@ -68,6 +71,18 @@ impl Insight {
             level: level.to_string(),
         }
     }
+}
+
+/// 윈도우 내 모델별 사용량 (실시간 카드용). model을 채우는 도구(현재 Claude)만 비어있지 않음.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelBreakdown {
+    /// 단축 표시명 ("opus-4-8").
+    pub model: String,
+    /// 윈도우 누적 사용량 (토큰).
+    pub usage: u64,
+    /// API 기준 환산 비용 (USD). 단가 미상 도구는 0.
+    pub cost: f64,
 }
 
 /// 도구 하나의 런웨이 상태 — UI로 그대로 전달되는 뷰 모델.
@@ -93,6 +108,10 @@ pub struct RunwayStatus {
     pub cache_hit_rate: Option<f64>,
     /// 효율 인사이트 목록 (코칭/칭찬). 비어있을 수 있음.
     pub insights: Vec<Insight>,
+    /// 요금제 추천(방향) — 주간 사용률 기반. 공식 사용률이 있는 도구만 채워질 수 있음.
+    pub plan_hint: Option<Insight>,
+    /// 윈도우 내 모델별 사용량 (사용량 내림차순). model을 채우는 도구만 비어있지 않음.
+    pub models: Vec<ModelBreakdown>,
     /// 윈도우를 균등 분할한 구간별 사용량 (미니 추세 그래프용).
     pub sparkline: Vec<u64>,
     /// 한도(분모). OAuth 연동 전에는 None → percent/eta 계산 불가.

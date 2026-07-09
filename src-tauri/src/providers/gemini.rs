@@ -119,6 +119,7 @@ impl UsageProvider for GeminiProvider {
             seven_day_utilization: 0.0,
             seven_day_resets_at: String::new(),
             plan: None,
+            rate_limit_multiplier: None,
         })
     }
 }

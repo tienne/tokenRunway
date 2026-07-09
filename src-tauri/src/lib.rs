@@ -140,6 +140,47 @@ struct ModelUsage {
     count: u64,
 }
 
+/// 요금제 사다리의 한 티어 — 이 플랜을 쓸 때 내 주간 사용량의 예상 소진율.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlanTier {
+    plan: String,
+    /// 이 티어에서 예상 주간 사용률 (%). 추정치.
+    projected_util: f64,
+    /// 현재 사용 중인 플랜인지.
+    current: bool,
+    /// 추천 플랜인지.
+    recommended: bool,
+}
+
+/// 역산한 5시간 세션 한도 추정치 (엔터프라이즈 등 추천 N/A 플랜용).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LimitEstimate {
+    /// 역산한 5시간 절대 토큰 한도 (추정). = 사용량 ÷ (사용률/100).
+    limit_tokens: u64,
+    /// 현재 5시간 윈도우 사용량.
+    used_tokens: u64,
+    /// 현재 5시간 윈도우 메시지 수.
+    messages: u64,
+}
+
+/// 사용량 기반 요금제 추천 (히스토리 전용). 배수를 아는 플랜만 채워짐.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlanAdvice {
+    current_plan: String,
+    recommended_plan: String,
+    /// "upgrade" | "downgrade" | "keep" | "managed" | "na".
+    direction: String,
+    /// 관리형 플랜(Enterprise/Team) 여부 — 개인 전환 대상이 아니라 환산은 참고용.
+    managed: bool,
+    /// 티어별 예상 소진율 (Pro→Max 20x 순).
+    tiers: Vec<PlanTier>,
+    /// 관리형(엔터프라이즈 등)일 때 함께 보여줄 추정 5시간 한도.
+    estimate: Option<LimitEstimate>,
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ToolStats {
@@ -162,6 +203,8 @@ struct ToolStats {
     last_week_usage: u64,
     this_week_cost: f64,
     last_week_cost: f64,
+    /// 사용량 기반 요금제 추천. 배수를 아는 플랜(Claude Pro/Max)만 채워짐.
+    plan_advice: Option<PlanAdvice>,
 }
 
 /// epoch millis → 로컬 "YYYY-MM-DD".
@@ -196,6 +239,152 @@ pub(crate) fn short_model(m: &str) -> String {
     } else {
         parts.join("-")
     }
+}
+
+/// 플랜명 → Pro 대비 배수. "Pro"→1, "Max 5x"→5, "Max 20x"→20. 모르면 None.
+///
+/// Anthropic이 이름에 배수를 인코딩("Max 5x" = Pro의 5배)하므로, 이는 임의 추정이
+/// 아니라 공식 명칭에 근거한 값이다. 배수를 모르는 플랜(Codex Plus/Pro 등)은 None.
+fn plan_multiplier(plan: &str) -> Option<f64> {
+    let p = plan.trim();
+    if p.eq_ignore_ascii_case("pro") {
+        return Some(1.0);
+    }
+    if p.to_lowercase().contains("max") {
+        let digits: String = p.chars().filter(|c| c.is_ascii_digit()).collect();
+        return digits.parse::<f64>().ok();
+    }
+    None
+}
+
+/// 사용량 기반 요금제 추천.
+///
+/// 현재 플랜의 주간 사용률로 한도(용량)를 역산하고, 이름의 배수 비율로 다른 티어의
+/// 용량을 추정해 각 티어에서의 예상 소진율을 낸다. 여유롭게(≤75%) 담기는 가장 저렴한
+/// 티어를 추천한다. 배수를 아는 플랜만 Some을 반환한다.
+fn compute_plan_advice(
+    official: &crate::providers::OfficialUsage,
+    this_week_usage: u64,
+    typical_weekly: f64,
+    provider: &dyn crate::providers::UsageProvider,
+    now_ms: i64,
+) -> Option<PlanAdvice> {
+    let plan = official.plan.as_deref()?;
+    // 표시명이 소비자 사다리에 없으면(Enterprise/Team) 관리형 — 개인 전환 대상이 아니다.
+    let managed = plan_multiplier(plan).is_none();
+    // 사다리 앵커 배수: rateLimitTier(좌석 등급, 엔터프라이즈도 존재) 우선, 없으면 표시명.
+    let anchor = official.rate_limit_multiplier.or_else(|| plan_multiplier(plan));
+
+    let u = official.seven_day_utilization;
+    // 신뢰 가드: 배수 없음/사용률 낮음/사용량 0이면 사다리 계산 불가.
+    let ladder_ok =
+        anchor.is_some() && u >= 3.0 && this_week_usage > 0 && typical_weekly > 0.0;
+
+    if !ladder_ok {
+        // 관리형은 최소한 추정 5시간 한도라도 보여준다. 소비자는 표시 안 함.
+        if managed {
+            return Some(PlanAdvice {
+                current_plan: plan.to_string(),
+                recommended_plan: String::new(),
+                direction: "na".to_string(),
+                managed: true,
+                tiers: Vec::new(),
+                estimate: estimate_5h_limit(official, provider, now_ms),
+            });
+        }
+        return None;
+    }
+
+    let m_cur = anchor.unwrap();
+    // Pro(1x) 주간 한도 = 현재 등급 용량 ÷ 등급 배수.
+    let cap_1x = (this_week_usage as f64 / (u / 100.0)) / m_cur;
+    if cap_1x <= 0.0 {
+        return None;
+    }
+
+    const LADDER: [(&str, f64); 3] = [("Pro", 1.0), ("Max 5x", 5.0), ("Max 20x", 20.0)];
+    const COMFORT: f64 = 75.0;
+
+    let mut tiers: Vec<PlanTier> = LADDER
+        .iter()
+        .map(|(name, mult)| {
+            let util = (typical_weekly / (cap_1x * mult)) * 100.0;
+            PlanTier {
+                plan: name.to_string(),
+                projected_util: (util * 10.0).round() / 10.0,
+                // 관리형은 실제로 그 티어에 있는 게 아니므로 current 표시 안 함.
+                current: !managed && (mult - m_cur).abs() < 0.01,
+                recommended: false,
+            }
+        })
+        .collect();
+
+    // 편안한(≤75%) 가장 저렴한(배수 작은) 티어. 없으면 가장 큰 티어.
+    let rec_idx = tiers
+        .iter()
+        .position(|tr| tr.projected_util <= COMFORT)
+        .unwrap_or(tiers.len() - 1);
+    tiers[rec_idx].recommended = true;
+
+    // 관리형은 전환 방향이 없다 — 개인 플랜 환산(참고용)만.
+    let direction = if managed {
+        "managed".to_string()
+    } else {
+        let cur_idx = tiers.iter().position(|tr| tr.current)?;
+        if rec_idx > cur_idx {
+            "upgrade"
+        } else if rec_idx < cur_idx {
+            "downgrade"
+        } else {
+            "keep"
+        }
+        .to_string()
+    };
+
+    Some(PlanAdvice {
+        current_plan: plan.to_string(),
+        recommended_plan: tiers[rec_idx].plan.clone(),
+        direction,
+        managed,
+        tiers,
+        estimate: if managed {
+            estimate_5h_limit(official, provider, now_ms)
+        } else {
+            None
+        },
+    })
+}
+
+/// 5시간 세션의 절대 토큰 한도를 역산 추정.
+///
+/// Anthropic은 절대 한도를 비공개하므로 `5시간 사용량 ÷ (사용률/100)`으로 역산한다.
+/// 사용률이 낮으면(분모가 작으면) 부정확해 최소 임계치 미만이면 None.
+fn estimate_5h_limit(
+    official: &crate::providers::OfficialUsage,
+    provider: &dyn crate::providers::UsageProvider,
+    now_ms: i64,
+) -> Option<LimitEstimate> {
+    let util = official.five_hour_utilization;
+    if util < 3.0 {
+        return None;
+    }
+    let window_start = now_ms - 5 * 3600 * 1000;
+    let samples = provider.collect_samples(window_start);
+    let mut used_tokens = 0u64;
+    let mut messages = 0u64;
+    for s in samples.iter().filter(|s| s.timestamp_ms >= window_start) {
+        used_tokens += s.amount;
+        messages += 1;
+    }
+    if used_tokens == 0 {
+        return None;
+    }
+    let limit_tokens = (used_tokens as f64 / (util / 100.0)).round() as u64;
+    Some(LimitEstimate {
+        limit_tokens,
+        used_tokens,
+        messages,
+    })
 }
 
 /// 최근 `days`일 통계 — 일별·모델별·시간대별·주간 비교 (JSONL 원본 집계, 영속 저장 없음).
@@ -332,6 +521,22 @@ fn compute_stats(days: u32) -> Vec<ToolStats> {
                 }
             }
 
+            // 요금제 추천 — 선택 기간의 평균 주간 사용량(달력 기준) 대비 티어별 소진율.
+            let typical_weekly = if !days_vec.is_empty() {
+                total_usage as f64 / days_vec.len() as f64 * 7.0
+            } else {
+                0.0
+            };
+            // 요금제 사다리(Pro/Max 5x/Max 20x)는 Claude Code 전용이다.
+            // 다른 도구(Codex "Pro"/"Plus" 등)에 적용하면 엉뚱한 Claude 티어를 추천한다.
+            let plan_advice = if p.tool_name() == "Claude Code" {
+                p.official_usage().and_then(|u| {
+                    compute_plan_advice(&u, this_week_usage, typical_weekly, p.as_ref(), now_ms)
+                })
+            } else {
+                None
+            };
+
             ToolStats {
                 tool: p.tool_name().to_string(),
                 unit: p.unit().to_string(),
@@ -347,6 +552,7 @@ fn compute_stats(days: u32) -> Vec<ToolStats> {
                 last_week_usage,
                 this_week_cost,
                 last_week_cost,
+                plan_advice,
             }
         })
         .collect()

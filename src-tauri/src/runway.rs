@@ -3,8 +3,10 @@
 //! AgentBar의 percent 스냅샷과 달리, 시계열에서 소진 속도와 ETA를 뽑는 것이
 //! Token Runway의 핵심 차별점이다.
 
+use std::collections::HashMap;
+
 use chrono::Local;
-use crate::providers::{Insight, RunwayStatus, UsageProvider};
+use crate::providers::{Insight, ModelBreakdown, RunwayStatus, UsageProvider};
 
 /// 소진 속도 측정 구간 (분). 최근 이 시간의 기울기로 ETA를 추정.
 const BURN_WINDOW_MIN: f64 = 15.0;
@@ -108,6 +110,21 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
     }
     insights.truncate(3);
 
+    // 윈도우 내 모델별 사용량 집계 (model을 채우는 도구 — 현재 Claude만).
+    let mut model_map: HashMap<String, (u64, f64)> = HashMap::new();
+    for s in samples.iter().filter(|s| s.timestamp_ms >= window_start) {
+        if let Some(m) = &s.model {
+            let e = model_map.entry(crate::short_model(m)).or_insert((0, 0.0));
+            e.0 += s.amount;
+            e.1 += s.cost_usd;
+        }
+    }
+    let mut models: Vec<ModelBreakdown> = model_map
+        .into_iter()
+        .map(|(model, (usage, cost))| ModelBreakdown { model, usage, cost })
+        .collect();
+    models.sort_by(|a, b| b.usage.cmp(&a.usage));
+
     // 소진 속도: 최근 BURN_WINDOW_MIN 분간 사용량 / 분
     let recent_since = now_ms - (BURN_WINDOW_MIN as i64) * 60 * 1000;
     let recent_usage: u64 = samples
@@ -205,6 +222,20 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
 
     let plan = official.as_ref().and_then(|u| u.plan.clone());
 
+    // 요금제 추천(방향) — 주간 사용률 기반.
+    // 주간 윈도우는 한 주를 평균낸 값이라 5h 스냅샷보다 안정적이라, 별도 사용률
+    // 이력 저장 없이도 신뢰할 수 있다. 상향(업그레이드)만 우선 다룬다: 주간 캡에
+    // 근접 = 지금 요금제가 빠듯하다는 확실한 신호. 하향(절약)은 "한 주만 조용한 것"과
+    // "정말 과투자"를 구분하려면 사용률 이력이 필요해 보류.
+    // 주간 데이터가 있고(리셋 시각 존재) 캡의 85% 이상 소진했을 때만.
+    let plan_hint = official.as_ref().and_then(|u| {
+        if !u.seven_day_resets_at.is_empty() && u.seven_day_utilization >= 85.0 {
+            Some(Insight::new("planHint.upgrade", "warn"))
+        } else {
+            None
+        }
+    });
+
     RunwayStatus {
         tool: provider.tool_name().to_string(),
         available: provider.available(),
@@ -216,6 +247,8 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
         daily_cost,
         cache_hit_rate,
         insights,
+        plan_hint,
+        models,
         sparkline,
         limit,
         percent_remaining,
