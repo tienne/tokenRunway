@@ -80,6 +80,22 @@ impl Insight {
     }
 }
 
+/// 카드 맨 위에 세우는 한 줄 결론 — "얼마나 남았어?"에 대한 직접적인 답.
+///
+/// 잔여율·ETA·리셋 시각을 사용자가 머리로 조합하지 않아도 되게 미리 판정한다.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Verdict {
+    /// i18n 키 (예: "verdict.runsOut").
+    pub key: String,
+    /// "danger"(리셋 전 소진) | "warn" | "good"(리셋까지 여유).
+    pub level: String,
+    /// 소진까지 남은 분. 소진 페이스가 아니면 None.
+    pub eta_minutes: Option<f64>,
+    /// 리셋까지 남은 분. 리셋 시각을 모르면 None.
+    pub reset_minutes: Option<f64>,
+}
+
 /// 윈도우 내 모델별 사용량 (실시간 카드용). model을 채우는 도구(현재 Claude)만 비어있지 않음.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -135,6 +151,13 @@ pub struct RunwayStatus {
     pub resets_at: Option<String>,
     /// 주간 윈도우 남은 비율 (%) (공식 사용률이 있을 때만).
     pub seven_day_remaining: Option<f64>,
+    /// 주간 한도 소진까지 예상 시간(분). 윈도우 경과 대비 소진 페이스로 계산.
+    /// 리셋 전에 소진되지 않을 페이스면 None.
+    pub seven_day_eta_minutes: Option<f64>,
+    /// 카드 맨 위 한 줄 결론.
+    pub verdict: Option<Verdict>,
+    /// 잔여율이 공식 값이 아니라 가정한 한도 기반 추정치인지.
+    pub is_estimate: bool,
     /// 구독 플랜/등급 배지 (표시용).
     pub plan: Option<String>,
     /// 상태 보조 설명.

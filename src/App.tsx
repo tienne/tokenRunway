@@ -22,6 +22,14 @@ interface ModelBreakdown {
   cost: number;
 }
 
+/** 카드 맨 위 한 줄 결론 — 소진이 먼저인지 리셋이 먼저인지 */
+interface Verdict {
+  key: string;
+  level: "danger" | "warn" | "good";
+  etaMinutes: number | null;
+  resetMinutes: number | null;
+}
+
 interface RunwayStatus {
   tool: string;
   available: boolean;
@@ -43,6 +51,9 @@ interface RunwayStatus {
   etaMinutes: number | null;
   resetsAt: string | null;
   sevenDayRemaining: number | null;
+  sevenDayEtaMinutes: number | null;
+  verdict: Verdict | null;
+  isEstimate: boolean;
   plan: string | null;
   note: string | null;
 }
@@ -91,6 +102,30 @@ function formatEta(min: number | null, lang: Lang): string {
   const h = Math.floor(min / 60);
   const m = Math.round(min % 60);
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+/** 하루가 넘는 기간용 — "3d 4h". 주간 한도·리셋처럼 긴 시간에 쓴다. */
+function formatDuration(min: number | null, lang: Lang): string {
+  if (min == null) return "—";
+  if (min < 1) return t(lang, "lessThanMin");
+  const d = Math.floor(min / 1440);
+  if (d >= 1) {
+    const h = Math.round((min % 1440) / 60);
+    return h > 0 ? `${d}d ${h}h` : `${d}d`;
+  }
+  return formatEta(min, lang);
+}
+
+/** "얼마나 남았어?"에 대한 직접적인 한 줄 답 */
+function VerdictLine({ v, lang }: { v: Verdict; lang: Lang }) {
+  return (
+    <p className={`verdict verdict-${v.level}`}>
+      {t(lang, v.key, {
+        eta: formatDuration(v.etaMinutes, lang),
+        reset: formatDuration(v.resetMinutes, lang),
+      })}
+    </p>
+  );
 }
 
 /** 구간별 사용량 미니 막대 스파크라인 */
@@ -240,6 +275,8 @@ function Dashboard() {
             <span className="pct">
               {s.percentRemaining != null ? (
                 <>
+                  {/* 가정한 한도로 낸 추정치는 근사 기호로 구분한다 */}
+                  {s.isEstimate && "≈"}
                   {s.percentRemaining.toFixed(0)}%
                   <span className="pct-label"> {t(lang, "remaining")}</span>
                 </>
@@ -259,6 +296,8 @@ function Dashboard() {
               />
             </div>
           )}
+
+          {s.verdict && <VerdictLine v={s.verdict} lang={lang} />}
 
           {formatResetsAt(s.resetsAt, lang) && (
             <p className="resets">⏱ {formatResetsAt(s.resetsAt, lang)}</p>
@@ -374,6 +413,15 @@ function Dashboard() {
           {s.sevenDayRemaining != null && (
             <p className="weekly">
               {t(lang, "weekly", { n: s.sevenDayRemaining.toFixed(0) })}
+              {/* Max 사용자의 실제 병목은 5시간이 아니라 주간인 경우가 많다 */}
+              {s.sevenDayEtaMinutes != null && (
+                <span className="weekly-eta">
+                  {" · "}
+                  {t(lang, "weeklyEta", {
+                    t: formatDuration(s.sevenDayEtaMinutes, lang),
+                  })}
+                </span>
+              )}
             </p>
           )}
 

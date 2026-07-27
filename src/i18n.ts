@@ -16,6 +16,11 @@ const dict: Record<Lang, Record<string, string>> = {
     requests: "요청",
     messages: "메시지",
     weekly: "주간 {n}% 남음",
+    weeklyEta: "이 페이스면 {t} 후 소진",
+    "verdict.runsOut": "⚠️ 이 페이스면 {eta} 후 소진 — 리셋({reset} 후)보다 빨라요",
+    "verdict.safe": "✅ 이 페이스면 리셋({reset} 후)까지 버텨요",
+    "verdict.runsOutNoReset": "⚠️ 이 페이스면 {eta} 후 소진",
+    "verdict.steady": "✅ 지금 페이스면 여유 있어요",
     lessThanMin: "1분 미만",
     resetSoon: "곧 리셋",
     afterReset: "{t} 후 리셋",
@@ -114,6 +119,11 @@ const dict: Record<Lang, Record<string, string>> = {
     requests: "requests",
     messages: "messages",
     weekly: "Weekly {n}% left",
+    weeklyEta: "runs out in {t} at this pace",
+    "verdict.runsOut": "⚠️ Runs out in {eta} at this pace — before the reset ({reset})",
+    "verdict.safe": "✅ Lasts until the reset ({reset}) at this pace",
+    "verdict.runsOutNoReset": "⚠️ Runs out in {eta} at this pace",
+    "verdict.steady": "✅ You have room at this pace",
     lessThanMin: "<1 min",
     resetSoon: "resets soon",
     afterReset: "resets in {t}",
@@ -218,7 +228,8 @@ export function t(
   let s = dict[lang][key] ?? key;
   if (params) {
     for (const [k, v] of Object.entries(params)) {
-      s = s.replace(`{${k}}`, String(v));
+      // 같은 플레이스홀더가 문장에 두 번 나올 수 있어 전부 치환한다.
+      s = s.split(`{${k}}`).join(String(v));
     }
   }
   return s;

@@ -48,6 +48,14 @@ trait UsageProvider {
 - **`official_usage`가 있으면** percent는 그 값(`100 - utilization`)을 쓰고, `window_usage`/
   공식 utilization으로 implied limit을 역산해 ETA를 구한다. (Anthropic은 절대 토큰 한도를
   공개하지 않으므로 역산이 유일한 방법)
+  - **윈도우 경계를 `resets_at`에 맞춰야 한다** — 도구의 5시간 윈도우는 롤링이 아니라
+    리셋 시각 기준 고정 구간(`[resets_at - window, resets_at]`)이다. 롤링 합계로 나누면
+    경계가 어긋난 만큼 분자가 부풀어 한도가 과대 추정되고 ETA가 낙관적으로 나온다.
+    `runway::compute`의 `win_start`와 `lib.rs::estimate_5h_limit`이 같은 규칙을 쓴다.
+  - 로컬 샘플이 없어도(다른 기기에서 사용) `pace_eta_minutes`가 윈도우 경과 대비
+    소진 페이스로 ETA를 추정한다.
+  - `is_estimate`가 true면 우리가 한도를 가정해 만든 값이다(Gemini). 트레이 자동 선택에서
+    공식 데이터에 밀리고, 사용률 이력에도 기록하지 않는다.
 - **없으면** `default_limit`(현재 전부 None) 기반 — percent/ETA 미계산.
 
 ## 새 provider 추가 (4단계)
@@ -127,11 +135,18 @@ trait UsageProvider {
 
 ## 핵심 모듈
 
-- **RunwayEngine** (`runway.rs`): `BURN_WINDOW_MIN`(15분) 기울기로 소진 속도(단위/분),
-  공식 사용률 우선 → percent/ETA/리셋/주간/플랜 채움
+- **RunwayEngine** (`runway.rs`): 공식 사용률 우선 → percent/ETA/리셋/주간/플랜 채움
+  - **소진 속도는 EWMA** — 최근 60분을 5분 버킷으로 나눠 반감기 20분으로 지수가중.
+    단순 평균은 10분만 쉬어도 0으로 떨어져 ETA가 사라졌다 나타났다 했다.
+  - **`verdict`** — "소진이 먼저냐 리셋이 먼저냐"를 미리 판정한 한 줄 결론. 사용자가
+    ETA와 리셋 시각을 머리로 빼지 않아도 되게 한다. level: `danger`(리셋 전 소진) /
+    `good`(리셋까지 여유) / `warn`(리셋 시각 미상)
+  - **`seven_day_eta_minutes`** — 주간 한도 소진 페이스. Max 사용자의 실제 병목은
+    5시간이 아니라 주간인 경우가 많다. 공식 사용률만으로 계산해 추가 파싱이 없다.
 - **AlertManager** (`lib.rs`): 세 가지 경보, 각 도구별 1회 발사 + 회복 시 재무장.
   - 소진 경보 — 잔여율 ≤ 임계치
-  - 예상 소진 경보 — ETA ≤ `eta_alert_minutes`
+  - 예상 소진 경보 — ETA ≤ `eta_alert_minutes` **이고** verdict가 `danger`
+    (리셋이 먼저 오면 실제로 바닥나지 않으므로 헛경보를 막는다)
   - 리셋 임박 경보 — 리셋까지 ≤ `reset_alert_minutes` **이고** 잔여 > 임계치
     (곧 사라질 토큰이 많을 때 "지금 활용" 알림 — 소진 경보의 반대 방향)
 - **트레이 위험 표시** (`update_tray_title`): 잔여 ≤ 임계치 시 빨간 아이콘으로 교체

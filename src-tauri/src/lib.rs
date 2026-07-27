@@ -371,7 +371,14 @@ fn estimate_5h_limit(
     if util < 3.0 {
         return None;
     }
-    let window_start = now_ms - 5 * 3600 * 1000;
+    let window_secs = provider.window_secs();
+    // 공식 사용률이 가리키는 구간은 롤링이 아니라 리셋 시각 기준 고정 윈도우다.
+    // 롤링 합계로 나누면 경계가 어긋난 만큼 한도가 부풀려진다.
+    let window_start = chrono::DateTime::parse_from_rfc3339(&official.five_hour_resets_at)
+        .ok()
+        .map(|d| d.timestamp_millis() - window_secs * 1000)
+        .filter(|start| *start <= now_ms)
+        .unwrap_or(now_ms - window_secs * 1000);
     let samples = provider.collect_samples(window_start);
     let mut used_tokens = 0u64;
     let mut messages = 0u64;
@@ -733,7 +740,11 @@ fn check_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
         let was_alerted = alerted.get(&s.tool).copied().unwrap_or(false);
 
         let pct_hit = pct <= threshold;
+        // 리셋이 소진보다 먼저 오면 실제로는 바닥나지 않는다. verdict가 이미
+        // 그 판정을 해뒀으니 "리셋 전 소진"일 때만 ETA 경보를 울린다.
+        let runs_out_first = s.verdict.as_ref().is_some_and(|v| v.level == "danger");
         let eta_hit = eta_threshold > 0.0
+            && runs_out_first
             && s.eta_minutes.is_some_and(|e| e <= eta_threshold);
         let should_alert = pct_hit || eta_hit;
 
@@ -774,10 +785,14 @@ fn update_tray_title(app: &AppHandle, statuses: &[RunwayStatus]) {
         None => statuses
             .iter()
             .filter(|s| s.percent_remaining.is_some())
+            // 가정한 한도로 만든 추정치(Gemini)가 공식 잔여율을 밀어내고 트레이를
+            // 점거하면 안 된다. 공식 데이터가 있으면 그쪽이 항상 이긴다.
             .min_by(|a, b| {
-                a.percent_remaining
-                    .unwrap_or(f64::MAX)
-                    .total_cmp(&b.percent_remaining.unwrap_or(f64::MAX))
+                a.is_estimate.cmp(&b.is_estimate).then_with(|| {
+                    a.percent_remaining
+                        .unwrap_or(f64::MAX)
+                        .total_cmp(&b.percent_remaining.unwrap_or(f64::MAX))
+                })
             }),
     };
     let pct = status.and_then(|s| s.percent_remaining);

@@ -776,6 +776,57 @@ h1 {
   font-variant-numeric: tabular-nums;
 }
 
+/* 한 줄 결론 — 카드에서 가장 먼저 읽혀야 하는 줄이라 배경으로 띄운다 */
+.verdict {
+  margin: 8px 0 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.verdict-danger {
+  color: #d1242f;
+  background: rgba(209, 36, 47, 0.1);
+}
+
+.verdict-warn {
+  color: #bf8700;
+  background: rgba(191, 135, 0, 0.1);
+}
+
+.verdict-good {
+  color: #30a14e;
+  background: rgba(48, 161, 78, 0.1);
+}
+
+@media (prefers-color-scheme: dark) {
+  .verdict-danger {
+    color: #ff6b6b;
+    background: rgba(255, 107, 107, 0.14);
+  }
+  .verdict-warn {
+    color: #ffc84a;
+    background: rgba(255, 200, 74, 0.14);
+  }
+  .verdict-good {
+    color: #4ad07d;
+    background: rgba(74, 208, 125, 0.14);
+  }
+}
+
+.weekly-eta {
+  color: #bf8700;
+}
+
+@media (prefers-color-scheme: dark) {
+  .weekly-eta {
+    color: #ffc84a;
+  }
+}
+
 .insight {
   margin: 6px 0 0;
   font-size: 11px;
