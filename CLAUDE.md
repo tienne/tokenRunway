@@ -89,6 +89,24 @@ trait UsageProvider {
 - **잔여율 없음** — 절대 quota/credit 한도가 로컬 파일이나 공개 API로
   제공되지 않아 임의 추정하지 않음
 
+### Grok (`grok.rs`) — 로컬 토큰 추세 (best-effort, 미검증)
+- **시계열**: `~/.grok/sessions/<workspace>/<session-id>/updates.jsonl`
+  (JSON-RPC `session/update` NDJSON). `GROK_HOME` 환경변수로 루트 override.
+  - `_meta.totalTokens`는 **세션 누적** 카운터 → 사용자 메시지
+    (`sessionUpdate == "user_message_chunk"`)를 턴 경계로, 턴 내 누적 최댓값 −
+    턴 시작 직전 누적값 = 그 턴 소비량(증분)을 샘플 1건으로. 감소/반복은 무시(단조)
+  - 첫 사용자 메시지 이전 구간(세션 셋업분)은 턴으로 세지 않고 baseline으로만 쓴다 —
+    세면 첫 턴 소비가 이중 계상된다. 단 사용자 메시지가 없는 파일에선 그대로 내보낸다
+  - 필드 경로 폴백: `params(.update)._meta.totalTokens`, `agentTimestampMs`,
+    `modelId` 등. 모델은 형제 `summary.json`의 `current_model_id`로 폴백
+  - 단위 `tokens`, 윈도우 일간(24h)
+- **잔여율 없음** — rate limit/quota를 로컬·공개 API로 안 남김(프리페이드 크레딧·
+  SuperGrok 구독). 임의 추정 안 함(Antigravity 정책). 캐시 분해도 없어 `input_total`=0
+- ⚠️ **미검증** — 개발 환경에 Grok 설치본이 없어 실제 파일로 검증 못 함. 필드 스펙은
+  공개 파서(tokscale `sessions/grok.rs`)에서 확보. 실사용 환경에서 재검증 필요.
+  참고: `signals.json`의 압축분(`totalTokensBeforeCompaction`) 보정은 미구현
+  (긴 세션 히스토리 총량에만 영향, 최근 윈도우엔 영향 미미)
+
 ### 향후 provider (데이터 소스 스펙 — 미구현)
 
 이 개발 환경엔 데이터/계정이 없어 검증 불가. 실제 사용 환경에서 구현할 것.

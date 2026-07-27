@@ -7,10 +7,12 @@ pub mod antigravity;
 pub mod claude_code;
 pub mod codex;
 pub mod gemini;
+pub mod grok;
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
+use std::sync::Mutex;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 /// 단일 시점의 사용 샘플 (시계열의 한 점).
 ///

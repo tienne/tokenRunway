@@ -11,6 +11,7 @@ use providers::antigravity::AntigravityProvider;
 use providers::claude_code::ClaudeCodeProvider;
 use providers::codex::CodexProvider;
 use providers::gemini::GeminiProvider;
+use providers::grok::GrokProvider;
 use providers::{RunwayStatus, UsageProvider};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -91,6 +92,7 @@ fn providers() -> Vec<Box<dyn UsageProvider>> {
         Box::new(CodexProvider::new()),
         Box::new(GeminiProvider::new()),
         Box::new(AntigravityProvider::new()),
+        Box::new(GrokProvider::new()),
     ]
 }
 
