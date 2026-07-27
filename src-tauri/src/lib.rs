@@ -574,9 +574,14 @@ fn get_available_tools() -> Vec<ToolInfo> {
 }
 
 /// 사용 가능한 모든 도구의 런웨이 상태를 반환.
+///
+/// provider 파싱과 (캐시 만료 시) OAuth 호출이 걸려 있어 동기 command로 두면
+/// 메인 이벤트 루프가 멈춰 팝오버가 프리즈된다. blocking 풀에서 실행한다.
 #[tauri::command]
-fn get_runway() -> Vec<RunwayStatus> {
-    compute_all()
+async fn get_runway() -> Vec<RunwayStatus> {
+    tauri::async_runtime::spawn_blocking(compute_all)
+        .await
+        .unwrap_or_default()
 }
 
 /// 현재 설정을 반환.

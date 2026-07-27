@@ -3,14 +3,25 @@
 //! 데이터 소스: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`
 //! `event_msg` 타입의 `token_count` 이벤트에서 턴별 토큰을 추출한다.
 
-use super::{find_recent_jsonl, OfficialUsage, UsageProvider, UsageSample};
+use super::{find_recent_jsonl, OfficialUsage, SampleCache, UsageProvider, UsageSample};
 use chrono::DateTime;
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 /// 최신 rate_limits를 찾기 위해 스캔할 최근 파일 범위.
 const RATE_LIMIT_LOOKBACK_MS: i64 = 24 * 3600 * 1000;
+
+/// 파싱 캐시 TTL. 대시보드 폴링과 통계 조회가 같은 결과를 재사용한다.
+const CACHE_TTL: Duration = Duration::from_secs(60);
+
+static SAMPLES_CACHE: SampleCache = SampleCache::new(CACHE_TTL);
+
+/// rate_limits 조회 캐시. 24시간치 파일 재스캔이 폴링마다 반복되지 않게 한다.
+static RATE_LIMIT_CACHE: Mutex<Option<(Instant, Option<OfficialUsage>)>> = Mutex::new(None);
 
 pub struct CodexProvider {
     sessions_dir: PathBuf,
@@ -92,28 +103,63 @@ impl UsageProvider for CodexProvider {
     }
 
     fn collect_samples(&self, since_ms: i64) -> Vec<UsageSample> {
+        if let Some(hit) = SAMPLES_CACHE.get(since_ms) {
+            return hit;
+        }
+
         let mut samples = Vec::new();
+        // 세션을 resume하면 이전 턴의 token_count가 새 rollout 파일에 다시 실린다.
+        // Claude transcript와 달리 메시지 id가 없어 (시각, 토큰 조합)으로 구분한다 —
+        // 밀리초 타임스탬프까지 같으면서 토큰 수도 같은 별개의 턴은 사실상 없다.
+        let mut seen: HashSet<(i64, u64, u64, u64)> = HashSet::new();
 
         for path in find_recent_jsonl(&self.sessions_dir, since_ms) {
             let Ok(content) = fs::read_to_string(&path) else {
                 continue;
             };
             for line in content.lines() {
-                if let Some(sample) = parse_line(line, since_ms) {
+                let Some(sample) = parse_line(line, since_ms) else {
+                    continue;
+                };
+                let key = (
+                    sample.timestamp_ms,
+                    sample.amount,
+                    sample.input_total,
+                    sample.cache_read,
+                );
+                if seen.insert(key) {
                     samples.push(sample);
                 }
             }
         }
 
         samples.sort_by_key(|s| s.timestamp_ms);
+        SAMPLES_CACHE.put(since_ms, &samples);
         samples
     }
 
     fn official_usage(&self) -> Option<OfficialUsage> {
+        if let Ok(cache) = RATE_LIMIT_CACHE.lock() {
+            if let Some((at, value)) = cache.as_ref() {
+                if at.elapsed() < CACHE_TTL {
+                    return value.clone();
+                }
+            }
+        }
+        let fresh = self.scan_rate_limits();
+        if let Ok(mut cache) = RATE_LIMIT_CACHE.lock() {
+            *cache = Some((Instant::now(), fresh.clone()));
+        }
+        fresh
+    }
+}
+
+impl CodexProvider {
+    /// 최근 24시간 rollout 파일에서 가장 신선한 rate_limits를 읽는다.
+    fn scan_rate_limits(&self) -> Option<OfficialUsage> {
         let now_ms = chrono::Utc::now().timestamp_millis();
         let since_ms = now_ms - RATE_LIMIT_LOOKBACK_MS;
 
-        // 최근 파일들에서 가장 신선한 rate_limits를 찾는다.
         let mut latest: Option<(i64, RateLimits)> = None;
         for path in find_recent_jsonl(&self.sessions_dir, since_ms) {
             let Ok(content) = fs::read_to_string(&path) else {
@@ -142,6 +188,7 @@ impl UsageProvider for CodexProvider {
                 .unwrap_or_default(),
             plan,
             rate_limit_multiplier: None, // Codex는 소비자 사다리 배수 미상.
+            is_estimate: false,          // Codex가 직접 기록한 공식 사용률.
         })
     }
 }

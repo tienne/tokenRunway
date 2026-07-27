@@ -26,8 +26,11 @@ design/             아이콘 SVG 소스
 ## 데이터 흐름
 
 1. UI가 30초마다 `get_runway` invoke → `compute_all()` → 각 provider별 `runway::compute`
+   - **`get_runway`/`get_stats`는 async + `spawn_blocking` 필수** — 동기 command로 두면
+     파싱·OAuth가 메인 이벤트 루프에서 돌아 팝오버가 프리즈된다
 2. `runway::compute`는 `collect_samples`(시계열) + `official_usage`(공식 사용률)를 조합
-3. 백그라운드 스레드(60초)가 `compute_all` + `check_alerts`로 임계치 경보 (창 닫혀도 동작)
+3. 백그라운드 스레드(60초)가 `compute_all` + `check_alerts`로 임계치 경보 (창 닫혀도 동작),
+   이어서 `record_utilizations`(사용률 이력) + `rollup::update`(일별 사용량)
 
 ## UsageProvider trait 규약 (`providers/mod.rs`)
 

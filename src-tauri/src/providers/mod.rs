@@ -55,6 +55,11 @@ pub struct OfficialUsage {
     /// 레이트리밋 등급 배수 (Pro 대비). "max_5x"→5. 요금제 사다리 앵커용.
     /// 엔터프라이즈도 좌석 등급(예: max_5x)이 있어 개인 플랜 환산의 기준이 된다.
     pub rate_limit_multiplier: Option<f64>,
+    /// 도구가 준 값이 아니라 우리가 가정한 한도로 계산한 추정치인지.
+    ///
+    /// Gemini처럼 한도를 가정해 만든 수치는 공식 사용률과 같은 무게로 다루면
+    /// 안 된다 — 트레이 자동 선택에서 공식 데이터에 밀리게 한다.
+    pub is_estimate: bool,
 }
 
 /// 효율 인사이트 한 건 — i18n 키 + 레벨(색 구분용).
@@ -169,6 +174,65 @@ pub trait UsageProvider: Send + Sync {
     }
 }
 
+struct CachedSamples {
+    fetched_at: Instant,
+    since_ms: i64,
+    samples: Vec<UsageSample>,
+}
+
+/// 파싱한 샘플의 짧은 수명 캐시.
+///
+/// 세션 디렉토리는 수백 MB까지 자라서 매 폴링마다 재파싱하면 UI가 버벅인다.
+/// 가장 넓은 윈도우를 담아두고 더 좁은 요청은 메모리 필터로 처리한다.
+pub struct SampleCache {
+    inner: Mutex<Option<CachedSamples>>,
+    ttl: Duration,
+}
+
+impl SampleCache {
+    pub const fn new(ttl: Duration) -> Self {
+        Self {
+            inner: Mutex::new(None),
+            ttl,
+        }
+    }
+
+    /// 캐시가 신선하고 요청보다 넓은 범위를 담고 있으면 필터해서 반환.
+    pub fn get(&self, since_ms: i64) -> Option<Vec<UsageSample>> {
+        let guard = self.inner.lock().ok()?;
+        let c = guard.as_ref()?;
+        if c.fetched_at.elapsed() >= self.ttl || c.since_ms > since_ms {
+            return None;
+        }
+        Some(
+            c.samples
+                .iter()
+                .filter(|s| s.timestamp_ms >= since_ms)
+                .cloned()
+                .collect(),
+        )
+    }
+
+    /// 저장. 단 이미 더 넓고 신선한 캐시가 있으면 덮지 않는다
+    /// (대시보드의 짧은 윈도우 폴링이 통계의 긴 윈도우 캐시를 좁히지 않도록).
+    pub fn put(&self, since_ms: i64, samples: &[UsageSample]) {
+        let Ok(mut guard) = self.inner.lock() else {
+            return;
+        };
+        let wider_exists = guard
+            .as_ref()
+            .is_some_and(|c| c.fetched_at.elapsed() < self.ttl && c.since_ms <= since_ms);
+        if wider_exists {
+            return;
+        }
+        *guard = Some(CachedSamples {
+            fetched_at: Instant::now(),
+            since_ms,
+            samples: samples.to_vec(),
+        });
+    }
+}
+
 /// `root` 아래의 모든 `.jsonl` 파일을 재귀적으로 수집한다.
 ///
 /// 파일 mtime이 `since_ms` 이전이면 윈도우 밖이므로 건너뛴다(성능 최적화).
@@ -187,10 +251,10 @@ fn collect_jsonl(dir: &Path, since_ms: i64, out: &mut Vec<PathBuf>) {
         let path = entry.path();
         if path.is_dir() {
             collect_jsonl(&path, since_ms, out);
-        } else if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-            if is_recent(&entry, since_ms) {
-                out.push(path);
-            }
+        } else if path.extension().and_then(|e| e.to_str()) == Some("jsonl")
+            && is_recent(&entry, since_ms)
+        {
+            out.push(path);
         }
     }
 }

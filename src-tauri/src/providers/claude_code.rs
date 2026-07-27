@@ -4,13 +4,13 @@
 //! 각 assistant 메시지 라인의 `timestamp` + `message.usage`에서
 //! 토큰을 추출해 시계열 샘플로 변환한다.
 
-use super::{find_recent_jsonl, OfficialUsage, UsageProvider, UsageSample};
+use super::{find_recent_jsonl, OfficialUsage, SampleCache, UsageProvider, UsageSample};
 use chrono::DateTime;
 use serde::Deserialize;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 /// OAuth 사용량 엔드포인트 (비공식). `/usage` 명령을 구동하는 데이터 소스.
@@ -18,6 +18,9 @@ const OAUTH_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 
 /// 폴링 최소 간격. 이 엔드포인트는 공격적으로 rate limit을 걸어 180초 미만은 위험.
 const USAGE_CACHE_TTL: Duration = Duration::from_secs(180);
+
+/// HTTP 타임아웃. 응답이 멈춰도 폴링 스레드가 무한정 매달리지 않게 한다.
+const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// claude 버전을 얻지 못했을 때의 폴백. User-Agent 프리픽스(claude-code/)가 중요.
 const FALLBACK_VERSION: &str = "2.1.178";
@@ -32,18 +35,18 @@ struct CachedUsage {
 /// 전역 사용률 캐시. provider가 매 호출마다 새로 생성돼도 rate limit을 넘지 않도록.
 static USAGE_CACHE: Mutex<Option<CachedUsage>> = Mutex::new(None);
 
+/// 갱신 중복 방지용. 이 락을 잡은 스레드만 HTTP를 호출한다 —
+/// 데이터 락(USAGE_CACHE)은 네트워크 대기 중에 절대 잡고 있지 않는다.
+static FETCH_GUARD: Mutex<()> = Mutex::new(());
+
 /// 시계열 샘플 캐시 TTL. 통계 기간 토글·대시보드 폴링이 같은 파싱 결과를 재사용.
 const SAMPLES_CACHE_TTL: Duration = Duration::from_secs(60);
 
-/// 파싱한 샘플 캐시. ~/.claude는 수백 MB라 매 호출 재파싱이 비싸다.
-/// 가장 넓은 윈도우를 캐시해두고, 더 좁은 요청은 메모리 필터로 처리한다.
-struct CachedSamples {
-    fetched_at: Instant,
-    since_ms: i64,
-    samples: Vec<UsageSample>,
-}
+/// ~/.claude는 수백 MB라 매 호출 재파싱이 비싸다.
+static SAMPLES_CACHE: SampleCache = SampleCache::new(SAMPLES_CACHE_TTL);
 
-static SAMPLES_CACHE: Mutex<Option<CachedSamples>> = Mutex::new(None);
+/// `claude --version`은 서브프로세스라 비싸다. 프로세스당 1회만 실행한다.
+static CLAUDE_VERSION: LazyLock<String> = LazyLock::new(read_claude_version);
 
 pub struct ClaudeCodeProvider {
     projects_dir: PathBuf,
@@ -125,19 +128,8 @@ impl UsageProvider for ClaudeCodeProvider {
     }
 
     fn collect_samples(&self, since_ms: i64) -> Vec<UsageSample> {
-        // 캐시 적중: 신선하고 캐시 윈도우가 요청보다 넓으면(더 과거부터 모았으면)
-        // 메모리 필터만으로 즉시 반환 — 재파싱 없음.
-        if let Ok(cache) = SAMPLES_CACHE.lock() {
-            if let Some(c) = cache.as_ref() {
-                if c.fetched_at.elapsed() < SAMPLES_CACHE_TTL && c.since_ms <= since_ms {
-                    return c
-                        .samples
-                        .iter()
-                        .filter(|s| s.timestamp_ms >= since_ms)
-                        .cloned()
-                        .collect();
-                }
-            }
+        if let Some(hit) = SAMPLES_CACHE.get(since_ms) {
+            return hit;
         }
 
         let mut samples = Vec::new();
@@ -163,22 +155,7 @@ impl UsageProvider for ClaudeCodeProvider {
         }
 
         samples.sort_by_key(|s| s.timestamp_ms);
-
-        // 저장 — 단, 더 넓고 신선한 캐시가 이미 있으면 덮지 않는다
-        // (대시보드 5h 폴링이 통계의 30일 캐시를 좁히지 않도록).
-        if let Ok(mut cache) = SAMPLES_CACHE.lock() {
-            let keep = cache
-                .as_ref()
-                .is_some_and(|c| c.fetched_at.elapsed() < SAMPLES_CACHE_TTL && c.since_ms <= since_ms);
-            if !keep {
-                *cache = Some(CachedSamples {
-                    fetched_at: Instant::now(),
-                    since_ms,
-                    samples: samples.clone(),
-                });
-            }
-        }
-
+        SAMPLES_CACHE.put(since_ms, &samples);
         samples
     }
 
@@ -192,22 +169,42 @@ impl UsageProvider for ClaudeCodeProvider {
 }
 
 /// 180초 캐시를 적용해 (사용률, 실패사유) 반환. 캐시가 신선하면 HTTP 호출 생략.
+///
+/// 네트워크 호출 동안 데이터 락을 잡지 않는다 — 잡으면 응답이 늦어질 때
+/// UI 폴링과 백그라운드 루프가 전부 그 락에 매달려 앱이 굳는다.
 fn fetch_cached() -> (Option<OfficialUsage>, Option<&'static str>) {
-    let Ok(mut cache) = USAGE_CACHE.lock() else {
-        return (None, None);
-    };
-    if let Some(c) = cache.as_ref() {
-        if c.fetched_at.elapsed() < USAGE_CACHE_TTL {
-            return (c.usage.clone(), c.error);
-        }
+    if let Some(fresh) = cached(true) {
+        return fresh;
     }
+
+    // 이미 다른 스레드가 갱신 중이면 기다리지 않고 직전 값을 쓴다.
+    let Ok(_guard) = FETCH_GUARD.try_lock() else {
+        return cached(false).unwrap_or((None, None));
+    };
+    // 락을 얻는 사이에 그 스레드가 채워놨을 수 있다.
+    if let Some(fresh) = cached(true) {
+        return fresh;
+    }
+
     let (usage, error) = fetch_official_usage();
-    *cache = Some(CachedUsage {
-        fetched_at: Instant::now(),
-        usage: usage.clone(),
-        error,
-    });
+    if let Ok(mut cache) = USAGE_CACHE.lock() {
+        *cache = Some(CachedUsage {
+            fetched_at: Instant::now(),
+            usage: usage.clone(),
+            error,
+        });
+    }
     (usage, error)
+}
+
+/// 캐시된 값. `require_fresh`면 TTL 안쪽일 때만 반환한다.
+fn cached(require_fresh: bool) -> Option<(Option<OfficialUsage>, Option<&'static str>)> {
+    let guard = USAGE_CACHE.lock().ok()?;
+    let c = guard.as_ref()?;
+    if require_fresh && c.fetched_at.elapsed() >= USAGE_CACHE_TTL {
+        return None;
+    }
+    Some((c.usage.clone(), c.error))
 }
 
 /// OAuth `/api/oauth/usage`를 호출. 실패 시 사유(i18n 키)를 함께 반환.
@@ -215,11 +212,11 @@ fn fetch_official_usage() -> (Option<OfficialUsage>, Option<&'static str>) {
     let Some((token, plan, rate_mult)) = read_oauth_credentials() else {
         return (None, Some("error.no_token"));
     };
-    let version = claude_version();
-    let user_agent = format!("claude-code/{version}");
+    let user_agent = format!("claude-code/{}", &*CLAUDE_VERSION);
 
     // User-Agent 프리픽스가 없으면 즉시 영구 429 버킷에 빠진다.
     let resp = ureq::get(OAUTH_USAGE_URL)
+        .timeout(HTTP_TIMEOUT)
         .set("Authorization", &format!("Bearer {token}"))
         .set("anthropic-beta", "oauth-2025-04-20")
         .set("User-Agent", &user_agent)
@@ -253,6 +250,7 @@ fn fetch_official_usage() -> (Option<OfficialUsage>, Option<&'static str>) {
             seven_day_resets_at: seven.resets_at,
             plan,
             rate_limit_multiplier: rate_mult,
+            is_estimate: false,
         }),
         None,
     )
@@ -342,7 +340,7 @@ fn capitalize_word(w: &str) -> String {
 }
 
 /// `claude --version` 출력에서 시맨틱 버전을 추출. 실패 시 폴백.
-fn claude_version() -> String {
+fn read_claude_version() -> String {
     let output = Command::new("claude").arg("--version").output();
     if let Ok(out) = output {
         if let Ok(text) = String::from_utf8(out.stdout) {
