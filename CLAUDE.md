@@ -12,7 +12,8 @@ JSONL 시계열로 소진 속도·ETA를 더한다(차별점). 사용자 로그�
 src-tauri/src/
 ├ lib.rs            앱 진입점: provider 등록, get_runway/get_stats command, tray, AlertManager
 ├ runway.rs         RunwayEngine — 샘플/공식사용률 → RunwayStatus 계산
-├ rollup.rs         일별 사용량 롤업 영속화(rollup.json) — 30일+ 히스토리용
+├ rollup.rs         일별 사용량·사용률 롤업 영속화(rollup.json) — 30일+ 히스토리용
+├ atomicfile.rs     영속 파일 원자적 쓰기(tmp→rename) + 손상 파일 보존
 └ providers/
    ├ mod.rs         UsageProvider trait + 공용 타입 + find_recent_jsonl 헬퍼
    ├ claude_code.rs Keychain OAuth + ~/.claude JSONL
@@ -172,10 +173,22 @@ pnpm tauri dev                  # 실제 실행 (메뉴바 + 알림 권한 다�
 ## 주의사항 (회귀 방지)
 
 - **익명 통계는 opt-in·내용 무전송** — properties에 토큰/잔여율 값 절대 금지
-- **Claude Code transcript는 message.id로 dedup 필수** — 세션 재개·worktree·압축으로
-  같은 메시지가 여러 번 기록됨. dedup 안 하면 토큰·메시지가 ~2배 부풀려짐
-  (`collect_samples`의 `seen` HashSet). 다른 provider도 중복 의심되면 동일 적용.
+- **transcript는 dedup 필수** — 세션 재개·worktree·압축으로 같은 메시지가 여러 번
+  기록됨. dedup 안 하면 토큰·메시지가 ~2배 부풀려짐. Claude는 `message.id`,
+  Codex는 id가 없어 `(timestamp, total, input, cached)` 조합으로 구분한다.
 - **OAuth 폴링은 180초 미만 금지** — User-Agent 누락/과빈도 폴링 시 영구 429
+- **네트워크 호출 중 데이터 락 금지** — `fetch_cached`는 캐시 락을 놓고 HTTP를 탄다.
+  잡은 채로 타면 응답이 늦을 때 UI 폴링·백그라운드 루프가 전부 매달려 앱이 굳는다.
+  중복 갱신은 `FETCH_GUARD.try_lock()`으로 막고, 실패하면 기다리지 않고 직전 값을 쓴다.
+  ureq에는 반드시 `.timeout()`을 건다.
+- **영속 파일은 `atomicfile::write_atomic`으로** — `fs::write` 중 크래시하면 파일이
+  깨지고, 롤업은 원본 JSONL이 사라진 뒤의 유일한 히스토리라 복구가 안 된다.
+  파싱 실패 시엔 조용히 기본값으로 넘어가지 말고 `preserve_corrupt`로 남긴다.
+- **일별 통계는 빈 날을 0으로 채운다** (`date_range`) — 사용 안 한 날이 빠지면
+  추세 그래프가 압축돼 왜곡되고, 주간 평균의 분모가 활동일 수가 돼 요금제 추천이
+  상향 쪽으로 치우친다.
+- **사용률은 관측 시점에만 남길 수 있다** — 과거 JSONL로 되돌려 계산할 수 없다.
+  `rollup::update`가 샘플을 재집계할 때 `peak_*_util`을 덮어쓰지 않도록 주의.
 - 토큰 등 시크릿은 로그/커밋에 절대 노출 금지 (Keychain 직접 읽기)
 - `official_usage` 우선 — 로컬 토큰 합산보다 공식 사용률이 정확
 - 새 provider의 `window_secs`/`unit`이 다르면 UI는 자동 대응 (라벨 동적)
@@ -200,13 +213,21 @@ pnpm tauri dev                  # 실제 실행 (메뉴바 + 알림 권한 다�
 - [x] 히스토리 — 통계 전용 창(`get_stats`, HistoryView, 트레이 메뉴·📅). 기간 토글
   7/30/90/전체 + 요약 카드·모델별 분해·시간대 패턴·주간 비교. 7일은 막대,
   그 이상은 영역+꺾은선 추세 차트(호버/클릭 툴팁)
-- [x] 히스토리 영속화 — `rollup.rs`가 일별 요약(사용량·메시지·비용·모델별·시간대별)을
-  `<config_dir>/token-runway/rollup.json`에 누적. 백그라운드(60초)가 어제까지 확정분
-  증분 저장(첫 회만 백필 ~180일). `get_stats`는 과거=롤업, 오늘만 실시간 파싱해 병합.
-  원본 JSONL이 사라져도 과거 유지 → 30일 이상 조회 가능. (이전의 "영속저장 X" 결정 대체)
+- [x] 히스토리 영속화 — `rollup.rs`가 일별 요약(사용량·메시지·비용·모델별·시간대별·
+  최대 사용률)을 `<config_dir>/token-runway/rollup.json`에 누적. 백그라운드(60초)가
+  어제까지 확정분 증분 저장(첫 회만 백필 ~180일). `get_stats`는 과거=롤업, 오늘만
+  실시간 파싱해 병합. 원본 JSONL이 사라져도 과거 유지 → 30일 이상 조회 가능.
+  사용률만 오늘 엔트리에 실시간 기록되므로 재집계가 덮어쓰지 않게 병합한다.
+  (이전의 "영속저장 X" 결정 대체)
 - [x] 비용 환산 — model별 단가로 일별 API 환산 비용($) (Claude; Codex/Gemini 0)
 - [x] 효율 인사이트 — 캐시 적중률 + 코칭 신호(캐시 재생성 과다·요청당 토큰 과다, `insight` 키)
 - [x] 소진 속도 추세 화살표 — 가속(↑)/감속(↓)/일정(→), '소진 속도' 라벨 옆
+- [x] 한 줄 결론 — "이 페이스면 리셋 전에 소진 / 리셋까지 여유"를 카드 최상단에
+  (`verdict`). ETA 경보도 이 판정을 재사용해 리셋이 먼저일 때 울리지 않는다
+- [x] 주간 소진 페이스 — 주간 잔여율 옆에 "이 페이스면 N일 후 소진"
+  (`seven_day_eta_minutes`). Max 사용자의 실제 병목이 주간 한도인 경우 대응
+- [x] 요금제 하향 추천 안전 가드 — 평균만 보면 "마감 주에 몰아 쓰는" 사용자에게
+  하향을 권하게 되므로, 롤업의 주간 사용률 이력에서 최악의 주로 검증
 - [x] 자동 업데이트 — `tauri-plugin-updater`(minisign 서명, 애플 공증과 별개). 시작 시
   확인 → 알림, 트레이 "업데이트 확인..."에서 설치·재시작. endpoint=GitHub Releases
   `latest.json`. 공개키는 `tauri.conf.json`, 개인키는 `~/.tauri/token-runway.key`(repo 밖,

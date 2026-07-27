@@ -220,6 +220,24 @@ pub(crate) fn local_date_full(ms: i64) -> String {
         .unwrap_or_default()
 }
 
+/// "YYYY-MM-DD" 두 날짜 사이의 모든 날짜(양끝 포함).
+fn date_range(start: &str, end: &str) -> Vec<String> {
+    use chrono::NaiveDate;
+    let (Ok(mut cur), Ok(last)) = (
+        NaiveDate::parse_from_str(start, "%Y-%m-%d"),
+        NaiveDate::parse_from_str(end, "%Y-%m-%d"),
+    ) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    while cur <= last {
+        out.push(cur.format("%Y-%m-%d").to_string());
+        let Some(next) = cur.succ_opt() else { break };
+        cur = next;
+    }
+    out
+}
+
 /// epoch millis → 로컬 시(0~23).
 pub(crate) fn local_hour(ms: i64) -> usize {
     use chrono::{TimeZone, Timelike};
@@ -265,10 +283,15 @@ fn plan_multiplier(plan: &str) -> Option<f64> {
 /// 현재 플랜의 주간 사용률로 한도(용량)를 역산하고, 이름의 배수 비율로 다른 티어의
 /// 용량을 추정해 각 티어에서의 예상 소진율을 낸다. 여유롭게(≤75%) 담기는 가장 저렴한
 /// 티어를 추천한다. 배수를 아는 플랜만 Some을 반환한다.
+///
+/// `peak_weekly_util`은 선택 기간에 관측된 최대 주간 사용률이다. 평균만 보면
+/// "평소엔 한가하지만 마감 주에 몰아 쓰는" 사용자에게 하향을 권하게 되므로,
+/// 하향 판단에는 평균이 아니라 최악의 주를 기준으로 삼는다.
 fn compute_plan_advice(
     official: &crate::providers::OfficialUsage,
     this_week_usage: u64,
     typical_weekly: f64,
+    peak_weekly_util: f64,
     provider: &dyn crate::providers::UsageProvider,
     now_ms: i64,
 ) -> Option<PlanAdvice> {
@@ -307,6 +330,8 @@ fn compute_plan_advice(
 
     const LADDER: [(&str, f64); 3] = [("Pro", 1.0), ("Max 5x", 5.0), ("Max 20x", 20.0)];
     const COMFORT: f64 = 75.0;
+    /// 하향해도 최악의 주가 이 이하로 담겨야 안전하다고 본다.
+    const PEAK_COMFORT: f64 = 90.0;
 
     let mut tiers: Vec<PlanTier> = LADDER
         .iter()
@@ -322,10 +347,20 @@ fn compute_plan_advice(
         })
         .collect();
 
+    // 지금보다 낮은 티어를 권하려면 관측된 최악의 주도 담겨야 한다.
+    // 사용률 이력이 아직 없으면(설치 직후) 하향 판단은 보류한다.
+    let downgrade_safe = |mult: f64| {
+        if mult >= m_cur {
+            return true;
+        }
+        peak_weekly_util > 0.0 && peak_weekly_util * m_cur / mult <= PEAK_COMFORT
+    };
+
     // 편안한(≤75%) 가장 저렴한(배수 작은) 티어. 없으면 가장 큰 티어.
     let rec_idx = tiers
         .iter()
-        .position(|tr| tr.projected_util <= COMFORT)
+        .enumerate()
+        .position(|(i, tr)| tr.projected_util <= COMFORT && downgrade_safe(LADDER[i].1))
         .unwrap_or(tiers.len() - 1);
     tiers[rec_idx].recommended = true;
 
@@ -458,21 +493,35 @@ fn compute_stats(days: u32) -> Vec<ToolStats> {
                     me.2 += 1;
                 }
             }
+            // 오늘 엔트리에는 실시간 폴링이 기록해둔 사용률이 들어있다 —
+            // 사용량만 갈아끼우고 사용률은 살린다.
+            if let Some(prev) = all.get(&today) {
+                today_roll.peak_five_hour_util = prev.peak_five_hour_util;
+                today_roll.peak_seven_day_util = prev.peak_seven_day_util;
+            }
             all.insert(today.clone(), today_roll);
 
-            // 선택 기간 윈도우 내 날들
-            let in_window: Vec<(&String, &rollup::DayRollup)> = all
-                .iter()
-                .filter(|(d, _)| d.as_str() >= window_start_date.as_str())
-                .collect();
+            // 사용하지 않은 날이 빠지면 추세 그래프가 압축돼 왜곡되고, 주간 평균의
+            // 분모도 활동일 수가 돼 사용량이 과대 추정된다. 달력의 빈 날을 0으로 채운다.
+            let range_start = if days == 0 {
+                all.keys().next().cloned().unwrap_or_else(|| today.clone())
+            } else {
+                window_start_date.clone()
+            };
+            let dates = date_range(&range_start, &today);
+            let in_window: Vec<&rollup::DayRollup> =
+                dates.iter().filter_map(|d| all.get(d)).collect();
 
-            let days_vec: Vec<DayStat> = in_window
+            let days_vec: Vec<DayStat> = dates
                 .iter()
-                .map(|(d, r)| DayStat {
-                    date: d.get(5..).unwrap_or(d).replace('-', "/"),
-                    usage: r.usage,
-                    count: r.count,
-                    cost: r.cost,
+                .map(|d| {
+                    let r = all.get(d);
+                    DayStat {
+                        date: d.get(5..).unwrap_or(d).replace('-', "/"),
+                        usage: r.map_or(0, |x| x.usage),
+                        count: r.map_or(0, |x| x.count),
+                        cost: r.map_or(0.0, |x| x.cost),
+                    }
                 })
                 .collect();
 
@@ -487,13 +536,20 @@ fn compute_stats(days: u32) -> Vec<ToolStats> {
             let (peak_date, peak_usage) = days_vec
                 .iter()
                 .max_by_key(|d| d.usage)
+                .filter(|d| d.usage > 0)
                 .map(|d| (d.date.clone(), d.usage))
                 .unwrap_or_default();
+
+            // 하향 추천 가드용 — 기간 내 관측된 최악의 주간 사용률.
+            let peak_weekly_util = in_window
+                .iter()
+                .map(|r| r.peak_seven_day_util)
+                .fold(0.0f64, f64::max);
 
             // 모델·시간대: 윈도우 내 합산
             let mut model_map: HashMap<String, (u64, f64, u64)> = HashMap::new();
             let mut hourly = vec![0u64; 24];
-            for (_, r) in &in_window {
+            for r in &in_window {
                 for (m, (u, c, n)) in &r.models {
                     let e = model_map.entry(m.clone()).or_default();
                     e.0 += u;
@@ -532,6 +588,7 @@ fn compute_stats(days: u32) -> Vec<ToolStats> {
             }
 
             // 요금제 추천 — 선택 기간의 평균 주간 사용량(달력 기준) 대비 티어별 소진율.
+            // days_vec은 빈 날까지 포함하므로 분모가 실제 달력 일수다.
             let typical_weekly = if !days_vec.is_empty() {
                 total_usage as f64 / days_vec.len() as f64 * 7.0
             } else {
@@ -541,7 +598,14 @@ fn compute_stats(days: u32) -> Vec<ToolStats> {
             // 다른 도구(Codex "Pro"/"Plus" 등)에 적용하면 엉뚱한 Claude 티어를 추천한다.
             let plan_advice = if p.tool_name() == "Claude Code" {
                 p.official_usage().and_then(|u| {
-                    compute_plan_advice(&u, this_week_usage, typical_weekly, p.as_ref(), now_ms)
+                    compute_plan_advice(
+                        &u,
+                        this_week_usage,
+                        typical_weekly,
+                        peak_weekly_util,
+                        p.as_ref(),
+                        now_ms,
+                    )
                 })
             } else {
                 None
@@ -989,6 +1053,24 @@ fn check_reset_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
     }
 }
 
+/// 오늘 관측한 사용률을 롤업에 남긴다.
+///
+/// 사용률은 과거 JSONL로 되돌려 계산할 수 없어 관측 시점에 기록해야 한다.
+/// 이게 쌓여야 요금제 추천이 "한 주만 조용한 것"과 "정말 과투자"를 구분한다.
+/// 가정한 한도로 만든 추정치는 남기지 않는다 — 이력으로서 의미가 없다.
+fn record_utilizations(statuses: &[RunwayStatus]) {
+    for s in statuses {
+        if s.is_estimate || (s.percent_remaining.is_none() && s.seven_day_remaining.is_none()) {
+            continue;
+        }
+        rollup::record_utilization(
+            &s.tool,
+            s.percent_remaining.map_or(0.0, |p| 100.0 - p),
+            s.seven_day_remaining.map_or(0.0, |p| 100.0 - p),
+        );
+    }
+}
+
 /// 백그라운드에서 주기적으로 경보 + 트레이 타이틀 갱신 (창이 닫혀 있어도 동작).
 fn spawn_alert_loop(app: AppHandle) {
     std::thread::spawn(move || loop {
@@ -996,6 +1078,7 @@ fn spawn_alert_loop(app: AppHandle) {
         update_tray_title(&app, &statuses);
         check_alerts(&app, &statuses);
         check_reset_alerts(&app, &statuses);
+        record_utilizations(&statuses);
         // 일별 롤업 누적 (첫 회만 백필로 무겁고 이후는 어제치 증분).
         rollup::update(&providers());
         std::thread::sleep(Duration::from_secs(ALERT_CHECK_SECS));
