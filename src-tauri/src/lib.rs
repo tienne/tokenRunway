@@ -1,4 +1,5 @@
 mod analytics;
+mod atomicfile;
 mod i18n;
 mod providers;
 mod rollup;

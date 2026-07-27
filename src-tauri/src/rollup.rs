@@ -4,16 +4,20 @@
 //! 작은 파일에 누적 저장한다. 원본이 사라져도 과거 일별 통계가 유지되고
 //! 긴 기간 조회도 빠르다.
 //!
+//! 사용률(utilization)은 실시간 폴링으로만 관측되는 값이라(과거 JSONL에서
+//! 재계산할 수 없다) 여기 함께 기록한다. 요금제 하향 추천의 안전 가드로 쓴다.
+//!
 //! 저장 위치: `<config_dir>/token-runway/rollup.json`
 //! 구조: 도구명 → (날짜 "YYYY-MM-DD" → DayRollup)
 
+use crate::atomicfile::{preserve_corrupt, write_atomic};
 use crate::providers::UsageProvider;
 use crate::{local_date_full, local_hour, short_model};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 /// 최초 백필 시 거슬러 올라갈 최대 일수 (원본 mtime 필터로 실제 있는 만큼만 수집).
 const MAX_BACKFILL_DAYS: i64 = 180;
@@ -42,30 +46,41 @@ fn rollup_path() -> Option<PathBuf> {
 }
 
 fn load_from_disk() -> RollupStore {
-    rollup_path()
-        .and_then(|p| fs::read_to_string(p).ok())
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
-}
-
-fn save_to_disk(store: &RollupStore) {
-    if let Some(path) = rollup_path() {
-        if let Some(dir) = path.parent() {
-            let _ = fs::create_dir_all(dir);
-        }
-        if let Ok(json) = serde_json::to_string(store) {
-            let _ = fs::write(path, json);
+    let Some(path) = rollup_path() else {
+        return RollupStore::default();
+    };
+    let Ok(raw) = fs::read_to_string(&path) else {
+        return RollupStore::default();
+    };
+    match serde_json::from_str(&raw) {
+        Ok(store) => store,
+        Err(_) => {
+            // 여기서 조용히 빈 값으로 넘어가면 백필 범위 밖 히스토리가 영구 유실된다.
+            preserve_corrupt(&path);
+            RollupStore::default()
         }
     }
 }
 
-/// 현재 롤업 사본 (최초 호출 시 디스크 로드).
-pub fn get() -> RollupStore {
+fn save_to_disk(store: &RollupStore) {
+    let Some(path) = rollup_path() else { return };
+    if let Ok(json) = serde_json::to_string(store) {
+        let _ = write_atomic(&path, &json);
+    }
+}
+
+/// 전역 스토어를 잠그고 (필요하면 디스크에서 로드한 뒤) 반환.
+fn locked() -> MutexGuard<'static, Option<RollupStore>> {
     let mut guard = ROLLUP.lock().unwrap_or_else(|e| e.into_inner());
     if guard.is_none() {
         *guard = Some(load_from_disk());
     }
-    guard.clone().unwrap_or_default()
+    guard
+}
+
+/// 현재 롤업 사본 (최초 호출 시 디스크 로드).
+pub fn get() -> RollupStore {
+    locked().clone().unwrap_or_default()
 }
 
 /// "YYYY-MM-DD" → 그 날 로컬 0시의 epoch millis.

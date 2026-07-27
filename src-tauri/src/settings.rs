@@ -121,10 +121,17 @@ fn load_from_disk() -> Settings {
     let Some(path) = settings_path() else {
         return Settings::default();
     };
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    let Ok(raw) = fs::read_to_string(&path) else {
+        return Settings::default();
+    };
+    match serde_json::from_str(&raw) {
+        Ok(s) => s,
+        Err(_) => {
+            // 깨진 설정을 조용히 기본값으로 덮으면 사용자가 잃은 줄도 모른다.
+            crate::atomicfile::preserve_corrupt(&path);
+            Settings::default()
+        }
+    }
 }
 
 /// 현재 설정 사본.
@@ -135,11 +142,8 @@ pub fn get() -> Settings {
 /// 설정 저장 (디스크 + 전역 state).
 pub fn set(new: Settings) {
     if let Some(path) = settings_path() {
-        if let Some(dir) = path.parent() {
-            let _ = fs::create_dir_all(dir);
-        }
         if let Ok(json) = serde_json::to_string_pretty(&new) {
-            let _ = fs::write(path, json);
+            let _ = crate::atomicfile::write_atomic(&path, &json);
         }
     }
     if let Ok(mut s) = SETTINGS.lock() {
