@@ -15,20 +15,49 @@
 //! 전체 컨텍스트를 다시 보내므로 실제 소비는 더 크다). Claude의 `message.usage`와
 //! 의미가 달라 도구 간 절대 비교는 하지 말 것. 압축이 일어난 구간의 소비도 누락된다.
 //!
-//! **잔여율 미구현**: 로컬 파일엔 쿼터가 없지만 CLI는 서버에서 받아온다 —
-//! `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits`가
-//! `creditUsagePercent`·`monthlyLimit`·`prepaidBalance`·`subscription_tier`를 준다.
-//! 붙이려면 월간 청구 주기라 5h/주간 전제인 `OfficialUsage`를 손대야 한다(CLAUDE.md 참고).
-//! 지금은 토큰 소진 추세만 표시한다. 단위 `tokens`, 윈도우 일간(24h).
+//! **잔여율**: 로컬 파일엔 쿼터가 없지만 CLI가 서버에서 받아온다 —
+//! `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits`.
+//! `creditUsagePercent`(크레딧 소진율)와 `currentPeriod`(주기 시작·끝)를 쓴다.
+//! 크레딧은 통합 지갑이라 Imagine·Chat이 쓴 몫까지 포함한다 — 코딩만 따로 보려면
+//! `productUsage[].GrokBuild`가 있지만, 바닥나면 코딩도 못 쓰므로 전체를 잔여율로 쓴다.
+//! 주기는 `type` 문자열이 아니라 `end - start`로 재므로 종류가 늘어도 맞는다.
 
-use super::{find_recent_jsonl, UsageProvider, UsageSample};
+use super::{find_recent_jsonl, OfficialUsage, UsageProvider, UsageSample};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 const UNKNOWN_MODEL: &str = "grok-unknown";
 
+/// 크레딧 조회 엔드포인트 (CLI가 `/usage`에 쓰는 것과 같다).
+const BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
+
+/// 폴링 최소 간격. Claude와 같은 보수적 값.
+const BILLING_CACHE_TTL: Duration = Duration::from_secs(180);
+
+/// HTTP 타임아웃 — 응답이 멈춰도 폴링 스레드가 매달리지 않게.
+const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// 주기를 못 읽었을 때의 폴백 (관측된 실제 주기는 7일).
+const DEFAULT_PERIOD_SECS: i64 = 7 * 24 * 3600;
+
+struct CachedBilling {
+    fetched_at: Instant,
+    usage: Option<OfficialUsage>,
+    /// 주기 길이(초) — 윈도우가 API 응답에 달려 있어 함께 캐시한다.
+    window_secs: i64,
+    error: Option<&'static str>,
+}
+
+static BILLING_CACHE: Mutex<Option<CachedBilling>> = Mutex::new(None);
+
+/// 갱신 중복 방지. 데이터 락을 잡은 채 네트워크를 타지 않는다.
+static FETCH_GUARD: Mutex<()> = Mutex::new(());
+
 pub struct GrokProvider {
+    root: PathBuf,
     sessions_dir: PathBuf,
 }
 
@@ -41,6 +70,7 @@ impl GrokProvider {
             .unwrap_or_default();
         Self {
             sessions_dir: root.join("sessions"),
+            root,
         }
     }
 }
@@ -56,12 +86,22 @@ impl UsageProvider for GrokProvider {
         "Grok"
     }
 
+    /// 크레딧 주기 길이. API가 주는 `currentPeriod`의 end−start를 쓰고,
+    /// 아직 못 받았으면 관측된 기본값(7일)을 쓴다.
     fn window_secs(&self) -> i64 {
-        24 * 3600
+        self.billing().2
     }
 
     fn available(&self) -> bool {
         self.sessions_dir.is_dir()
+    }
+
+    fn official_usage(&self) -> Option<OfficialUsage> {
+        self.billing().0
+    }
+
+    fn status_note(&self) -> Option<String> {
+        self.billing().1.map(|s| s.to_string())
     }
 
     fn collect_samples(&self, since_ms: i64) -> Vec<UsageSample> {
@@ -78,6 +118,168 @@ impl UsageProvider for GrokProvider {
         samples.sort_by_key(|s| s.timestamp_ms);
         samples
     }
+}
+
+impl GrokProvider {
+    /// (사용률, 실패사유, 윈도우 초) — 180초 캐시.
+    ///
+    /// 네트워크 호출 동안 데이터 락을 잡지 않는다. 다른 스레드가 갱신 중이면
+    /// 기다리지 않고 직전 값을 쓴다(Claude provider와 같은 규칙).
+    fn billing(&self) -> (Option<OfficialUsage>, Option<&'static str>, i64) {
+        if let Some(fresh) = cached(true) {
+            return fresh;
+        }
+        let Ok(_guard) = FETCH_GUARD.try_lock() else {
+            return cached(false).unwrap_or((None, None, DEFAULT_PERIOD_SECS));
+        };
+        if let Some(fresh) = cached(true) {
+            return fresh;
+        }
+
+        let (usage, error, window_secs) = fetch_billing(&self.root);
+        if let Ok(mut cache) = BILLING_CACHE.lock() {
+            *cache = Some(CachedBilling {
+                fetched_at: Instant::now(),
+                usage: usage.clone(),
+                window_secs,
+                error,
+            });
+        }
+        (usage, error, window_secs)
+    }
+}
+
+fn cached(require_fresh: bool) -> Option<(Option<OfficialUsage>, Option<&'static str>, i64)> {
+    let guard = BILLING_CACHE.lock().ok()?;
+    let c = guard.as_ref()?;
+    if require_fresh && c.fetched_at.elapsed() >= BILLING_CACHE_TTL {
+        return None;
+    }
+    Some((c.usage.clone(), c.error, c.window_secs))
+}
+
+/// `auth.json`에서 액세스 토큰을 읽는다. 만료됐으면 사유를 돌려준다.
+fn read_token(root: &Path) -> Result<String, &'static str> {
+    let raw = fs::read_to_string(root.join("auth.json")).map_err(|_| "error.no_token")?;
+    let v: Value = serde_json::from_str(&raw).map_err(|_| "error.no_token")?;
+    // 최상위는 `<issuer>::<uuid>` → 엔트리 맵. 만료되지 않은 것을 고른다.
+    let entries = v.as_object().ok_or("error.no_token")?;
+    let mut expired = false;
+    for entry in entries.values() {
+        let Some(key) = entry.get("key").and_then(|k| k.as_str()) else {
+            continue;
+        };
+        if let Some(exp) = entry.get("expires_at").and_then(|e| e.as_str()) {
+            if let Ok(t) = chrono::DateTime::parse_from_rfc3339(exp) {
+                if t.timestamp_millis() <= chrono::Utc::now().timestamp_millis() {
+                    expired = true;
+                    continue;
+                }
+            }
+        }
+        return Ok(key.to_string());
+    }
+    Err(if expired {
+        "error.expired"
+    } else {
+        "error.no_token"
+    })
+}
+
+/// billing API 호출 → (사용률, 실패사유, 윈도우 초).
+fn fetch_billing(root: &Path) -> (Option<OfficialUsage>, Option<&'static str>, i64) {
+    let token = match read_token(root) {
+        Ok(t) => t,
+        Err(e) => return (None, Some(e), DEFAULT_PERIOD_SECS),
+    };
+    let version = fs::read_to_string(root.join(".metadata_version"))
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| "0.0.0".to_string());
+
+    let resp = ureq::get(BILLING_URL)
+        .timeout(HTTP_TIMEOUT)
+        .set("Authorization", &format!("Bearer {token}"))
+        .set("x-grok-client-identifier", "grok-shell")
+        .set("x-grok-client-mode", "billing")
+        .set("x-grok-client-version", &version)
+        .set("Accept", "application/json")
+        .call();
+
+    let resp = match resp {
+        Ok(r) => r,
+        Err(ureq::Error::Status(401, _)) | Err(ureq::Error::Status(403, _)) => {
+            return (None, Some("error.expired"), DEFAULT_PERIOD_SECS)
+        }
+        Err(ureq::Error::Status(429, _)) => {
+            return (None, Some("error.rate_limit"), DEFAULT_PERIOD_SECS)
+        }
+        Err(_) => return (None, Some("error.unavailable"), DEFAULT_PERIOD_SECS),
+    };
+
+    let Ok(body) = resp.into_json::<Value>() else {
+        return (None, Some("error.unavailable"), DEFAULT_PERIOD_SECS);
+    };
+    parse_billing(&body)
+}
+
+/// billing 응답 → (사용률, 실패사유, 윈도우 초).
+///
+/// 주기는 타입 문자열(`USAGE_PERIOD_TYPE_WEEKLY` 등)에 기대지 않고 end−start로
+/// 직접 잰다 — 주기 종류가 늘어도 그대로 맞는다.
+fn parse_billing(body: &Value) -> (Option<OfficialUsage>, Option<&'static str>, i64) {
+    let cfg = body.get("config").unwrap_or(body);
+    let Some(util) = cfg.get("creditUsagePercent").and_then(|v| v.as_f64()) else {
+        return (None, Some("error.unavailable"), DEFAULT_PERIOD_SECS);
+    };
+
+    let period = cfg.get("currentPeriod");
+    let start = period
+        .and_then(|p| p.get("start"))
+        .and_then(|s| s.as_str())
+        .and_then(parse_ms);
+    let end = period
+        .and_then(|p| p.get("end"))
+        .and_then(|s| s.as_str())
+        .and_then(parse_ms)
+        .or_else(|| {
+            cfg.get("billingPeriodEnd")
+                .and_then(|s| s.as_str())
+                .and_then(parse_ms)
+        });
+
+    let window_secs = match (start, end) {
+        (Some(s), Some(e)) if e > s => (e - s) / 1000,
+        _ => DEFAULT_PERIOD_SECS,
+    };
+    let resets_at = end
+        .and_then(chrono::DateTime::from_timestamp_millis)
+        .map(|d| d.to_rfc3339())
+        .unwrap_or_default();
+
+    // Grok은 단기(5시간) 윈도우가 없다 — 크레딧 주기 하나뿐이라 양쪽에 같은 값을 넣는다.
+    // percent_remaining이 주 표시가 되고, 주간 일별 분해도 같은 주기로 그려진다.
+    (
+        Some(OfficialUsage {
+            five_hour_utilization: util,
+            five_hour_resets_at: resets_at.clone(),
+            seven_day_utilization: util,
+            seven_day_resets_at: resets_at,
+            plan: cfg
+                .get("subscription_tier")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            rate_limit_multiplier: None,
+            is_estimate: false,
+        }),
+        None,
+        window_secs,
+    )
+}
+
+fn parse_ms(iso: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(iso)
+        .ok()
+        .map(|d| d.timestamp_millis())
 }
 
 /// 한 세션의 `updates.jsonl`을 파싱해 턴별 증분 샘플을 `out`에 추가한다.
@@ -364,6 +566,71 @@ mod tests {
         assert_eq!(out[0].model.as_deref(), Some("grok-build"));
         assert_eq!(out[0].amount, 220);
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// 실제 API 응답 형태 (2026-08-06 관측).
+    fn billing_body() -> Value {
+        serde_json::json!({
+          "config": {
+            "currentPeriod": {
+              "type": "USAGE_PERIOD_TYPE_WEEKLY",
+              "start": "2026-08-01T21:28:47.680036+00:00",
+              "end": "2026-08-08T21:28:47.680036+00:00"
+            },
+            "creditUsagePercent": 90.0,
+            "onDemandCap": { "val": 0 },
+            "onDemandUsed": { "val": 0 },
+            "productUsage": [
+              { "product": "GrokImagine", "usagePercent": 89.0 },
+              { "product": "GrokBuild", "usagePercent": 1.0 }
+            ],
+            "isUnifiedBillingUser": true,
+            "prepaidBalance": { "val": 0 },
+            "billingPeriodStart": "2026-08-01T21:28:47.680036+00:00",
+            "billingPeriodEnd": "2026-08-08T21:28:47.680036+00:00"
+          }
+        })
+    }
+
+    #[test]
+    fn parses_credit_usage_and_period() {
+        let (usage, err, window) = parse_billing(&billing_body());
+        assert!(err.is_none());
+        let u = usage.expect("사용률이 나와야 한다");
+        assert_eq!(u.five_hour_utilization, 90.0);
+        assert_eq!(u.seven_day_utilization, 90.0);
+        assert!(!u.is_estimate);
+        assert_eq!(window, 7 * 24 * 3600, "주기를 end-start로 재야 한다");
+        assert!(u.five_hour_resets_at.starts_with("2026-08-08T"));
+    }
+
+    #[test]
+    fn measures_period_from_timestamps_not_type_string() {
+        // 타입 문자열이 뭐든 실제 간격을 따른다 — 주기 종류가 늘어도 맞는다.
+        let mut body = billing_body();
+        body["config"]["currentPeriod"]["type"] = serde_json::json!("USAGE_PERIOD_TYPE_MONTHLY");
+        body["config"]["currentPeriod"]["end"] = serde_json::json!("2026-08-31T21:28:47.680036+00:00");
+        let (_, _, window) = parse_billing(&body);
+        assert_eq!(window, 30 * 24 * 3600);
+    }
+
+    #[test]
+    fn falls_back_when_period_is_missing() {
+        let mut body = billing_body();
+        body["config"]["currentPeriod"] = Value::Null;
+        body["config"]["billingPeriodEnd"] = Value::Null;
+        let (usage, _, window) = parse_billing(&body);
+        assert_eq!(window, DEFAULT_PERIOD_SECS);
+        assert!(usage.expect("사용률은 살아야 한다").five_hour_resets_at.is_empty());
+    }
+
+    #[test]
+    fn reports_unavailable_without_usage_percent() {
+        let mut body = billing_body();
+        body["config"]["creditUsagePercent"] = Value::Null;
+        let (usage, err, _) = parse_billing(&body);
+        assert!(usage.is_none());
+        assert_eq!(err, Some("error.unavailable"));
     }
 
     #[test]

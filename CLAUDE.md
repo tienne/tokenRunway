@@ -112,23 +112,25 @@ trait UsageProvider {
   - 필드 경로 폴백: `params(.update)._meta.totalTokens`, `agentTimestampMs`,
     `modelId` 등. 모델은 형제 `summary.json`의 `current_model_id`로 폴백
   - 단위 `tokens`, 윈도우 일간(24h)
-- **잔여율 미구현** — 현재 카드에 "한도 미설정"이 뜬다. 로컬 파일엔 쿼터가 없지만
-  (2026-08-06 확인: `auth.json`=OIDC 토큰·계정, `signals.json`=컨텍스트 창·세션 통계,
-  `models_cache.json`=`compactions_remaining`, `logs/unified.jsonl`=`remaining_in_queue`),
-  **CLI는 서버에서 받아온다** — 아래 billing API로 붙일 수 있다. 캐시 분해가 없어
-  `input_total`=0인 건 그대로다.
-- **잔여율 데이터 소스 (미구현, 스펙 확보)** — CLI 바이너리에서 확인한 경로다.
-  - `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits`
-  - 헤더: `Authorization: Bearer <token>`, `x-grok-client-mode`,
-    `x-grok-client-identifier`, `x-grok-client-version`.
-    인증은 `grok login`(grok.com) 기준 — 미인증 시 "Authentication required" 응답
-  - 응답: `creditUsagePercent`(그대로 utilization), `monthlyLimit`, `prepaidBalance`,
-    `includedUsed`, `totalUsed`, `onDemandUsed`, `onDemandCap`, `subscription_tier`(플랜),
-    `billingCycle`, `billingPeriodStart`, `currentPeriod`, `history`
-  - **윈도우가 월간 청구 주기**라 5h/주간을 전제한 기존 필드와 안 맞는다.
-    `window_secs`와 `OfficialUsage`의 5h/7d 이름을 손대야 한다
-  - 한도가 실제 숫자로 오므로 Claude처럼 역산할 필요가 없다
-  - 세션 단위 사용량은 ACP 메서드 `x.ai/session/usage`로도 온다
+- **공식 잔여율**: `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits`
+  (CLI의 `/usage`가 쓰는 것과 같은 경로). 로컬 파일엔 쿼터가 없어서 서버를 봐야 한다
+  — 2026-08-06 확인: `auth.json`=OIDC 토큰·계정, `signals.json`=컨텍스트 창·세션 통계,
+  `models_cache.json`=`compactions_remaining`, `logs/unified.jsonl`=`remaining_in_queue`.
+  - 헤더: `Authorization: Bearer`(auth.json의 `key`), `x-grok-client-identifier: grok-shell`,
+    `x-grok-client-mode: billing`, `x-grok-client-version`(`.metadata_version`)
+  - 응답: `config.creditUsagePercent`(그대로 utilization), `config.currentPeriod`
+    (`type`/`start`/`end`), `onDemandCap`·`onDemandUsed`·`prepaidBalance`,
+    `productUsage[]`(제품별 %), `subscription_tier`(있으면 플랜 배지)
+  - **주기는 `type` 문자열이 아니라 `end - start`로 잰다** — 관측값은
+    `USAGE_PERIOD_TYPE_WEEKLY`(정확히 7일)지만 종류가 늘어도 그대로 맞는다.
+    `window_secs()`가 이 값을 돌려주므로 Grok만 윈도우가 동적이다
+  - **크레딧은 통합 지갑** — `creditUsagePercent`에 Imagine·Chat이 쓴 몫이 다 들어간다
+    (실측: 전체 90% 중 Imagine 89%, GrokBuild 1%). 코딩만 보려면 `productUsage`가
+    있지만, 바닥나면 코딩도 못 쓰므로 전체를 잔여율로 쓴다
+  - 단기(5시간) 윈도우가 없어 `OfficialUsage`의 5h·7d 슬롯에 같은 값을 넣는다.
+    UI는 `window_hours ≥ 168`이면 주간 잔여율 줄을 숨겨 중복을 없앤다
+  - 180초 캐시·10초 타임아웃·`FETCH_GUARD`는 Claude provider와 같은 규칙
+  - 세션 단위 사용량은 ACP 메서드 `x.ai/session/usage`로도 온다(미사용)
 - ⚠️ **`totalTokens`는 컨텍스트 점유량으로 보인다** — 실측에서 관측 최댓값이
   `signals.json`의 `contextTokensUsed`와 정확히 일치했다(49,083). 그렇다면 턴 증분은
   "새로 쌓인 컨텍스트량"이지 실제 API 청구 토큰이 아니다 — 매 턴 전체 컨텍스트를
@@ -266,7 +268,7 @@ pnpm tauri dev                  # 실제 실행 (메뉴바 + 알림 권한 다�
   확인 → 알림, 트레이 "업데이트 확인..."에서 설치·재시작. endpoint=GitHub Releases
   `latest.json`. 공개키는 `tauri.conf.json`, 개인키는 `~/.tauri/token-runway.key`(repo 밖,
   CI는 `TAURI_SIGNING_PRIVATE_KEY` secret). **남은 것: Apple 서명·공증(`APPLE_*` secret)**
-- [ ] Grok 잔여율 — billing API 연동(스펙은 Grok 섹션 참고). 월간 청구 주기라
-  `OfficialUsage`의 5h/7d 전제를 일반화해야 한다
+- [x] Grok 잔여율 — billing API 연동. 주기가 응답에 따라 달라져 `window_secs()`가
+  동적이다. UI 윈도우 라벨도 길이에 맞춰 "세션/일간/주간/월간"으로 바뀐다
 - [ ] Cursor / Copilot provider — 데이터 소스 스펙 확보(위 참고), 검증 환경에서 구현 필요
 - [ ] 비-macOS Keychain 지원 (`keyring` crate)
