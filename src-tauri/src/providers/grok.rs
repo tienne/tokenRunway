@@ -15,9 +15,11 @@
 //! 전체 컨텍스트를 다시 보내므로 실제 소비는 더 크다). Claude의 `message.usage`와
 //! 의미가 달라 도구 간 절대 비교는 하지 말 것. 압축이 일어난 구간의 소비도 누락된다.
 //!
-//! **잔여율 없음**: Grok Build는 rate limit·quota를 로컬 파일이나 공개 API로 남기지
-//! 않는다(프리페이드 크레딧·SuperGrok 구독). 절대 한도를 임의 추정하지 않고 토큰 소진
-//! 추세만 표시한다(Antigravity와 동일 정책). 단위 `tokens`, 윈도우 일간(24h).
+//! **잔여율 미구현**: 로컬 파일엔 쿼터가 없지만 CLI는 서버에서 받아온다 —
+//! `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits`가
+//! `creditUsagePercent`·`monthlyLimit`·`prepaidBalance`·`subscription_tier`를 준다.
+//! 붙이려면 월간 청구 주기라 5h/주간 전제인 `OfficialUsage`를 손대야 한다(CLAUDE.md 참고).
+//! 지금은 토큰 소진 추세만 표시한다. 단위 `tokens`, 윈도우 일간(24h).
 
 use super::{find_recent_jsonl, UsageProvider, UsageSample};
 use serde_json::Value;

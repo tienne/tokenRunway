@@ -112,14 +112,23 @@ trait UsageProvider {
   - 필드 경로 폴백: `params(.update)._meta.totalTokens`, `agentTimestampMs`,
     `modelId` 등. 모델은 형제 `summary.json`의 `current_model_id`로 폴백
   - 단위 `tokens`, 윈도우 일간(24h)
-- **잔여율 없음** — 그래서 카드에 "한도 미설정"이 뜬다. 임의 추정 안 함(Antigravity
-  정책). 캐시 분해도 없어 `input_total`=0
-  - 2026-08-06 실제 설치본에서 확인: `auth.json`(OIDC 토큰·계정만),
-    `signals.json`(컨텍스트 창·세션 통계만), `models_cache.json`
-    (`compactions_remaining`), `logs/unified.jsonl`(`remaining_in_queue`) —
-    **계정 rate limit/quota는 어디에도 없다**. 프리페이드 크레딧·SuperGrok 구독이라
-    CLI가 남기지 않는다. Claude(OAuth)나 Codex(JSONL rate_limits)와 달리 역산할
-    분모 자체가 없어서, 한도를 띄우려면 사용자 지정 한도를 받는 수밖에 없다.
+- **잔여율 미구현** — 현재 카드에 "한도 미설정"이 뜬다. 로컬 파일엔 쿼터가 없지만
+  (2026-08-06 확인: `auth.json`=OIDC 토큰·계정, `signals.json`=컨텍스트 창·세션 통계,
+  `models_cache.json`=`compactions_remaining`, `logs/unified.jsonl`=`remaining_in_queue`),
+  **CLI는 서버에서 받아온다** — 아래 billing API로 붙일 수 있다. 캐시 분해가 없어
+  `input_total`=0인 건 그대로다.
+- **잔여율 데이터 소스 (미구현, 스펙 확보)** — CLI 바이너리에서 확인한 경로다.
+  - `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits`
+  - 헤더: `Authorization: Bearer <token>`, `x-grok-client-mode`,
+    `x-grok-client-identifier`, `x-grok-client-version`.
+    인증은 `grok login`(grok.com) 기준 — 미인증 시 "Authentication required" 응답
+  - 응답: `creditUsagePercent`(그대로 utilization), `monthlyLimit`, `prepaidBalance`,
+    `includedUsed`, `totalUsed`, `onDemandUsed`, `onDemandCap`, `subscription_tier`(플랜),
+    `billingCycle`, `billingPeriodStart`, `currentPeriod`, `history`
+  - **윈도우가 월간 청구 주기**라 5h/주간을 전제한 기존 필드와 안 맞는다.
+    `window_secs`와 `OfficialUsage`의 5h/7d 이름을 손대야 한다
+  - 한도가 실제 숫자로 오므로 Claude처럼 역산할 필요가 없다
+  - 세션 단위 사용량은 ACP 메서드 `x.ai/session/usage`로도 온다
 - ⚠️ **`totalTokens`는 컨텍스트 점유량으로 보인다** — 실측에서 관측 최댓값이
   `signals.json`의 `contextTokensUsed`와 정확히 일치했다(49,083). 그렇다면 턴 증분은
   "새로 쌓인 컨텍스트량"이지 실제 API 청구 토큰이 아니다 — 매 턴 전체 컨텍스트를
@@ -257,5 +266,7 @@ pnpm tauri dev                  # 실제 실행 (메뉴바 + 알림 권한 다�
   확인 → 알림, 트레이 "업데이트 확인..."에서 설치·재시작. endpoint=GitHub Releases
   `latest.json`. 공개키는 `tauri.conf.json`, 개인키는 `~/.tauri/token-runway.key`(repo 밖,
   CI는 `TAURI_SIGNING_PRIVATE_KEY` secret). **남은 것: Apple 서명·공증(`APPLE_*` secret)**
+- [ ] Grok 잔여율 — billing API 연동(스펙은 Grok 섹션 참고). 월간 청구 주기라
+  `OfficialUsage`의 5h/7d 전제를 일반화해야 한다
 - [ ] Cursor / Copilot provider — 데이터 소스 스펙 확보(위 참고), 검증 환경에서 구현 필요
 - [ ] 비-macOS Keychain 지원 (`keyring` crate)
