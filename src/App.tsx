@@ -108,6 +108,17 @@ function windowLabel(hours: number): string {
   return Number.isInteger(hours) ? `${hours}h` : `${hours.toFixed(1)}h`;
 }
 
+/**
+ * 누적 윈도우 제목. 도구마다 주기가 달라(Claude·Codex 5h, Gemini 24h, Grok 주간)
+ * "세션 (168h)" 같은 표기가 나오지 않게 길이에 맞는 말을 쓴다.
+ */
+function windowTitle(hours: number, lang: Lang): string {
+  if (hours >= 24 * 28) return t(lang, "windowMonth");
+  if (hours >= 24 * 7) return t(lang, "windowWeek");
+  if (hours >= 24) return t(lang, "windowDay");
+  return `${t(lang, "session")} (${windowLabel(hours)})`;
+}
+
 function formatEta(min: number | null, lang: Lang): string {
   if (min == null) return "—";
   if (min < 1) return t(lang, "lessThanMin");
@@ -438,9 +449,7 @@ function Dashboard() {
           )}
 
           <div className="today-section">
-            <span className="today-title">
-              {t(lang, "session")} ({windowLabel(s.windowHours)})
-            </span>
+            <span className="today-title">{windowTitle(s.windowHours, lang)}</span>
             <div className="today">
               <div className="today-item">
                 <span className="today-val">{formatAmount(s.windowUsage)}</span>
@@ -544,23 +553,22 @@ function Dashboard() {
             </div>
           )}
 
-          {s.sevenDayRemaining != null && (
-            <>
-              <p className="weekly">
-                {t(lang, "weekly", { n: s.sevenDayRemaining.toFixed(0) })}
-                {/* Max 사용자의 실제 병목은 5시간이 아니라 주간인 경우가 많다 */}
-                {s.sevenDayEtaMinutes != null && (
-                  <span className="weekly-eta">
-                    {" · "}
-                    {t(lang, "weeklyEta", {
-                      t: formatDuration(s.sevenDayEtaMinutes, lang),
-                    })}
-                  </span>
-                )}
-              </p>
-              <WeeklyMiniBars days={s.weeklyDays} lang={lang} />
-            </>
+          {/* 주 윈도우가 이미 주간인 도구(Grok)는 위 잔여율이 곧 주간이라 중복이다 */}
+          {s.sevenDayRemaining != null && s.windowHours < 24 * 7 && (
+            <p className="weekly">
+              {t(lang, "weekly", { n: s.sevenDayRemaining.toFixed(0) })}
+              {/* Max 사용자의 실제 병목은 5시간이 아니라 주간인 경우가 많다 */}
+              {s.sevenDayEtaMinutes != null && (
+                <span className="weekly-eta">
+                  {" · "}
+                  {t(lang, "weeklyEta", {
+                    t: formatDuration(s.sevenDayEtaMinutes, lang),
+                  })}
+                </span>
+              )}
+            </p>
           )}
+          <WeeklyMiniBars days={s.weeklyDays} lang={lang} />
 
           {s.note && (
             <p className={s.note.startsWith("error.") ? "note-error" : "note"}>
