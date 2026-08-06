@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# 에이전트 도구가 남기는 세션 상태 — 로컬 절대 경로와 세션 ID뿐이라 공유 가치가 없다
+.gestalt/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
