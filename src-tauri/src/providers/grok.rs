@@ -3,14 +3,17 @@
 //! 데이터 소스: `~/.grok/sessions/<workspace>/<session-id>/updates.jsonl`
 //! (JSON-RPC `session/update` 스트림, NDJSON). `GROK_HOME` 환경변수로 루트 override.
 //!
-//! - **시계열**: 각 업데이트의 `_meta.totalTokens`는 **세션 누적** 카운터다. 사용자
-//!   메시지(`sessionUpdate == "user_message_chunk"`)를 턴 경계로 잡고, 턴 안에서 관측한
-//!   누적 최댓값 − 턴 시작 직전 누적값 = 그 턴이 소비한 토큰(증분)을 샘플 1건으로 만든다.
-//!   누적값이 줄거나(압축·되감기) 반복되면 무시해 단조 증가로 취급한다.
+//! - **시계열**: 각 업데이트의 `_meta.totalTokens`는 세션 안에서 단조 증가하는
+//!   카운터다. 사용자 메시지(`sessionUpdate == "user_message_chunk"`)를 턴 경계로 잡고,
+//!   턴 안에서 관측한 최댓값 − 턴 시작 직전 값 = 그 턴의 증분을 샘플 1건으로 만든다.
+//!   값이 줄거나(압축·되감기) 반복되면 무시해 단조 증가로 취급한다.
 //! - **모델**: 업데이트의 `modelId`, 없으면 형제 `summary.json`의 `current_model_id`.
 //!
-//! ⚠️ 이 개발 환경엔 Grok 설치본이 없어 실제 파일로 검증하지 못했다. 필드 경로는
-//! 공개 파서(tokscale)의 스펙을 따랐다 — 실사용 환경에서 재검증 필요.
+//! ⚠️ `totalTokens`는 소비 누적이 아니라 **컨텍스트 점유량**으로 보인다 — 실측에서
+//! 관측 최댓값이 형제 `signals.json`의 `contextTokensUsed`와 정확히 일치했다.
+//! 그렇다면 턴 증분은 새로 쌓인 컨텍스트량이지 실제 API 청구 토큰이 아니다(매 턴
+//! 전체 컨텍스트를 다시 보내므로 실제 소비는 더 크다). Claude의 `message.usage`와
+//! 의미가 달라 도구 간 절대 비교는 하지 말 것. 압축이 일어난 구간의 소비도 누락된다.
 //!
 //! **잔여율 없음**: Grok Build는 rate limit·quota를 로컬 파일이나 공개 API로 남기지
 //! 않는다(프리페이드 크레딧·SuperGrok 구독). 절대 한도를 임의 추정하지 않고 토큰 소진
