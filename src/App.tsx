@@ -22,6 +22,17 @@ interface ModelBreakdown {
   cost: number;
 }
 
+/** 주간 윈도우 안의 하루 — 그날이 주간 한도의 몇 %를 썼는지 */
+interface WeeklyDay {
+  date: string; // "MM/DD"
+  weekday: number; // 0=월 ~ 6=일
+  usage: number;
+  dailyPercent: number;
+  cumulativePercent: number;
+  isToday: boolean;
+  isFuture: boolean;
+}
+
 /** 카드 맨 위 한 줄 결론 — 소진이 먼저인지 리셋이 먼저인지 */
 interface Verdict {
   key: string;
@@ -52,6 +63,7 @@ interface RunwayStatus {
   resetsAt: string | null;
   sevenDayRemaining: number | null;
   sevenDayEtaMinutes: number | null;
+  weeklyDays: WeeklyDay[];
   verdict: Verdict | null;
   isEstimate: boolean;
   plan: string | null;
@@ -114,6 +126,128 @@ function formatDuration(min: number | null, lang: Lang): string {
     return h > 0 ? `${d}d ${h}h` : `${d}d`;
   }
   return formatEta(min, lang);
+}
+
+/** 요일 라벨 — 0=월 ~ 6=일 */
+function weekdayLabel(i: number, lang: Lang): string {
+  return t(lang, `wd.${i}`);
+}
+
+/**
+ * 주간 한도 일별 막대 — 팝오버(압축)와 히스토리 창(상세)이 공유한다.
+ *
+ * 막대 영역과 요일 축을 따로 두는 이유: 누적 선 SVG를 막대 영역에만 정확히 겹치기
+ * 위해서다. 라벨까지 한 상자에 넣으면 선이 라벨 높이만큼 밀린다.
+ * 칸 간격도 gap이 아니라 안쪽 padding으로 준다 — gap을 쓰면 flex 칸이 균등 분할되지
+ * 않아 선의 x좌표와 막대 중심이 어긋난다.
+ */
+function WeeklyBars({
+  days,
+  lang,
+  showLine,
+  onHover,
+}: {
+  days: WeeklyDay[];
+  lang: Lang;
+  showLine?: boolean;
+  onHover?: (i: number | null) => void;
+}) {
+  // 가장 많이 쓴 날을 꽉 차게 그려야 하루치 차이가 눈에 들어온다.
+  const max = Math.max(...days.map((d) => d.dailyPercent), 0.01);
+
+  // 누적 선은 첫 사용일부터 오늘까지만 긋는다. 미래로 이으면 데이터가 있는 것처럼
+  // 보이고, 아직 안 쓴 앞 구간은 점이 바닥에 붙어 요일 라벨과 겹친다.
+  const firstUsed = days.findIndex((d) => d.cumulativePercent > 0);
+  const past = days
+    .map((d, i) => ({ d, i }))
+    .filter((x) => !x.d.isFuture && firstUsed >= 0 && x.i >= firstUsed);
+  const line = past
+    .map(
+      ({ d, i }, k) =>
+        `${k === 0 ? "M" : "L"}${i + 0.5},${(
+          100 - Math.min(100, d.cumulativePercent)
+        ).toFixed(2)}`
+    )
+    .join(" ");
+
+  return (
+    <>
+      <div className={`wk-plot${showLine ? " wk-plot-tall" : ""}`}>
+        {days.map((d, i) => (
+          <div
+            className={`wk-col${d.isToday ? " wk-today" : ""}${
+              d.isFuture ? " wk-future" : ""
+            }`}
+            key={d.date}
+            title={
+              onHover
+                ? undefined
+                : `${d.date} · ${d.dailyPercent.toFixed(1)}%`
+            }
+            onMouseEnter={() => onHover?.(i)}
+            onMouseLeave={() => onHover?.(null)}
+          >
+            <div className="wk-track">
+              <div
+                className="wk-fill"
+                style={{ height: `${(d.dailyPercent / max) * 100}%` }}
+              />
+            </div>
+          </div>
+        ))}
+        {/* 누적 선은 막대(주황)와 다른 색이라야 겹쳐도 읽힌다. 기존 추세 차트와 같은 파랑. */}
+        {showLine && past.length > 1 && (
+          <svg
+            className="wk-line"
+            viewBox={`0 0 ${days.length} 100`}
+            preserveAspectRatio="none"
+            aria-hidden
+          >
+            <path
+              d={line}
+              fill="none"
+              stroke="#0a84ff"
+              strokeWidth="1.5"
+              strokeLinejoin="round"
+              vectorEffect="non-scaling-stroke"
+            />
+          </svg>
+        )}
+        {/* 점은 SVG 대신 HTML로 — preserveAspectRatio="none"이라 SVG 원은 타원으로 찌그러진다 */}
+        {showLine &&
+          past.map(({ d, i }) => (
+            <span
+              className="wk-dot"
+              key={d.date}
+              style={{
+                left: `${((i + 0.5) / days.length) * 100}%`,
+                top: `${100 - Math.min(100, d.cumulativePercent)}%`,
+              }}
+            />
+          ))}
+      </div>
+      <div className="wk-axis">
+        {days.map((d) => (
+          <span
+            className={d.isToday ? "wk-today-label" : d.isFuture ? "wk-dim" : ""}
+            key={d.date}
+          >
+            {weekdayLabel(d.weekday, lang)}
+          </span>
+        ))}
+      </div>
+    </>
+  );
+}
+
+/** 팝오버용 — 폭이 좁아 축·툴팁 없이 막대와 요일만 */
+function WeeklyMiniBars({ days, lang }: { days: WeeklyDay[]; lang: Lang }) {
+  if (!days.length) return null;
+  return (
+    <div className="wk-mini">
+      <WeeklyBars days={days} lang={lang} />
+    </div>
+  );
 }
 
 /** "얼마나 남았어?"에 대한 직접적인 한 줄 답 */
@@ -411,18 +545,21 @@ function Dashboard() {
           )}
 
           {s.sevenDayRemaining != null && (
-            <p className="weekly">
-              {t(lang, "weekly", { n: s.sevenDayRemaining.toFixed(0) })}
-              {/* Max 사용자의 실제 병목은 5시간이 아니라 주간인 경우가 많다 */}
-              {s.sevenDayEtaMinutes != null && (
-                <span className="weekly-eta">
-                  {" · "}
-                  {t(lang, "weeklyEta", {
-                    t: formatDuration(s.sevenDayEtaMinutes, lang),
-                  })}
-                </span>
-              )}
-            </p>
+            <>
+              <p className="weekly">
+                {t(lang, "weekly", { n: s.sevenDayRemaining.toFixed(0) })}
+                {/* Max 사용자의 실제 병목은 5시간이 아니라 주간인 경우가 많다 */}
+                {s.sevenDayEtaMinutes != null && (
+                  <span className="weekly-eta">
+                    {" · "}
+                    {t(lang, "weeklyEta", {
+                      t: formatDuration(s.sevenDayEtaMinutes, lang),
+                    })}
+                  </span>
+                )}
+              </p>
+              <WeeklyMiniBars days={s.weeklyDays} lang={lang} />
+            </>
           )}
 
           {s.note && (
@@ -796,6 +933,7 @@ interface PlanAdvice {
 interface ToolStats {
   tool: string;
   unit: string;
+  weeklyDays: WeeklyDay[];
   days: DayStat[];
   totalUsage: number;
   totalCost: number;
@@ -925,6 +1063,42 @@ function TrendChart({
         <span>{days[mid]?.date}</span>
         <span>{days[days.length - 1]?.date}</span>
       </div>
+    </div>
+  );
+}
+
+/**
+ * 주간 한도 소진 상세 — 일별 막대 + 누적 선 (히스토리 창용).
+ *
+ * 막대는 그날 하루가 쓴 몫, 선은 그날까지 누적. 100% 선이 주간 한도다.
+ * 막대 합계는 공식 주간 사용률과 항상 일치한다(백엔드에서 안분).
+ */
+function WeeklyLimitBlock({ days, lang }: { days: WeeklyDay[]; lang: Lang }) {
+  const [active, setActive] = useState<number | null>(null);
+  if (!days.length) return null;
+
+  const total = days[days.length - 1].cumulativePercent;
+  const a = active != null ? days[active] : null;
+
+  return (
+    <div className="stat-block">
+      <span className="stat-title">{t(lang, "wkTitle")}</span>
+      <p className="wk-summary">
+        {t(lang, "wkSummary", {
+          used: total.toFixed(0),
+          left: Math.max(0, 100 - total).toFixed(0),
+        })}
+      </p>
+      <WeeklyBars days={days} lang={lang} showLine onHover={setActive} />
+      {a ? (
+        <p className="wk-tip">
+          <b>{a.date}</b> · {t(lang, "wkDaily", { n: a.dailyPercent.toFixed(1) })}{" "}
+          · {t(lang, "wkCum", { n: a.cumulativePercent.toFixed(1) })} ·{" "}
+          {formatAmount(a.usage)} tok
+        </p>
+      ) : (
+        <p className="wk-tip wk-tip-hint">{t(lang, "wkHint")}</p>
+      )}
     </div>
   );
 }
@@ -1079,6 +1253,9 @@ function StatsCard({ s, lang }: { s: ToolStats; lang: Lang }) {
           </div>
         )}
       </div>
+
+      {/* 주간 한도 소진 — 주간 윈도우가 없는 도구는 빈 배열이라 그려지지 않는다 */}
+      <WeeklyLimitBlock days={s.weeklyDays} lang={lang} />
 
       {/* 사용량 기반 요금제 추천 */}
       {s.planAdvice && <PlanAdviceBlock a={s.planAdvice} lang={lang} />}

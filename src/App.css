@@ -817,6 +817,129 @@ h1 {
   }
 }
 
+/* 주간 한도 일별 막대 — 팝오버와 히스토리 창이 공유한다.
+   막대 영역(.wk-plot)과 요일 축(.wk-axis)을 분리해야 누적 선이 막대에만 정확히 겹친다. */
+.wk-mini {
+  margin-top: 6px;
+}
+
+.wk-plot {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  height: 30px;
+}
+
+/* 상세 차트의 위 경계가 곧 주간 한도 100% — 누적 선이 어디까지 왔는지 기준이 된다 */
+.wk-plot-tall {
+  height: 76px;
+  margin-top: 10px;
+  border-top: 1px dashed rgba(142, 142, 147, 0.45);
+}
+
+.wk-col {
+  flex: 1;
+  min-width: 0;
+  height: 100%; /* align-items:flex-end라 stretch가 안 돼 명시해야 트랙이 높이를 갖는다 */
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+/* 칸 간격은 gap이 아니라 트랙 폭으로 준다 — flex 칸이 정확히 균등 분할돼야
+   누적 선의 x좌표(칸 중심)와 막대 중심이 맞는다 */
+.wk-track {
+  width: 62%;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  background: rgba(142, 142, 147, 0.09);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.wk-fill {
+  width: 100%;
+  background: #ff9500;
+  border-radius: 2px 2px 0 0;
+}
+
+/* 아직 오지 않은 날은 빈 슬롯이라 자리만 지킨다 */
+.wk-future .wk-track {
+  background: rgba(142, 142, 147, 0.045);
+}
+
+.wk-axis {
+  display: flex;
+  margin-top: 3px;
+}
+
+.wk-axis span {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  font-size: 9px;
+  line-height: 1;
+  color: #8e8e93;
+}
+
+/* 오늘을 짚어줘야 어디까지가 지나간 날인지 바로 읽힌다 */
+.wk-axis .wk-today-label {
+  color: #ff9500;
+  font-weight: 700;
+}
+
+.wk-axis .wk-dim {
+  opacity: 0.4;
+}
+
+.wk-line {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.wk-dot {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  margin: -2.5px 0 0 -2.5px; /* 좌표가 점의 중심이 되게 */
+  border-radius: 50%;
+  background: #0a84ff;
+  pointer-events: none;
+}
+
+.wk-summary {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: #8e8e93;
+  font-variant-numeric: tabular-nums;
+}
+
+.wk-tip {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: #1d1d1f;
+  font-variant-numeric: tabular-nums;
+  min-height: 14px;
+}
+
+.wk-tip-hint {
+  color: #8e8e93;
+}
+
+@media (prefers-color-scheme: dark) {
+  .wk-tip {
+    color: #f5f5f7;
+  }
+  .wk-tip-hint {
+    color: #8e8e93;
+  }
+}
+
 .weekly-eta {
   color: #bf8700;
 }
