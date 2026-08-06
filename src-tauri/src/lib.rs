@@ -208,6 +208,8 @@ struct ToolStats {
     last_week_cost: f64,
     /// 사용량 기반 요금제 추천. 배수를 아는 플랜(Claude Pro/Max)만 채워짐.
     plan_advice: Option<PlanAdvice>,
+    /// 현재 주간 윈도우의 일별 소진 분해. 주간 한도가 없는 도구는 빈 배열.
+    weekly_days: Vec<providers::WeeklyDay>,
 }
 
 /// epoch millis → 로컬 "YYYY-MM-DD".
@@ -221,7 +223,7 @@ pub(crate) fn local_date_full(ms: i64) -> String {
 }
 
 /// "YYYY-MM-DD" 두 날짜 사이의 모든 날짜(양끝 포함).
-fn date_range(start: &str, end: &str) -> Vec<String> {
+pub(crate) fn date_range(start: &str, end: &str) -> Vec<String> {
     use chrono::NaiveDate;
     let (Ok(mut cur), Ok(last)) = (
         NaiveDate::parse_from_str(start, "%Y-%m-%d"),
@@ -499,6 +501,7 @@ fn compute_stats(days: u32) -> Vec<ToolStats> {
                 today_roll.peak_five_hour_util = prev.peak_five_hour_util;
                 today_roll.peak_seven_day_util = prev.peak_seven_day_util;
             }
+            let today_usage = today_roll.usage;
             all.insert(today.clone(), today_roll);
 
             // 사용하지 않은 날이 빠지면 추세 그래프가 압축돼 왜곡되고, 주간 평균의
@@ -594,12 +597,22 @@ fn compute_stats(days: u32) -> Vec<ToolStats> {
             } else {
                 0.0
             };
+            // 캐시된 값이라 저렴하다 — 주간 분해와 요금제 추천이 함께 쓴다.
+            let official = p.official_usage();
+
+            // 주간 한도를 날짜별로 쪼갠 소진 분해. 주간 윈도우가 없는 도구는 빈 배열이라
+            // 프론트가 블록 자체를 그리지 않는다.
+            let weekly_days = official
+                .as_ref()
+                .map(|u| runway::weekly_days(p.tool_name(), u, now_ms, today_usage))
+                .unwrap_or_default();
+
             // 요금제 사다리(Pro/Max 5x/Max 20x)는 Claude Code 전용이다.
             // 다른 도구(Codex "Pro"/"Plus" 등)에 적용하면 엉뚱한 Claude 티어를 추천한다.
             let plan_advice = if p.tool_name() == "Claude Code" {
-                p.official_usage().and_then(|u| {
+                official.as_ref().and_then(|u| {
                     compute_plan_advice(
-                        &u,
+                        u,
                         this_week_usage,
                         typical_weekly,
                         peak_weekly_util,
@@ -627,6 +640,7 @@ fn compute_stats(days: u32) -> Vec<ToolStats> {
                 this_week_cost,
                 last_week_cost,
                 plan_advice,
+                weekly_days,
             }
         })
         .collect()

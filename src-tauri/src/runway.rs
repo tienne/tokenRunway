@@ -7,8 +7,9 @@ use std::collections::HashMap;
 
 use crate::providers::{
     Insight, ModelBreakdown, OfficialUsage, RunwayStatus, UsageProvider, UsageSample, Verdict,
+    WeeklyDay,
 };
-use chrono::Local;
+use chrono::{Datelike, Local, NaiveDate};
 
 /// 소진 속도 집계 버킷 크기(분).
 const BURN_BUCKET_MIN: f64 = 5.0;
@@ -21,6 +22,9 @@ const BURN_TREND_OFFSET_MIN: i64 = 30;
 
 /// 추세 스파크라인 구간 수.
 const SPARK_BUCKETS: usize = 12;
+
+/// 주간 윈도우 길이(초).
+const WEEK_SECS: i64 = 7 * 24 * 3600;
 
 /// 오늘(로컬) 자정의 epoch millis.
 fn local_midnight_ms() -> i64 {
@@ -95,6 +99,88 @@ fn pace_eta_minutes(util: f64, resets_at: &str, window_secs: i64, now_ms: i64) -
         return None;
     }
     Some(ms_left / 60_000.0)
+}
+
+/// 현재 주간 윈도우를 날짜별로 쪼개 각 날이 주간 한도의 몇 %를 썼는지 낸다.
+///
+/// 주간 절대 토큰 한도는 비공개라 알 수 없다. 대신 일별 토큰을 윈도우 총합 대비
+/// 공식 사용률로 안분한다 — `그날 % = 그날 토큰 / 윈도우 총 토큰 × 공식 사용률`.
+/// 이러면 일별 %의 합이 항상 공식 사용률과 같아져, 같은 카드 안의 두 숫자가
+/// 어긋나지 않는다. 다른 기기에서 쓴 분량은 로컬에 없지만 비율로 흡수되며,
+/// 그만큼 개별 날짜 값은 근사가 된다.
+///
+/// 슬롯은 윈도우가 걸친 날짜 전부다 — 리셋 시각이 자정이 아니면 8칸이 될 수 있다.
+pub(crate) fn weekly_days(
+    tool: &str,
+    official: &OfficialUsage,
+    now_ms: i64,
+    today_usage: u64,
+) -> Vec<WeeklyDay> {
+    let util = official.seven_day_utilization;
+    if util <= 0.0 || official.seven_day_resets_at.is_empty() {
+        return Vec::new();
+    }
+    let Some(reset_ms) = parse_rfc3339_ms(&official.seven_day_resets_at) else {
+        return Vec::new();
+    };
+    if reset_ms <= now_ms {
+        return Vec::new(); // 지나간 리셋 시각 — 신뢰할 수 없다
+    }
+
+    let dates = window_dates(reset_ms);
+    if dates.is_empty() {
+        return Vec::new();
+    }
+
+    let today = crate::local_date_full(now_ms);
+    let usage = crate::rollup::daily_usage(tool, &dates, &today, today_usage);
+    allocate(&dates, &usage, util, &today)
+}
+
+/// 리셋 시각이 정하는 주간 윈도우가 걸친 날짜들.
+///
+/// 윈도우는 `[reset - 7d, reset)` 반개구간이라 마지막 순간은 reset 직전이다.
+/// 리셋이 자정이면 7칸, 하루 중간이면 양끝이 부분일이라 8칸이 된다.
+fn window_dates(reset_ms: i64) -> Vec<String> {
+    crate::date_range(
+        &crate::local_date_full(reset_ms - WEEK_SECS * 1000),
+        &crate::local_date_full(reset_ms - 1),
+    )
+}
+
+/// 일별 사용량을 공식 사용률로 안분한다 (순수 계산).
+///
+/// 합계가 항상 `util`이 되도록 총합 대비 비율로 나눈다.
+fn allocate(dates: &[String], usage: &[u64], util: f64, today: &str) -> Vec<WeeklyDay> {
+    let total: u64 = usage.iter().sum();
+    if total == 0 {
+        return Vec::new();
+    }
+    let mut cumulative = 0.0;
+    dates
+        .iter()
+        .zip(usage)
+        .map(|(date, amount)| {
+            let daily = *amount as f64 / total as f64 * util;
+            cumulative += daily;
+            WeeklyDay {
+                date: date.get(5..).unwrap_or(date).replace('-', "/"),
+                weekday: weekday_index(date),
+                usage: *amount,
+                daily_percent: daily,
+                cumulative_percent: cumulative,
+                is_today: date.as_str() == today,
+                is_future: date.as_str() > today,
+            }
+        })
+        .collect()
+}
+
+/// "YYYY-MM-DD" → 0(월) ~ 6(일). 파싱 실패 시 0.
+fn weekday_index(date: &str) -> u8 {
+    NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .map(|d| d.weekday().num_days_from_monday() as u8)
+        .unwrap_or(0)
 }
 
 /// 카드 맨 위 한 줄 결론 — 소진이 먼저인지 리셋이 먼저인지.
@@ -301,10 +387,16 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
         pace_eta_minutes(
             u.seven_day_utilization,
             &u.seven_day_resets_at,
-            7 * 24 * 3600,
+            WEEK_SECS,
             now_ms,
         )
     });
+
+    // 주간 한도를 날짜별로 쪼갠 소진 분해 — 어느 날 몰아 썼는지 보이게 한다.
+    let weekly_breakdown = official
+        .as_ref()
+        .map(|u| weekly_days(provider.tool_name(), u, now_ms, daily_usage))
+        .unwrap_or_default();
 
     let reset_minutes = resets_at
         .as_deref()
@@ -338,6 +430,7 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
         resets_at,
         seven_day_remaining,
         seven_day_eta_minutes,
+        weekly_days: weekly_breakdown,
         verdict,
         is_estimate,
         plan,
@@ -441,5 +534,104 @@ mod tests {
     fn verdict_is_safe_when_not_burning() {
         let v = build_verdict(None, Some(90.0));
         assert_eq!(v.key, "verdict.safe");
+    }
+
+    fn dates(n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("2026-08-{:02}", i + 3)).collect()
+    }
+
+    #[test]
+    fn allocated_percents_sum_to_official_utilization() {
+        let d = dates(7);
+        // 다른 기기 사용분이 있어 로컬 토큰만으로는 47%가 안 나오는 상황.
+        let usage = [0, 1_390, 720, 300, 0, 0, 0];
+        let days = allocate(&d, &usage, 47.0, "2026-08-06");
+        let sum: f64 = days.iter().map(|x| x.daily_percent).sum();
+        assert!((sum - 47.0).abs() < 1e-9, "합계가 공식 사용률과 달라졌다: {sum}");
+        assert!((days.last().unwrap().cumulative_percent - 47.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn allocation_is_proportional_to_daily_usage() {
+        let d = dates(2);
+        // 3:1로 썼으면 퍼센트도 3:1이어야 한다.
+        let days = allocate(&d, &[300, 100], 40.0, "2026-08-04");
+        assert!((days[0].daily_percent - 30.0).abs() < 1e-9);
+        assert!((days[1].daily_percent - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cumulative_percent_is_monotonic() {
+        let d = dates(5);
+        let days = allocate(&d, &[10, 0, 30, 5, 1], 80.0, "2026-08-07");
+        for pair in days.windows(2) {
+            assert!(pair[1].cumulative_percent >= pair[0].cumulative_percent);
+        }
+    }
+
+    #[test]
+    fn marks_today_and_future_slots() {
+        let d = dates(7); // 08-03 ~ 08-09
+        let days = allocate(&d, &[1, 1, 1, 1, 0, 0, 0], 20.0, "2026-08-06");
+        let today = days.iter().find(|x| x.is_today).expect("오늘이 있어야 한다");
+        assert_eq!(today.date, "08/06");
+        assert_eq!(days.iter().filter(|x| x.is_future).count(), 3); // 07,08,09
+        assert!(!days[0].is_future);
+    }
+
+    #[test]
+    fn allocation_is_empty_without_local_usage() {
+        // 로컬 토큰이 하나도 없으면 안분할 분모가 없다.
+        assert!(allocate(&dates(7), &[0; 7], 30.0, "2026-08-06").is_empty());
+    }
+
+    #[test]
+    fn midnight_reset_spans_seven_slots() {
+        use chrono::{Duration, Local};
+        let midnight = Local::now()
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .and_then(|d| d.and_local_timezone(Local).single())
+            .unwrap();
+        let reset = midnight + Duration::days(7);
+        assert_eq!(window_dates(reset.timestamp_millis()).len(), 7);
+    }
+
+    #[test]
+    fn mid_day_reset_spans_eight_slots() {
+        use chrono::{Duration, Local};
+        // 하루 중간에 리셋되면 양끝이 부분일이라 8칸에 걸친다.
+        let noon = Local::now()
+            .date_naive()
+            .and_hms_opt(12, 0, 0)
+            .and_then(|d| d.and_local_timezone(Local).single())
+            .unwrap();
+        let reset = noon + Duration::days(7);
+        assert_eq!(window_dates(reset.timestamp_millis()).len(), 8);
+    }
+
+    #[test]
+    fn weekday_index_counts_from_monday() {
+        assert_eq!(weekday_index("2026-08-03"), 0); // 월
+        assert_eq!(weekday_index("2026-08-06"), 3); // 목
+        assert_eq!(weekday_index("2026-08-09"), 6); // 일
+    }
+
+    #[test]
+    fn weekly_days_is_empty_when_reset_already_passed() {
+        let now = 1_700_000_000_000i64;
+        let stale = chrono::DateTime::from_timestamp_millis(now - 60_000)
+            .unwrap()
+            .to_rfc3339();
+        let official = OfficialUsage {
+            five_hour_utilization: 10.0,
+            five_hour_resets_at: String::new(),
+            seven_day_utilization: 40.0,
+            seven_day_resets_at: stale,
+            plan: None,
+            rate_limit_multiplier: None,
+            is_estimate: false,
+        };
+        assert!(weekly_days("Claude Code", &official, now, 0).is_empty());
     }
 }

@@ -96,6 +96,29 @@ pub struct Verdict {
     pub reset_minutes: Option<f64>,
 }
 
+/// 주간 윈도우 안의 하루 — 그날이 주간 한도의 몇 %를 썼는지.
+///
+/// 주간 잔여율 한 줄만으로는 어느 날 몰아 썼는지 알 수 없어, 리셋 시각 기준
+/// 윈도우를 날짜로 쪼개 보여준다.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WeeklyDay {
+    /// 표시용 "MM/DD".
+    pub date: String,
+    /// 0=월 ~ 6=일. 프론트가 요일 라벨을 현지화한다.
+    pub weekday: u8,
+    /// 그날 사용량 (토큰).
+    pub usage: u64,
+    /// 그날이 쓴 주간 한도 비율 (%).
+    pub daily_percent: f64,
+    /// 그날까지 누적된 주간 한도 비율 (%).
+    pub cumulative_percent: f64,
+    /// 오늘인지 (강조용).
+    pub is_today: bool,
+    /// 아직 오지 않은 날인지 (빈 슬롯).
+    pub is_future: bool,
+}
+
 /// 윈도우 내 모델별 사용량 (실시간 카드용). model을 채우는 도구(현재 Claude)만 비어있지 않음.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -154,6 +177,8 @@ pub struct RunwayStatus {
     /// 주간 한도 소진까지 예상 시간(분). 윈도우 경과 대비 소진 페이스로 계산.
     /// 리셋 전에 소진되지 않을 페이스면 None.
     pub seven_day_eta_minutes: Option<f64>,
+    /// 현재 주간 윈도우의 일별 소진 분해. 주간 한도가 없는 도구는 빈 배열.
+    pub weekly_days: Vec<WeeklyDay>,
     /// 카드 맨 위 한 줄 결론.
     pub verdict: Option<Verdict>,
     /// 잔여율이 공식 값이 아니라 가정한 한도 기반 추정치인지.

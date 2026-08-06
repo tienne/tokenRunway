@@ -100,6 +100,25 @@ pub(crate) fn date_start_ms(date: &str) -> Option<i64> {
         .map(|dt| dt.timestamp_millis())
 }
 
+/// 도구의 날짜 구간별 일별 사용량 (없는 날은 0).
+///
+/// 오늘은 확정 전이라 롤업에 저장되지 않으므로(사용률만 기록된 껍데기일 수 있다)
+/// 호출자가 실시간으로 계산한 오늘 값을 넘겨 덮어쓴다.
+pub fn daily_usage(tool: &str, dates: &[String], today: &str, today_usage: u64) -> Vec<u64> {
+    let guard = locked();
+    let tool_map = guard.as_ref().and_then(|s| s.get(tool));
+    dates
+        .iter()
+        .map(|d| {
+            if d == today {
+                today_usage
+            } else {
+                tool_map.and_then(|m| m.get(d)).map_or(0, |r| r.usage)
+            }
+        })
+        .collect()
+}
+
 /// 오늘 관측한 사용률의 최댓값을 기록한다 (값이 올라갔을 때만 저장).
 ///
 /// 사용률은 과거 JSONL로 재계산할 수 없어 관측 시점에 남겨야 한다.
