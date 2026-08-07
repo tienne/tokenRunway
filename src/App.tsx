@@ -572,7 +572,7 @@ function Dashboard() {
 
           {s.note && (
             <p className={s.note.startsWith("error.") ? "note-error" : "note"}>
-              {t(lang, s.note)}
+              {t(lang, s.note, { tool: s.tool })}
             </p>
           )}
         </section>

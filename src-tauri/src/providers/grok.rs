@@ -179,8 +179,10 @@ fn read_token(root: &Path) -> Result<String, &'static str> {
         }
         return Ok(key.to_string());
     }
+    // 만료여도 refresh_token이 남아 있어 CLI를 켜면 auth.json이 갱신된다 —
+    // 우리는 갱신을 대신하지 않으므로 재로그인이 아니라 CLI 실행을 안내한다.
     Err(if expired {
-        "error.expired"
+        "error.stale_token"
     } else {
         "error.no_token"
     })
@@ -208,7 +210,7 @@ fn fetch_billing(root: &Path) -> (Option<OfficialUsage>, Option<&'static str>, i
     let resp = match resp {
         Ok(r) => r,
         Err(ureq::Error::Status(401, _)) | Err(ureq::Error::Status(403, _)) => {
-            return (None, Some("error.expired"), DEFAULT_PERIOD_SECS)
+            return (None, Some("error.stale_token"), DEFAULT_PERIOD_SECS)
         }
         Err(ureq::Error::Status(429, _)) => {
             return (None, Some("error.rate_limit"), DEFAULT_PERIOD_SECS)

@@ -217,6 +217,7 @@ pub trait UsageProvider: Send + Sync {
 
     /// 공식 사용률을 못 받은 이유 (i18n 키). 정상이거나 해당 없으면 None.
     /// 예: "error.expired", "error.rate_limit", "error.no_token".
+    /// 문구는 `{tool}`에 `tool_name()`이 치환되므로 도구명을 박아 넣지 않는다.
     fn status_note(&self) -> Option<String> {
         None
     }
