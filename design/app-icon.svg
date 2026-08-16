@@ -1,16 +1,26 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+ <!-- 트레이 아이콘(gen-tray-frames.py)의 모래시계를 그대로 확대한 형태.
+      44x44 좌표계의 x11~33 / y7~37을 1024 캔버스 중앙에 20.667배로 놓았다. -->
  <defs>
   <linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#10182E"/><stop offset="1" stop-color="#243056"/></linearGradient>
-  <linearGradient id="fill" x1="0" y1="788" x2="0" y2="430" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#30D158"/><stop offset="0.55" stop-color="#A8E80A"/><stop offset="1" stop-color="#FFD60A"/></linearGradient>
+  <linearGradient id="sand" x1="0" y1="822" x2="0" y2="338" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#30D158"/><stop offset="0.55" stop-color="#A8E80A"/><stop offset="1" stop-color="#FFD60A"/></linearGradient>
+  <clipPath id="top"><polygon points="305,223 719,223 512,512"/></clipPath>
+  <clipPath id="bot"><polygon points="512,533 719,822 305,822"/></clipPath>
  </defs>
  <rect width="1024" height="1024" rx="228" fill="url(#bg)"/>
- <!-- 빈 슬롯 (소진/한도) -->
- <rect x="372" y="236" width="280" height="84" rx="24" fill="none" stroke="#3A4A66" stroke-width="7"/>
- <rect x="372" y="344" width="280" height="84" rx="24" fill="none" stroke="#3A4A66" stroke-width="7"/>
- <!-- 채워진 토큰 (잔여) -->
- <rect x="372" y="452" width="280" height="84" rx="24" fill="url(#fill)"/>
- <rect x="372" y="560" width="280" height="84" rx="24" fill="url(#fill)"/>
- <rect x="372" y="668" width="280" height="84" rx="24" fill="url(#fill)"/>
+
+ <!-- 남은 모래(위) / 흘러내린 모래(아래) — 잔여율 75% 상태 -->
+ <rect x="284" y="295" width="455" height="217" fill="url(#sand)" clip-path="url(#top)"/>
+ <rect x="284" y="750" width="455" height="72" fill="url(#sand)" clip-path="url(#bot)"/>
+ <!-- 목을 지나 떨어지는 줄기 -->
+ <path d="M512 512 V750" stroke="#FFD60A" stroke-width="13" stroke-linecap="round"/>
+
+ <!-- 유리 윤곽 -->
+ <path d="M284 202 H739" stroke="#E8EDF7" stroke-width="42" stroke-linecap="round"/>
+ <path d="M284 822 H739" stroke="#E8EDF7" stroke-width="42" stroke-linecap="round"/>
+ <polygon points="305,223 719,223 512,512" fill="none" stroke="#E8EDF7" stroke-width="38" stroke-linejoin="round"/>
+ <polygon points="512,533 719,822 305,822" fill="none" stroke="#E8EDF7" stroke-width="38" stroke-linejoin="round"/>
+
  <!-- 스파클 (AI) -->
- <path d="M0,-1 C0.12,-0.35 0.35,-0.12 1,0 C0.35,0.12 0.12,0.35 0,1 C-0.12,0.35 -0.35,0.12 -1,0 C-0.35,-0.12 -0.12,-0.35 0,-1 Z" transform="translate(700 268) scale(82)" fill="#FFFFFF"/>
+ <path d="M0,-1 C0.12,-0.35 0.35,-0.12 1,0 C0.35,0.12 0.12,0.35 0,1 C-0.12,0.35 -0.35,0.12 -1,0 C-0.35,-0.12 -0.12,-0.35 0,-1 Z" transform="translate(812 232) scale(58)" fill="#FFFFFF"/>
 </svg>
