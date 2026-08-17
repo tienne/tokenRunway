@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for app windows",
-  "windows": ["main", "settings", "history"],
+  "windows": ["main", "settings", "history", "pet"],
   "permissions": [
     "core:default",
     "opener:default",
@@ -10,6 +10,9 @@
     "positioner:default",
     "autostart:default",
     "core:window:allow-set-size",
-    "updater:default"
+    "core:window:allow-set-position",
+    "core:window:allow-primary-monitor",
+    "updater:default",
+    "dialog:default"
   ]
 }

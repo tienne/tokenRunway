@@ -1,6 +1,11 @@
-import { useEffect, useState, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { useEffect, useState, useCallback, useRef } from "react";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import {
+  getCurrentWindow,
+  LogicalSize,
+  LogicalPosition,
+  primaryMonitor,
+} from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import {
   isPermissionGranted,
@@ -8,8 +13,534 @@ import {
 } from "@tauri-apps/plugin-notification";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { t, resolveLang, type Lang } from "./i18n";
+import petIdle from "./assets/pet/default/idle.svg";
+import petGood from "./assets/pet/default/good.svg";
+import petWarn from "./assets/pet/default/warn.svg";
+import petDanger from "./assets/pet/default/danger.svg";
+import petSpriteSheet from "./assets/pet/default/sprite.webp";
 import "./App.css";
+
+type PetLevel = "idle" | "good" | "warn" | "danger";
+
+const BUILTIN_PET: Record<PetLevel, string> = {
+  idle: petIdle,
+  good: petGood,
+  warn: petWarn,
+  danger: petDanger,
+};
+
+/** 기본 내장 pet — "루니봇", Token Runway 전용으로 만든 오리지널 3D 로봇 새 캐릭터
+ * (192×208, 8열×9행, 표준 Codex pet 레이아웃과 동일한 9개 애니메이션).
+ * sheet는 이미 번들된 정적 자산 URL이라 convertFileSrc가 필요 없다
+ * (커스텀 번들의 sheet는 파일시스템 절대경로라 convertFileSrc가 필요한 것과 다르다). */
+const BUILTIN_SPRITE: PetSprite = {
+  sheet: petSpriteSheet,
+  frameWidth: 192,
+  frameHeight: 208,
+  columns: 8,
+  rows: 9,
+  fps: 8,
+  defaultAnimation: "idle",
+  animations: {
+    idle: { row: 0, frames: 6, frameDurationsMs: [450, 450, 450, 450, 450, 450] },
+    "running-right": {
+      row: 1,
+      frames: 8,
+      frameDurationsMs: [120, 120, 120, 120, 120, 120, 120, 220],
+    },
+    "running-left": {
+      row: 2,
+      frames: 8,
+      frameDurationsMs: [120, 120, 120, 120, 120, 120, 120, 220],
+    },
+    waving: { row: 3, frames: 4, frameDurationsMs: [140, 140, 140, 280] },
+    jumping: { row: 4, frames: 5, frameDurationsMs: [150, 150, 150, 150, 260] },
+    failed: {
+      row: 5,
+      frames: 8,
+      frameDurationsMs: [140, 140, 140, 140, 140, 140, 140, 240],
+    },
+    waiting: { row: 6, frames: 6, frameDurationsMs: [220, 220, 220, 220, 220, 320] },
+    running: { row: 7, frames: 6, frameDurationsMs: [160, 160, 160, 160, 160, 280] },
+    review: { row: 8, frames: 6, frameDurationsMs: [200, 200, 200, 200, 200, 300] },
+  },
+};
+
+/** 쉴 때 idle 하나만 반복하지 않도록 섞어 쓰는 포즈 후보 — 번들이 실제로 갖고 있는 것만 쓴다. */
+const REST_POSE_CANDIDATES = ["idle", "waving", "waiting", "review"];
+
+/** pet 걷기 속도 (논리픽셀/틱) — 경보 레벨이 급할수록 바쁘게 움직인다. */
+const PET_SPEED: Record<PetLevel, number> = {
+  idle: 0.4,
+  good: 0.5,
+  warn: 1.0,
+  danger: 1.8,
+};
+const PET_SIZE = 96;
+const PET_TICK_MS = 50;
+
+/** 스프라이트시트 안의 애니메이션 한 줄: row(0-based y) + frames(가로 프레임 수). */
+interface SpriteAnimation {
+  row: number;
+  frames: number;
+  frameDurationsMs?: number[];
+}
+
+/** Codex pet 포맷(pet.json+spritesheet) — 프레임 격자·애니메이션 목록. */
+interface PetSprite {
+  sheet: string;
+  frameWidth: number;
+  frameHeight: number;
+  columns: number;
+  rows: number;
+  fps: number;
+  defaultAnimation?: string;
+  animations: Record<string, SpriteAnimation>;
+}
+
+interface PetBundle {
+  id: string;
+  name: string;
+  dir: string;
+  states?: { idle: string; good: string; warn: string; danger: string };
+  sprite?: PetSprite;
+}
+
+/** 전체 도구 중 최악의 verdict — pet이 반응할 상태. danger가 하나라도 있으면 즉시 확정. */
+function worstPetLevel(statuses: RunwayStatus[]): PetLevel {
+  let worst: PetLevel = "idle";
+  for (const s of statuses) {
+    const level = s.verdict?.level;
+    if (level === "danger") return "danger";
+    if (level === "warn") worst = "warn";
+    else if (level === "good" && worst === "idle") worst = "good";
+  }
+  return worst;
+}
+
+function petImageSrc(level: PetLevel, bundle: PetBundle | null): string {
+  const custom = bundle?.states?.[level];
+  return custom ? convertFileSrc(custom) : BUILTIN_PET[level];
+}
+
+function petErrorKey(raw: string): string {
+  return raw.split(":")[0];
+}
+
+// --- 스프라이트시트 애니메이션 (Codex pet 포맷) ---
+// Orca(stablyai/orca)의 sprite-animation-css.ts를 그대로 포팅 — 프레임별 보유시간이
+// 균일하지 않은(idle이 마지막 프레임에서 오래 쉬는 등) Codex 페이싱은 steps()로 표현이
+// 안 돼서, 프레임마다 step-end 정지점을 하나씩 찍은 @keyframes를 만든다.
+const MAX_FRAME_DURATION_MS = 60_000;
+const SPRITE_DISPLAY_HEIGHT = 88; // .pet-sprite와 동일한 표시 높이
+
+function validFrameDurations(
+  ms: number[] | undefined,
+  frames: number
+): number[] | null {
+  if (
+    Array.isArray(ms) &&
+    ms.length === frames &&
+    ms.every((v) => Number.isFinite(v) && v > 0 && v <= MAX_FRAME_DURATION_MS)
+  ) {
+    return ms;
+  }
+  return null;
+}
+
+function stepEndStops(
+  durations: number[],
+  totalMs: number,
+  frameWidth: number,
+  scale: number,
+  rowOffsetY: number
+): string[] | null {
+  const stops: string[] = [];
+  let elapsed = 0;
+  let prevPct = -1;
+  for (let i = 0; i < durations.length; i++) {
+    const pct = +((elapsed / totalMs) * 100).toFixed(4);
+    if (pct <= prevPct || pct >= 100) return null;
+    prevPct = pct;
+    const x = -(i * frameWidth * scale);
+    stops.push(`${pct}% { background-position: ${x}px ${rowOffsetY}px; }`);
+    elapsed += durations[i];
+  }
+  return stops;
+}
+
+function buildSpriteAnimationCss(opts: {
+  keyframesId: string;
+  frames: number;
+  fps: number;
+  frameWidth: number;
+  scale: number;
+  rowOffsetY: number;
+  frameDurationsMs?: number[];
+}): { keyframesCss: string; animationCss: string } {
+  const name = `pet-${opts.keyframesId}`;
+  const durations = validFrameDurations(opts.frameDurationsMs, opts.frames);
+  if (durations) {
+    const totalMs = durations.reduce((s, v) => s + v, 0);
+    const stops = stepEndStops(
+      durations,
+      totalMs,
+      opts.frameWidth,
+      opts.scale,
+      opts.rowOffsetY
+    );
+    if (stops) {
+      return {
+        keyframesCss: `@keyframes ${name} { ${stops.join(" ")} }`,
+        animationCss: `${name} ${totalMs / 1000}s step-end infinite`,
+      };
+    }
+  }
+  const duration = Math.max(0.1, opts.frames / Math.max(0.1, opts.fps));
+  const endX = -(opts.frames * opts.frameWidth * opts.scale);
+  return {
+    keyframesCss: `@keyframes ${name} { from { background-position: 0px ${opts.rowOffsetY}px; } to { background-position: ${endX}px ${opts.rowOffsetY}px; } }`,
+    animationCss: `${name} ${duration}s steps(${opts.frames}) infinite`,
+  };
+}
+
+/** 상태(danger 등)와 이동 방향에 맞는 애니메이션을 고른다. 번들에 없는 이름은 건너뛴다.
+ * restPose는 쉬는 동안 idle 대신 쓸 포즈 이름(그 쉬는 구간 동안 고정) — 안 쉬는 중이면 null. */
+function pickSpriteAnimation(
+  sprite: PetSprite,
+  level: PetLevel,
+  dir: 1 | -1,
+  dragging: boolean,
+  restPose: string | null
+): string {
+  const has = (n: string) => Object.prototype.hasOwnProperty.call(sprite.animations, n);
+  if (dragging && has("jumping")) return "jumping";
+  if (level === "danger" && has("failed")) return "failed";
+  if (level === "idle" && has("idle")) return "idle";
+  if (restPose && has(restPose)) return restPose;
+  const dirName = dir === 1 ? "running-right" : "running-left";
+  if (has(dirName)) return dirName;
+  if (has("running")) return "running";
+  if (sprite.defaultAnimation && has(sprite.defaultAnimation)) {
+    return sprite.defaultAnimation;
+  }
+  if (has("idle")) return "idle";
+  return Object.keys(sprite.animations)[0];
+}
+
+/** 화면 전체를 돌아다니는 데스크톱 pet 오버레이 창의 콘텐츠. */
+/** 클릭으로 칠지, 드래그로 칠지 가르는 최소 이동 거리(px). */
+const DRAG_THRESHOLD = 4;
+/** 배회 반경 — 화면 전체가 아니라 홈 중심에서 이 거리 안에서만 랜덤하게 돌아다닌다. */
+const WANDER_RADIUS = 160;
+/** 목표 지점에 도착했다고 볼 거리(px). */
+const WANDER_ARRIVE_DIST = 4;
+/** 도착 후 idle로 쉬는 시간 범위(ms) — 이 사이에서 매번 랜덤. */
+const REST_MS_MIN = 2000;
+const REST_MS_MAX = 6000;
+
+/** center에서 반경 WANDER_RADIUS 안의 임의 지점을 고르되, 화면(screen) 밖으로는 안 나간다.
+ * 몇 번 뽑아봐도 화면 안에 못 들어오면(중심이 모서리 쪽) 중심 자체를 목표로 삼는다. */
+function pickWanderTarget(
+  center: { x: number; y: number },
+  screen: { minX: number; maxX: number; minY: number; maxY: number }
+): { x: number; y: number } {
+  for (let i = 0; i < 8; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const dist = Math.random() * WANDER_RADIUS;
+    const x = center.x + Math.cos(angle) * dist;
+    const y = center.y + Math.sin(angle) * dist;
+    if (x >= screen.minX && x <= screen.maxX && y >= screen.minY && y <= screen.maxY) {
+      return { x, y };
+    }
+  }
+  return { x: center.x, y: center.y };
+}
+
+/** 쉬는 구간 하나를 시작할 때 idle 대신 쓸 포즈를 랜덤으로 고른다 — 후보 중 번들에 실제로
+ * 있는 것만. 하나도 없으면(순수 idle만 있는 번들) "idle"로 고정. */
+function pickRestPose(sprite: PetSprite): string {
+  const available = REST_POSE_CANDIDATES.filter((name) =>
+    Object.prototype.hasOwnProperty.call(sprite.animations, name)
+  );
+  if (available.length === 0) return "idle";
+  return available[Math.floor(Math.random() * available.length)];
+}
+
+function PetOverlay() {
+  const [level, setLevel] = useState<PetLevel>("idle");
+  const [bundle, setBundle] = useState<PetBundle | null>(null);
+  const [src, setSrc] = useState(() => petImageSrc("idle", null));
+  const [dir, setDir] = useState<1 | -1>(1);
+  const [dragging, setDragging] = useState(false);
+  // 쉬는 동안 보여줄 포즈 이름(idle/waving/waiting 등) — 안 쉬는 중이면 null.
+  const [restPose, setRestPose] = useState<string | null>(null);
+  const dirRef = useRef<1 | -1>(1);
+  const xRef = useRef(0);
+  const yRef = useRef(700);
+  // 드래그를 클램프할 화면 전체 작업영역.
+  const screenRef = useRef({ minX: 0, maxX: 800, minY: 0, maxY: 900 });
+  // 배회 중심 — 이 지점 반경 WANDER_RADIUS 안에서만 목표를 고른다. 드래그로 옮기면 재설정.
+  const centerRef = useRef({ x: 0, y: 700 });
+  // 지금 향해 걷고 있는 목표 지점.
+  const targetRef = useRef({ x: 0, y: 700 });
+  // 목표에 도착한 뒤 이 시각(ms)까지는 안 움직이고 쉰다. 0이면 쉬는 중 아님.
+  const restUntilRef = useRef(0);
+  const restPoseRef = useRef<string | null>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  // 드래그 상태 — 패트롤 루프와 같은 xRef/yRef를 공유해 손을 떼면 그 자리에서 이어걷는다.
+  const draggingRef = useRef(false);
+  const dragMovedRef = useRef(false);
+  const dragOffsetRef = useRef({ x: 0, y: 0 });
+  const dragBaselineXRef = useRef(0);
+  const activePointerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    document.documentElement.style.background = "transparent";
+    document.body.style.background = "transparent";
+  }, []);
+
+  // 상태 폴링 — Dashboard와 동일한 get_runway 재사용, 새 이벤트 채널 없음.
+  useEffect(() => {
+    async function poll() {
+      try {
+        const [statuses, s] = await Promise.all([
+          invoke<RunwayStatus[]>("get_runway"),
+          invoke<Settings>("get_settings"),
+        ]);
+        setLevel(worstPetLevel(statuses));
+        setBundle(s.petBundles.find((b) => b.id === s.activePetBundleId) ?? null);
+      } catch {
+        /* noop */
+      }
+    }
+    poll();
+    const id = setInterval(poll, 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    // 내장 스프라이트(bundle===null)나 커스텀 스프라이트는 이 정지 이미지 state가 필요 없다 —
+    // 커스텀 "정지 이미지 4장" 번들(states만 있고 sprite는 없는 경우)에만 쓰인다.
+    if (bundle && !bundle.sprite) {
+      setSrc(petImageSrc(level, bundle));
+    }
+  }, [level, bundle]);
+
+  // 주 모니터 작업영역 경계 계산 — 드래그는 작업영역 전체, 배회는 그 안의 좁은 반경.
+  // 종료 시점에 저장해둔 위치가 있으면(petLastX/Y) 거기서 이어서 시작한다.
+  useEffect(() => {
+    Promise.all([primaryMonitor(), invoke<Settings>("get_settings")]).then(([m, s]) => {
+      if (!m) return;
+      const sf = m.scaleFactor || 1;
+      const workX = m.workArea.position.x / sf;
+      const workY = m.workArea.position.y / sf;
+      const workW = m.workArea.size.width / sf;
+      const workBottom = (m.workArea.position.y + m.workArea.size.height) / sf;
+      screenRef.current = {
+        minX: workX,
+        maxX: workX + workW - PET_SIZE,
+        minY: workY,
+        maxY: workBottom - PET_SIZE - 8,
+      };
+      if (s.petLastX != null && s.petLastY != null) {
+        xRef.current = Math.min(
+          screenRef.current.maxX,
+          Math.max(screenRef.current.minX, s.petLastX)
+        );
+        yRef.current = Math.min(
+          screenRef.current.maxY,
+          Math.max(screenRef.current.minY, s.petLastY)
+        );
+      } else {
+        xRef.current = workX;
+        yRef.current = screenRef.current.maxY;
+      }
+      centerRef.current = { x: xRef.current, y: yRef.current };
+      targetRef.current = pickWanderTarget(centerRef.current, screenRef.current);
+      getCurrentWindow()
+        .setPosition(new LogicalPosition(xRef.current, yRef.current))
+        .catch(() => {});
+    });
+  }, []);
+
+  // 배회 루프 — 목표 지점을 향해 상하좌우 대각선 자유롭게 걷다가, 도착하면 잠깐(REST_MS)
+  // idle로 멈춰 쉬고, 그다음 홈 중심 반경 WANDER_RADIUS 안에서 새 목표를 뽑아 다시 걷는다.
+  // 드래그 중이거나 idle(할 일 없음) 레벨일 땐 항상 멈춘다.
+  // 정지 이미지 모드(커스텀 4장 번들)만 좌우반전 CSS가 필요 — 스프라이트는 방향별 그림이 따로 있다.
+  useEffect(() => {
+    const win = getCurrentWindow();
+    const isStaticImageMode = !!bundle && !bundle.sprite;
+    const spriteForRest = bundle ? bundle.sprite : BUILTIN_SPRITE;
+    const id = setInterval(() => {
+      if (draggingRef.current || level === "idle") return;
+      const now = Date.now();
+      if (now < restUntilRef.current) {
+        return; // 쉬는 중 — 움직이지 않는다.
+      }
+      if (restPoseRef.current !== null) {
+        restPoseRef.current = null;
+        setRestPose(null);
+      }
+      const target = targetRef.current;
+      const dx = target.x - xRef.current;
+      const dy = target.y - yRef.current;
+      const dist = Math.hypot(dx, dy);
+      if (dist < WANDER_ARRIVE_DIST) {
+        targetRef.current = pickWanderTarget(centerRef.current, screenRef.current);
+        restUntilRef.current = now + REST_MS_MIN + Math.random() * (REST_MS_MAX - REST_MS_MIN);
+        const pose = spriteForRest ? pickRestPose(spriteForRest) : "idle";
+        restPoseRef.current = pose;
+        setRestPose(pose);
+        return;
+      }
+      const speed = PET_SPEED[level];
+      const nx = xRef.current + (dx / dist) * speed;
+      const ny = yRef.current + (dy / dist) * speed;
+      xRef.current = nx;
+      yRef.current = ny;
+      if (Math.abs(dx) > 2) {
+        const newDir: 1 | -1 = dx > 0 ? 1 : -1;
+        if (dirRef.current !== newDir) {
+          dirRef.current = newDir;
+          if (isStaticImageMode && wrapRef.current) {
+            wrapRef.current.style.transform = `scaleX(${newDir})`;
+          }
+          setDir(newDir);
+        }
+      }
+      win.setPosition(new LogicalPosition(nx, ny)).catch(() => {});
+    }, PET_TICK_MS);
+    return () => clearInterval(id);
+  }, [level, bundle]);
+
+  function onPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.button !== 0 || activePointerRef.current !== null) return;
+    activePointerRef.current = e.pointerId;
+    draggingRef.current = true;
+    setDragging(true);
+    dragMovedRef.current = false;
+    dragOffsetRef.current = { x: e.screenX - xRef.current, y: e.screenY - yRef.current };
+    dragBaselineXRef.current = e.screenX;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }
+
+  function onPointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.pointerId !== activePointerRef.current) return;
+    const dx = e.screenX - dragBaselineXRef.current;
+    if (!dragMovedRef.current && Math.abs(dx) >= DRAG_THRESHOLD) {
+      dragMovedRef.current = true;
+    }
+    if (dx >= DRAG_THRESHOLD) {
+      dragBaselineXRef.current = e.screenX;
+      if (dirRef.current !== 1) {
+        dirRef.current = 1;
+        setDir(1);
+      }
+    } else if (dx <= -DRAG_THRESHOLD) {
+      dragBaselineXRef.current = e.screenX;
+      if (dirRef.current !== -1) {
+        dirRef.current = -1;
+        setDir(-1);
+      }
+    }
+    const { minX, maxX, minY, maxY } = screenRef.current;
+    const nx = Math.min(maxX, Math.max(minX, e.screenX - dragOffsetRef.current.x));
+    const ny = Math.min(maxY, Math.max(minY, e.screenY - dragOffsetRef.current.y));
+    xRef.current = nx;
+    yRef.current = ny;
+    if (!bundle?.sprite && wrapRef.current) {
+      wrapRef.current.style.transform = `scaleX(${dirRef.current})`;
+    }
+    getCurrentWindow().setPosition(new LogicalPosition(nx, ny)).catch(() => {});
+  }
+
+  function endDrag(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.pointerId !== activePointerRef.current) return;
+    activePointerRef.current = null;
+    draggingRef.current = false;
+    setDragging(false);
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    // 실제로 끌지 않고 그냥 눌렀다 뗀 거면 클릭으로 취급해 팝오버를 연다.
+    if (!dragMovedRef.current) {
+      invoke("open_main_window").catch(() => {});
+    } else {
+      // 놓은 자리를 새 배회 중심으로 삼는다 — 원래 반경으로 되돌아가지 않는다.
+      centerRef.current = { x: xRef.current, y: yRef.current };
+      targetRef.current = pickWanderTarget(centerRef.current, screenRef.current);
+    }
+  }
+
+  const dragHandlers = {
+    onPointerDown,
+    onPointerMove,
+    onPointerUp: endDrag,
+    onPointerCancel: endDrag,
+    onLostPointerCapture: endDrag,
+    onContextMenu: (e: React.MouseEvent) => {
+      e.preventDefault();
+      invoke("show_pet_context_menu").catch(() => {});
+    },
+  };
+
+  // 커스텀 번들에 sprite가 있으면 그걸, 커스텀 번들 자체가 없으면(기본 펫) 내장
+  // 스프라이트를 쓴다. 커스텀 sheet는 파일시스템 절대경로라 convertFileSrc가 필요하고,
+  // 내장 sheet는 이미 번들된 정적 자산 URL이라 그대로 쓴다.
+  const sprite = bundle ? bundle.sprite : BUILTIN_SPRITE;
+  const spriteIsCustomFile = !!bundle?.sprite;
+
+  if (sprite) {
+    const scale = SPRITE_DISPLAY_HEIGHT / sprite.frameHeight;
+    const dispW = sprite.frameWidth * scale;
+    const animName = pickSpriteAnimation(sprite, level, dir, dragging, restPose);
+    const anim = sprite.animations[animName];
+    const rowOffsetY = -(anim.row * sprite.frameHeight * scale);
+    const { keyframesCss, animationCss } = buildSpriteAnimationCss({
+      keyframesId: animName.replace(/[^a-zA-Z0-9_-]/g, "_"),
+      frames: anim.frames,
+      fps: sprite.fps,
+      frameWidth: sprite.frameWidth,
+      scale,
+      rowOffsetY,
+      frameDurationsMs: anim.frameDurationsMs,
+    });
+    const sheetUrl = spriteIsCustomFile ? convertFileSrc(sprite.sheet) : sprite.sheet;
+    return (
+      <div ref={wrapRef} className="pet-overlay" {...dragHandlers}>
+        <style>{keyframesCss}</style>
+        <div
+          className="pet-sprite-frame"
+          style={{
+            width: dispW,
+            height: SPRITE_DISPLAY_HEIGHT,
+            backgroundImage: `url(${sheetUrl})`,
+            backgroundSize: `${sprite.columns * sprite.frameWidth * scale}px ${
+              sprite.rows * sprite.frameHeight * scale
+            }px`,
+            animation: animationCss,
+          }}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div ref={wrapRef} className="pet-overlay" {...dragHandlers}>
+      <img
+        src={src}
+        alt=""
+        className="pet-sprite pet-bob"
+        onError={() => setSrc(BUILTIN_PET[level])}
+      />
+    </div>
+  );
+}
 
 interface Insight {
   key: string;
@@ -86,6 +617,11 @@ interface Settings {
   hideInactive: boolean;
   trayShowPercent: boolean;
   trayShowReset: boolean;
+  petEnabled: boolean;
+  petBundles: PetBundle[];
+  activePetBundleId: string | null;
+  petLastX: number | null;
+  petLastY: number | null;
 }
 
 interface ToolInfo {
@@ -603,7 +1139,13 @@ function SettingsView() {
     hideInactive: false,
     trayShowPercent: true,
     trayShowReset: true,
+    petEnabled: true,
+    petBundles: [],
+    activePetBundleId: null,
+    petLastX: null,
+    petLastY: null,
   });
+  const [petError, setPetError] = useState<string | null>(null);
   const [tools, setTools] = useState<ToolInfo[]>([]);
   const [permGranted, setPermGranted] = useState<boolean | null>(null);
   const [autostart, setAutostart] = useState(false);
@@ -640,6 +1182,41 @@ function SettingsView() {
       ? settings.disabledTools.filter((x) => x !== tool)
       : [...settings.disabledTools, tool];
     update({ disabledTools: disabled });
+  }
+
+  async function pickPetBundle() {
+    const dir = await openDialog({ directory: true, multiple: false });
+    if (!dir || Array.isArray(dir)) return;
+    setPetError(null);
+    try {
+      const bundle = await invoke<PetBundle>("import_pet_bundle", {
+        sourceDir: dir,
+      });
+      await update({
+        petBundles: [...settings.petBundles, bundle],
+        activePetBundleId: bundle.id,
+      });
+    } catch (e) {
+      setPetError(String(e));
+    }
+  }
+
+  function selectPetBundle(id: string | null) {
+    update({ activePetBundleId: id });
+  }
+
+  async function deletePetBundle(id: string) {
+    try {
+      await invoke("delete_pet_bundle", { id });
+      await update({
+        petBundles: settings.petBundles.filter((b) => b.id !== id),
+        activePetBundleId:
+          settings.activePetBundleId === id ? null : settings.activePetBundleId,
+      });
+      setPetError(null);
+    } catch (e) {
+      setPetError(String(e));
+    }
   }
 
   async function askPermission() {
@@ -880,6 +1457,59 @@ function SettingsView() {
             onChange={(e) => update({ hideInactive: e.target.checked })}
           />
         </label>
+
+        <hr className="setting-divider" />
+
+        <label className="setting-row toggle-row">
+          <span>{tr("pet.enable")}</span>
+          <input
+            type="checkbox"
+            checked={settings.petEnabled}
+            onChange={(e) => update({ petEnabled: e.target.checked })}
+          />
+        </label>
+        {settings.petEnabled && (
+          <div className="pet-settings">
+            <ul className="pet-list">
+              <li
+                className={`pet-list-item${
+                  settings.activePetBundleId === null ? " active" : ""
+                }`}
+              >
+                <button className="link-btn" onClick={() => selectPetBundle(null)}>
+                  {settings.activePetBundleId === null ? "●" : "○"} {tr("pet.currentBuiltin")}
+                </button>
+              </li>
+              {settings.petBundles.map((b) => (
+                <li
+                  key={b.id}
+                  className={`pet-list-item${
+                    settings.activePetBundleId === b.id ? " active" : ""
+                  }`}
+                >
+                  <button className="link-btn" onClick={() => selectPetBundle(b.id)}>
+                    {settings.activePetBundleId === b.id ? "●" : "○"} {b.name}
+                  </button>
+                  <button
+                    className="link-btn pet-delete"
+                    onClick={() => deletePetBundle(b.id)}
+                    title={tr("pet.delete")}
+                  >
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <div className="pet-actions">
+              <button className="link-btn" onClick={pickPetBundle}>
+                {tr("pet.chooseFolder")}
+              </button>
+            </div>
+            {petError && (
+              <p className="perm-warn">⚠️ {tr(petErrorKey(petError))}</p>
+            )}
+          </div>
+        )}
 
         {tools.length > 0 && (
           <div className="setting-tools">
@@ -1437,6 +2067,7 @@ function App() {
   const label = getCurrentWindow().label;
   if (label === "settings") return <SettingsView />;
   if (label === "history") return <HistoryView />;
+  if (label === "pet") return <PetOverlay />;
   return <Dashboard />;
 }
 

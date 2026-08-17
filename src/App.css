@@ -1007,3 +1007,87 @@ h1 {
   margin: 4px 0 0;
   font-variant-numeric: tabular-nums;
 }
+
+/* 데스크톱 pet 오버레이 창 — 투명 배경, 창 전체가 클릭 가능한 스프라이트 영역 */
+.pet-overlay {
+  width: 96px;
+  height: 96px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+}
+
+.pet-overlay:active {
+  cursor: grabbing;
+}
+
+.pet-sprite {
+  width: 88px;
+  height: 88px;
+  pointer-events: none;
+  filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.25));
+}
+
+/* Codex pet 스프라이트시트 프레임 — background-position을 JS가 만든 @keyframes로 스텝 이동 */
+.pet-sprite-frame {
+  background-repeat: no-repeat;
+  pointer-events: none;
+  filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.25));
+}
+
+.pet-bob {
+  animation: pet-bob 0.6s ease-in-out infinite;
+}
+
+@keyframes pet-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+.pet-settings {
+  margin-top: -4px;
+}
+
+.pet-list {
+  list-style: none;
+  margin: 4px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pet-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pet-list-item.active .link-btn {
+  font-weight: 600;
+}
+
+.pet-delete {
+  color: #ff453a;
+  opacity: 0.7;
+}
+
+.pet-delete:hover {
+  opacity: 1;
+}
+
+.pet-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+}

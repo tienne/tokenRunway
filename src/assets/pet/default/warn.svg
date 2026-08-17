@@ -1,0 +1,13 @@
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+ <defs>
+  <clipPath id="body"><path d="M46,26 Q46,18 54,18 L146,18 Q154,18 154,26 Q154,64 108,100 Q154,136 154,174 Q154,182 146,182 L54,182 Q46,182 46,174 Q46,136 92,100 Q46,64 46,26 Z"/></clipPath>
+ </defs>
+ <path d="M46,26 Q46,18 54,18 L146,18 Q154,18 154,26 Q154,64 108,100 Q154,136 154,174 Q154,182 146,182 L54,182 Q46,182 46,174 Q46,136 92,100 Q46,64 46,26 Z" fill="#10182E" fill-opacity="0.12" stroke="#3A4A66" stroke-width="5"/>
+ <rect x="0" y="150" width="200" height="32" fill="#FFC84A" clip-path="url(#body)"/>
+ <line x1="72" y1="46" x2="88" y2="52" stroke="#10182E" stroke-width="5" stroke-linecap="round"/>
+ <line x1="128" y1="46" x2="112" y2="52" stroke="#10182E" stroke-width="5" stroke-linecap="round"/>
+ <circle cx="80" cy="58" r="5" fill="#10182E"/>
+ <circle cx="120" cy="58" r="5" fill="#10182E"/>
+ <path d="M85,76 Q100,68 115,76" fill="none" stroke="#10182E" stroke-width="5" stroke-linecap="round"/>
+ <path d="M138,42 Q146,50 140,60 Q134,50 138,42 Z" fill="#8ECBFF"/>
+</svg>

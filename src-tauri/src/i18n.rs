@@ -58,6 +58,36 @@ impl Lang {
             Lang::En => "Check for Updates...",
         }
     }
+    pub fn menu_pet_hide(self) -> &'static str {
+        match self {
+            Lang::Ko => "펫 숨기기",
+            Lang::En => "Hide Pet",
+        }
+    }
+    pub fn menu_pet_show(self) -> &'static str {
+        match self {
+            Lang::Ko => "펫 표시",
+            Lang::En => "Show Pet",
+        }
+    }
+    pub fn menu_pet_change(self) -> &'static str {
+        match self {
+            Lang::Ko => "펫 변경",
+            Lang::En => "Change Pet",
+        }
+    }
+    pub fn menu_pet_builtin(self) -> &'static str {
+        match self {
+            Lang::Ko => "기본 펫",
+            Lang::En => "Default Pet",
+        }
+    }
+    pub fn menu_pet_import(self) -> &'static str {
+        match self {
+            Lang::Ko => "폴더에서 불러오기...",
+            Lang::En => "Import from Folder...",
+        }
+    }
     /// 시작 시 새 버전 감지 알림 제목 (뒤에 버전 붙임)
     pub fn update_available_title(self) -> &'static str {
         match self {

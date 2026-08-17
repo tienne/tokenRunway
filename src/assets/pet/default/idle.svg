@@ -1,0 +1,10 @@
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+ <defs>
+  <clipPath id="body"><path d="M46,26 Q46,18 54,18 L146,18 Q154,18 154,26 Q154,64 108,100 Q154,136 154,174 Q154,182 146,182 L54,182 Q46,182 46,174 Q46,136 92,100 Q46,64 46,26 Z"/></clipPath>
+ </defs>
+ <path d="M46,26 Q46,18 54,18 L146,18 Q154,18 154,26 Q154,64 108,100 Q154,136 154,174 Q154,182 146,182 L54,182 Q46,182 46,174 Q46,136 92,100 Q46,64 46,26 Z" fill="#10182E" fill-opacity="0.12" stroke="#3A4A66" stroke-width="5"/>
+ <rect x="0" y="100" width="200" height="100" fill="#8E8E93" clip-path="url(#body)"/>
+ <circle cx="80" cy="52" r="6" fill="#10182E"/>
+ <circle cx="120" cy="52" r="6" fill="#10182E"/>
+ <line x1="88" y1="72" x2="112" y2="72" stroke="#10182E" stroke-width="5" stroke-linecap="round"/>
+</svg>

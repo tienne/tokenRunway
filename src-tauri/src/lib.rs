@@ -1,6 +1,7 @@
 mod analytics;
 mod atomicfile;
 mod i18n;
+mod pet;
 mod providers;
 mod rollup;
 mod runway;
@@ -19,7 +20,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
@@ -678,10 +679,145 @@ fn get_settings() -> Settings {
 /// 설정을 저장 (디스크 + 전역). 언어 변경에 대비해 트레이/제목을 다시 현지화.
 #[tauri::command]
 fn set_settings(app: AppHandle, settings: Settings) {
+    let pet_enabled = settings.pet_enabled;
     settings::set(settings);
     refresh_localized_ui(&app);
+    if let Some(win) = app.get_webview_window("pet") {
+        let _ = if pet_enabled { win.show() } else { win.hide() };
+    }
     // 다른 창(대시보드)이 즉시 언어·설정을 다시 읽도록 브로드캐스트.
     let _ = app.emit("settings-changed", ());
+}
+
+/// 커스텀 pet 번들 폴더를 검증·복사한다. 파일 I/O가 있어 blocking 풀에서 실행.
+#[tauri::command]
+async fn import_pet_bundle(source_dir: String) -> Result<pet::PetBundle, String> {
+    tauri::async_runtime::spawn_blocking(move || pet::import_bundle(std::path::PathBuf::from(source_dir)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// 저장해둔 커스텀 pet 번들 하나를 삭제한다.
+#[tauri::command]
+async fn delete_pet_bundle(id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || pet::delete_bundle(&id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// 데스크톱 pet 클릭 시 메인 팝오버를 연다.
+#[tauri::command]
+fn open_main_window(app: AppHandle) {
+    toggle_popover(&app, true);
+}
+
+/// pet 우클릭 컨텍스트 메뉴(숨기기/전환/불러오기)를 만들어 커서 위치에 띄운다.
+#[tauri::command]
+fn show_pet_context_menu(app: AppHandle) -> Result<(), String> {
+    let Some(win) = app.get_webview_window("pet") else {
+        return Err("pet window missing".into());
+    };
+    let menu = build_pet_context_menu(&app).map_err(|e| e.to_string())?;
+    win.popup_menu(&menu).map_err(|e| e.to_string())
+}
+
+/// pet 관련 메뉴 항목(숨기기/표시 토글 + 전환 서브메뉴) 구성 — pet 우클릭 메뉴와 트레이
+/// 메뉴가 공유한다. 매번 새 인스턴스를 만든다: 같은 MenuItem을 두 메뉴 트리에 동시에
+/// 붙일 수 없어서다. 클릭 이벤트는 어느 메뉴에서 눌렀든 `Builder::on_menu_event`
+/// 전역 핸들러 하나로 들어온다(트레이 전용 핸들러와 별개 스트림이 아니라 같은
+/// `global_event_listeners`를 공유하는 것을 소스로 확인했다).
+fn build_pet_menu_entries(
+    app: &AppHandle,
+) -> tauri::Result<(MenuItem<tauri::Wry>, Submenu<tauri::Wry>)> {
+    let lang = i18n::current();
+    let s = settings::get();
+
+    let toggle_label = if s.pet_enabled {
+        lang.menu_pet_hide()
+    } else {
+        lang.menu_pet_show()
+    };
+    let toggle_item = MenuItem::with_id(app, "pet-toggle", toggle_label, true, None::<&str>)?;
+
+    let builtin_item = CheckMenuItem::with_id(
+        app,
+        "pet-select:builtin",
+        lang.menu_pet_builtin(),
+        true,
+        s.active_pet_bundle_id.is_none(),
+        None::<&str>,
+    )?;
+    let mut change_items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> =
+        vec![Box::new(builtin_item)];
+    for b in &s.pet_bundles {
+        let checked = s.active_pet_bundle_id.as_deref() == Some(b.id.as_str());
+        let item = CheckMenuItem::with_id(
+            app,
+            format!("pet-select:{}", b.id),
+            &b.name,
+            true,
+            checked,
+            None::<&str>,
+        )?;
+        change_items.push(Box::new(item));
+    }
+    change_items.push(Box::new(PredefinedMenuItem::separator(app)?));
+    let import_item =
+        MenuItem::with_id(app, "pet-import", lang.menu_pet_import(), true, None::<&str>)?;
+    change_items.push(Box::new(import_item));
+
+    let refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
+        change_items.iter().map(|b| b.as_ref()).collect();
+    let change_submenu = Submenu::with_items(app, lang.menu_pet_change(), true, &refs)?;
+
+    Ok((toggle_item, change_submenu))
+}
+
+/// pet 우클릭 메뉴 구성: 숨기기/표시 토글 + 전환 서브메뉴(기본 펫/저장된 번들들/불러오기).
+fn build_pet_context_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let (toggle_item, change_submenu) = build_pet_menu_entries(app)?;
+    Menu::with_items(app, &[&toggle_item, &change_submenu])
+}
+
+/// 데스크톱 pet 오버레이 창을 생성 (이미 있으면 아무 것도 안 함). 화면 전체를 돌아다니는
+/// 작은 투명 창 — settings/history와 달리 항상 떠 있어야 하므로 앱 시작 시 1회 생성한다.
+fn create_pet_window(app: &AppHandle) {
+    if app.get_webview_window("pet").is_some() {
+        return;
+    }
+    let visible = settings::get().pet_enabled;
+    if let Err(e) = WebviewWindowBuilder::new(app, "pet", WebviewUrl::App("index.html".into()))
+        .title("")
+        .inner_size(100.0, 100.0)
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .shadow(false)
+        .focused(false)
+        .visible_on_all_workspaces(true)
+        .visible(visible)
+        .build()
+    {
+        eprintln!("[pet] window creation failed: {e}");
+    }
+}
+
+/// 종료 직전 pet 창의 현재 위치(논리 px)를 설정에 저장 — 다음 실행에서 이어서 시작한다.
+/// 프론트가 관여할 필요 없이 Rust가 실제 OS 창 위치를 직접 읽는다.
+fn save_pet_position(app: &AppHandle) {
+    let Some(win) = app.get_webview_window("pet") else {
+        return;
+    };
+    let Ok(pos) = win.outer_position() else {
+        return;
+    };
+    let sf = win.scale_factor().unwrap_or(1.0);
+    let mut s = settings::get();
+    s.pet_last_x = Some(pos.x as f64 / sf);
+    s.pet_last_y = Some(pos.y as f64 / sf);
+    settings::set(s);
 }
 
 /// 창을 닫을 때 파괴하지 않고 숨긴다 — 재오픈 시 웹뷰 재부팅(OS 로딩) 회피.
@@ -763,9 +899,18 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wr
     let update_item =
         MenuItem::with_id(app, "check_update", lang.menu_check_update(), true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", lang.menu_quit(), true, None::<&str>)?;
+    let (pet_toggle, pet_change) = build_pet_menu_entries(app)?;
     Menu::with_items(
         app,
-        &[&show, &history_item, &settings_item, &update_item, &quit],
+        &[
+            &show,
+            &history_item,
+            &settings_item,
+            &pet_toggle,
+            &pet_change,
+            &update_item,
+            &quit,
+        ],
     )
 }
 
@@ -1101,6 +1246,9 @@ fn spawn_alert_loop(app: AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // SETTINGS/ROLLUP static이 처음 건드려지기 전에 옛 데이터 위치를 새 위치로 옮긴다.
+    settings::migrate_data_dir();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
@@ -1110,6 +1258,7 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             get_runway,
             get_settings,
@@ -1118,8 +1267,64 @@ pub fn run() {
             get_stats,
             open_settings_window,
             open_history_window,
-            track_event
+            track_event,
+            import_pet_bundle,
+            delete_pet_bundle,
+            open_main_window,
+            show_pet_context_menu
         ])
+        // pet 우클릭 메뉴와 트레이 메뉴 둘 다 이 하나의 전역 핸들러로 들어온다 — Tauri는
+        // TrayIconBuilder::on_menu_event와 Builder::on_menu_event를 같은
+        // `global_event_listeners`에 등록해 모든 리스너가 모든 메뉴 이벤트를 받는다(소스 확인).
+        // 그래서 트레이 쪽 핸들러는 이 id들을 몰라도 되고, 여기 한 곳만 안다.
+        // pet-* 액션 후엔 트레이 메뉴 라벨/체크마크가 바로 갱신되도록 refresh_localized_ui를 부른다.
+        .on_menu_event(|app, event| {
+            let id = event.id.as_ref();
+            if id == "pet-toggle" {
+                let mut s = settings::get();
+                s.pet_enabled = !s.pet_enabled;
+                let enabled = s.pet_enabled;
+                settings::set(s);
+                if let Some(w) = app.get_webview_window("pet") {
+                    let _ = if enabled { w.show() } else { w.hide() };
+                }
+                refresh_localized_ui(app);
+                let _ = app.emit("settings-changed", ());
+            } else if let Some(target) = id.strip_prefix("pet-select:") {
+                let mut s = settings::get();
+                s.active_pet_bundle_id = if target == "builtin" {
+                    None
+                } else {
+                    Some(target.to_string())
+                };
+                settings::set(s);
+                refresh_localized_ui(app);
+                let _ = app.emit("settings-changed", ());
+            } else if id == "pet-import" {
+                use tauri_plugin_dialog::DialogExt;
+                let app2 = app.clone();
+                app.dialog().file().pick_folder(move |folder| {
+                    let Some(fp) = folder else { return };
+                    let Ok(path) = fp.into_path() else { return };
+                    let app3 = app2.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let result =
+                            tauri::async_runtime::spawn_blocking(move || pet::import_bundle(path))
+                                .await;
+                        // 에러는 조용히 무시 — 이 메뉴는 빠른 추가용이고, 상세 에러 메시지는
+                        // 설정 화면의 "폴더에서 불러오기" 버튼(같은 커맨드, UI 있음)에서 본다.
+                        if let Ok(Ok(bundle)) = result {
+                            let mut s = settings::get();
+                            s.pet_bundles.push(bundle.clone());
+                            s.active_pet_bundle_id = Some(bundle.id);
+                            settings::set(s);
+                            refresh_localized_ui(&app3);
+                            let _ = app3.emit("settings-changed", ());
+                        }
+                    });
+                });
+            }
+        })
         // 팝오버 UX는 main 창에만 적용 (설정 창은 일반 창으로 동작).
         .on_window_event(|window, event| {
             if window.label() != "main" {
@@ -1156,7 +1361,10 @@ pub fn run() {
                 // 좌클릭은 메뉴 대신 팝오버 토글에 쓴다.
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
-                    "quit" => app.exit(0),
+                    "quit" => {
+                        save_pet_position(app);
+                        app.exit(0);
+                    }
                     "show" => toggle_popover(app, true),
                     "settings" => open_settings(app),
                     "history" => open_history(app),
@@ -1182,6 +1390,9 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            // 데스크톱 pet 오버레이 — 화면을 돌아다니는 항상-표시 창.
+            create_pet_window(&app.handle().clone());
 
             // 백그라운드 경보 루프 시작 (창이 닫혀도 메뉴바 상주 상태로 동작)
             spawn_alert_loop(app.handle().clone());

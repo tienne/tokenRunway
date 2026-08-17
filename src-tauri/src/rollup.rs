@@ -7,7 +7,7 @@
 //! 사용률(utilization)은 실시간 폴링으로만 관측되는 값이라(과거 JSONL에서
 //! 재계산할 수 없다) 여기 함께 기록한다. 요금제 하향 추천의 안전 가드로 쓴다.
 //!
-//! 저장 위치: `<config_dir>/token-runway/rollup.json`
+//! 저장 위치: `~/.token-runway/rollup.json`
 //! 구조: 도구명 → (날짜 "YYYY-MM-DD" → DayRollup)
 
 use crate::atomicfile::{preserve_corrupt, write_atomic};
@@ -48,7 +48,7 @@ pub type RollupStore = BTreeMap<String, BTreeMap<String, DayRollup>>;
 static ROLLUP: Mutex<Option<RollupStore>> = Mutex::new(None);
 
 fn rollup_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("token-runway").join("rollup.json"))
+    crate::settings::app_dir().map(|d| d.join("rollup.json"))
 }
 
 fn load_from_disk() -> RollupStore {

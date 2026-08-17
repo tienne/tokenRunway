@@ -1,7 +1,7 @@
 //! 사용자 설정 — JSON 파일 영속화 + 전역 state.
 //!
 //! Rust(AlertManager)와 프론트(설정 UI)가 공유한다.
-//! 저장 위치: `<config_dir>/token-runway/settings.json`
+//! 저장 위치: `~/.token-runway/settings.json` (rollup.json·pet/도 같은 루트를 쓴다)
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -75,6 +75,20 @@ pub struct Settings {
     /// 트레이 타이틀에 리셋까지 남은 시간 표시.
     #[serde(default = "default_true")]
     pub tray_show_reset: bool,
+    /// 데스크톱 pet 오버레이 표시 여부.
+    #[serde(default = "default_true")]
+    pub pet_enabled: bool,
+    /// 저장해둔 커스텀 pet 스킨 목록 — 여러 개를 가져와 전환할 수 있다.
+    #[serde(default)]
+    pub pet_bundles: Vec<crate::pet::PetBundle>,
+    /// 현재 활성 pet 스킨의 id. None이면 기본 내장 pet.
+    #[serde(default)]
+    pub active_pet_bundle_id: Option<String>,
+    /// 종료 시점 pet 창 위치(논리 px) — 다음 실행에서 이어서 시작한다. None이면 기본 위치.
+    #[serde(default)]
+    pub pet_last_x: Option<f64>,
+    #[serde(default)]
+    pub pet_last_y: Option<f64>,
 }
 
 fn default_true() -> bool {
@@ -107,14 +121,38 @@ impl Default for Settings {
             hide_inactive: false,
             tray_show_percent: true,
             tray_show_reset: true,
+            pet_enabled: true,
+            pet_bundles: Vec::new(),
+            active_pet_bundle_id: None,
+            pet_last_x: None,
+            pet_last_y: None,
         }
     }
 }
 
 static SETTINGS: LazyLock<Mutex<Settings>> = LazyLock::new(|| Mutex::new(load_from_disk()));
 
+/// 앱 데이터 루트 — settings.json·rollup.json·pet/이 모두 이 아래에 있다.
+pub fn app_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|d| d.join(".token-runway"))
+}
+
 fn settings_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("token-runway").join("settings.json"))
+    app_dir().map(|d| d.join("settings.json"))
+}
+
+/// 예전 위치(`<OS config dir>/token-runway`)에 데이터가 있고 새 위치(`~/.token-runway`)가
+/// 아직 없으면 통째로 옮긴다. `SETTINGS`/`ROLLUP` 등 어떤 static도 건드리기 전, `run()`
+/// 맨 앞에서 한 번만 호출해야 한다 — 늦게 부르면 이미 빈 새 위치에서 읽어버린 뒤라 늦는다.
+pub fn migrate_data_dir() {
+    let Some(old) = dirs::config_dir().map(|d| d.join("token-runway")) else {
+        return;
+    };
+    let Some(new) = app_dir() else { return };
+    if new.exists() || !old.exists() {
+        return;
+    }
+    let _ = fs::rename(&old, &new);
 }
 
 fn load_from_disk() -> Settings {
