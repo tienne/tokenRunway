@@ -1008,7 +1008,8 @@ h1 {
   font-variant-numeric: tabular-nums;
 }
 
-/* 데스크톱 pet 오버레이 창 — 투명 배경, 창 전체가 클릭 가능한 스프라이트 영역 */
+/* 데스크톱 pet 오버레이 창 — 투명 배경, 창 전체가 클릭 가능한 스프라이트 영역.
+   실제 크기는 배율에 따라 인라인 스타일이 정한다(여기 값은 폴백). */
 .pet-overlay {
   width: 96px;
   height: 96px;

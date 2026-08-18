@@ -4,7 +4,7 @@ import {
   getCurrentWindow,
   LogicalSize,
   LogicalPosition,
-  primaryMonitor,
+  availableMonitors,
 } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -68,8 +68,10 @@ const BUILTIN_SPRITE: PetSprite = {
   },
 };
 
-/** 쉴 때 idle 하나만 반복하지 않도록 섞어 쓰는 포즈 후보 — 번들이 실제로 갖고 있는 것만 쓴다. */
-const REST_POSE_CANDIDATES = ["idle", "waving", "waiting", "review"];
+/** 쉴 때 idle 대신 아주 가끔 섞어 쓰는 포즈 후보 — 번들이 실제로 갖고 있는 것만 쓴다. */
+const REST_POSE_CANDIDATES = ["waving", "waiting", "review"];
+/** 쉬는 구간에서 idle이 아닌 특별 포즈가 나올 확률. 나머지는 전부 idle. */
+const REST_SPECIAL_CHANCE = 0.12;
 
 /** pet 걷기 속도 (논리픽셀/틱) — 경보 레벨이 급할수록 바쁘게 움직인다. */
 const PET_SPEED: Record<PetLevel, number> = {
@@ -78,7 +80,8 @@ const PET_SPEED: Record<PetLevel, number> = {
   warn: 1.0,
   danger: 1.8,
 };
-const PET_SIZE = 96;
+/** 배율 1.0일 때 pet 한 변(논리 px). Rust의 PET_WINDOW_BASE(100)에서 여백 4px씩 뺀 값. */
+const PET_BASE_SIZE = 96;
 const PET_TICK_MS = 50;
 
 /** 스프라이트시트 안의 애니메이션 한 줄: row(0-based y) + frames(가로 프레임 수). */
@@ -134,7 +137,7 @@ function petErrorKey(raw: string): string {
 // 균일하지 않은(idle이 마지막 프레임에서 오래 쉬는 등) Codex 페이싱은 steps()로 표현이
 // 안 돼서, 프레임마다 step-end 정지점을 하나씩 찍은 @keyframes를 만든다.
 const MAX_FRAME_DURATION_MS = 60_000;
-const SPRITE_DISPLAY_HEIGHT = 88; // .pet-sprite와 동일한 표시 높이
+const SPRITE_BASE_HEIGHT = 88; // 배율 1.0일 때 스프라이트 표시 높이
 
 function validFrameDurations(
   ms: number[] | undefined,
@@ -217,9 +220,10 @@ function pickSpriteAnimation(
 ): string {
   const has = (n: string) => Object.prototype.hasOwnProperty.call(sprite.animations, n);
   if (dragging && has("jumping")) return "jumping";
-  if (level === "danger" && has("failed")) return "failed";
-  if (level === "idle" && has("idle")) return "idle";
+  // 쉬는 중일 때만 포즈를 바꾼다 — 걷는 도중에 상태별 포즈가 끼어들면 걸음이 끊겨 보인다.
   if (restPose && has(restPose)) return restPose;
+  if (level === "idle" && has("idle")) return "idle";
+  // 여기부터는 이동 중 — 방향별 걷기로 고정한다.
   const dirName = dir === 1 ? "running-right" : "running-left";
   if (has(dirName)) return dirName;
   if (has("running")) return "running";
@@ -241,28 +245,86 @@ const WANDER_ARRIVE_DIST = 4;
 const REST_MS_MIN = 2000;
 const REST_MS_MAX = 6000;
 
-/** center에서 반경 WANDER_RADIUS 안의 임의 지점을 고르되, 화면(screen) 밖으로는 안 나간다.
- * 몇 번 뽑아봐도 화면 안에 못 들어오면(중심이 모서리 쪽) 중심 자체를 목표로 삼는다. */
+/** 모니터 작업영역 원본(논리 px) — pet 크기를 빼기 전. 배율이 바뀌면 여기서 다시 만든다. */
+interface WorkArea {
+  x: number;
+  y: number;
+  width: number;
+  bottom: number;
+}
+
+/** 작업영역들에서 pet이 설 수 있는 영역을 만든다 — pet 크기만큼 오른쪽·아래를 줄인다. */
+function buildAreas(works: WorkArea[], petSize: number): Area[] {
+  return works.map((w) => ({
+    minX: w.x,
+    maxX: w.x + w.width - petSize,
+    minY: w.y,
+    maxY: w.bottom - petSize - 8,
+  }));
+}
+
+/** pet이 설 수 있는 영역 하나(모니터 한 대의 작업영역, 논리 px). */
+interface Area {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+}
+
+function inArea(x: number, y: number, a: Area): boolean {
+  return x >= a.minX && x <= a.maxX && y >= a.minY && y <= a.maxY;
+}
+
+/** 점이 속한 영역. 어디에도 안 속하면(모니터 사이 빈 공간) null. */
+function areaAt(x: number, y: number, areas: Area[]): Area | null {
+  return areas.find((a) => inArea(x, y, a)) ?? null;
+}
+
+/** 점을 가장 가까운 영역 안으로 끌어당긴다 — 드래그로 모니터 밖에 놓았을 때. */
+function clampToAreas(x: number, y: number, areas: Area[]): { x: number; y: number } {
+  if (areas.length === 0) return { x, y };
+  let best = { x, y };
+  let bestDist = Infinity;
+  for (const a of areas) {
+    const cx = Math.min(a.maxX, Math.max(a.minX, x));
+    const cy = Math.min(a.maxY, Math.max(a.minY, y));
+    const d = Math.hypot(cx - x, cy - y);
+    if (d < bestDist) {
+      bestDist = d;
+      best = { x: cx, y: cy };
+    }
+  }
+  return best;
+}
+
+/** center에서 반경 WANDER_RADIUS 안의 임의 지점을 고르되, 지금 있는 모니터 안에서만 고른다 —
+ * 스스로 모니터를 넘나들지는 않는다(옮기는 건 사용자가 드래그로).
+ * 몇 번 뽑아봐도 안 들어오면(중심이 모서리 쪽) 중심 자체를 목표로 삼는다. */
 function pickWanderTarget(
   center: { x: number; y: number },
-  screen: { minX: number; maxX: number; minY: number; maxY: number }
+  areas: Area[]
 ): { x: number; y: number } {
+  const here = areaAt(center.x, center.y, areas);
   for (let i = 0; i < 8; i++) {
     const angle = Math.random() * Math.PI * 2;
     const dist = Math.random() * WANDER_RADIUS;
     const x = center.x + Math.cos(angle) * dist;
     const y = center.y + Math.sin(angle) * dist;
-    if (x >= screen.minX && x <= screen.maxX && y >= screen.minY && y <= screen.maxY) {
+    if (here ? inArea(x, y, here) : areaAt(x, y, areas)) {
       return { x, y };
     }
   }
   return { x: center.x, y: center.y };
 }
 
-/** 쉬는 구간 하나를 시작할 때 idle 대신 쓸 포즈를 랜덤으로 고른다 — 후보 중 번들에 실제로
- * 있는 것만. 하나도 없으면(순수 idle만 있는 번들) "idle"로 고정. */
-function pickRestPose(sprite: PetSprite): string {
-  const available = REST_POSE_CANDIDATES.filter((name) =>
+/** 쉬는 구간 하나에서 쓸 포즈. 대부분 idle이고, REST_SPECIAL_CHANCE 확률로만 다른 포즈를
+ * 섞는다. danger일 때는 failed도 후보에 넣어 상태가 드러나게 한다.
+ * 후보가 번들에 하나도 없으면(순수 idle만 있는 번들) "idle"로 고정. */
+function pickRestPose(sprite: PetSprite, level: PetLevel): string {
+  if (Math.random() >= REST_SPECIAL_CHANCE) return "idle";
+  const candidates =
+    level === "danger" ? [...REST_POSE_CANDIDATES, "failed"] : REST_POSE_CANDIDATES;
+  const available = candidates.filter((name) =>
     Object.prototype.hasOwnProperty.call(sprite.animations, name)
   );
   if (available.length === 0) return "idle";
@@ -280,8 +342,13 @@ function PetOverlay() {
   const dirRef = useRef<1 | -1>(1);
   const xRef = useRef(0);
   const yRef = useRef(700);
-  // 드래그를 클램프할 화면 전체 작업영역.
-  const screenRef = useRef({ minX: 0, maxX: 800, minY: 0, maxY: 900 });
+  // 연결된 모니터들의 작업영역 원본 — 배율이 바뀌면 여기서 영역을 다시 만든다.
+  const worksRef = useRef<WorkArea[]>([]);
+  // 현재 배율 기준으로 pet이 설 수 있는 곳 전부.
+  const areasRef = useRef<Area[]>([{ minX: 0, maxX: 800, minY: 0, maxY: 900 }]);
+  // 표시 배율 — 설정에서 바꾸면 창 크기와 스프라이트가 같이 커진다.
+  const [scale, setScale] = useState(1);
+  const petSize = PET_BASE_SIZE * scale;
   // 배회 중심 — 이 지점 반경 WANDER_RADIUS 안에서만 목표를 고른다. 드래그로 옮기면 재설정.
   const centerRef = useRef({ x: 0, y: 700 });
   // 지금 향해 걷고 있는 목표 지점.
@@ -313,6 +380,7 @@ function PetOverlay() {
         ]);
         setLevel(worstPetLevel(statuses));
         setBundle(s.petBundles.find((b) => b.id === s.activePetBundleId) ?? null);
+        setScale(s.petScale ?? 1);
       } catch {
         /* noop */
       }
@@ -330,42 +398,64 @@ function PetOverlay() {
     }
   }, [level, bundle]);
 
-  // 주 모니터 작업영역 경계 계산 — 드래그는 작업영역 전체, 배회는 그 안의 좁은 반경.
+  // 연결된 모니터 전부의 작업영역을 모은다 — pet은 이 영역들 사이를 옮겨 다닌다.
+  // 각 모니터의 scaleFactor로 나눠 논리 좌표로 통일해야 배율이 섞인 구성에서도 맞다.
   // 종료 시점에 저장해둔 위치가 있으면(petLastX/Y) 거기서 이어서 시작한다.
   useEffect(() => {
-    Promise.all([primaryMonitor(), invoke<Settings>("get_settings")]).then(([m, s]) => {
-      if (!m) return;
-      const sf = m.scaleFactor || 1;
-      const workX = m.workArea.position.x / sf;
-      const workY = m.workArea.position.y / sf;
-      const workW = m.workArea.size.width / sf;
-      const workBottom = (m.workArea.position.y + m.workArea.size.height) / sf;
-      screenRef.current = {
-        minX: workX,
-        maxX: workX + workW - PET_SIZE,
-        minY: workY,
-        maxY: workBottom - PET_SIZE - 8,
-      };
+    Promise.all([availableMonitors(), invoke<Settings>("get_settings")]).then(([ms, s]) => {
+      const works: WorkArea[] = ms.map((m) => {
+        const sf = m.scaleFactor || 1;
+        return {
+          x: m.workArea.position.x / sf,
+          y: m.workArea.position.y / sf,
+          width: m.workArea.size.width / sf,
+          bottom: (m.workArea.position.y + m.workArea.size.height) / sf,
+        };
+      });
+      if (works.length === 0) return;
+      worksRef.current = works;
+      const areas = buildAreas(works, PET_BASE_SIZE * (s.petScale ?? 1));
+      areasRef.current = areas;
       if (s.petLastX != null && s.petLastY != null) {
-        xRef.current = Math.min(
-          screenRef.current.maxX,
-          Math.max(screenRef.current.minX, s.petLastX)
-        );
-        yRef.current = Math.min(
-          screenRef.current.maxY,
-          Math.max(screenRef.current.minY, s.petLastY)
-        );
+        const p = clampToAreas(s.petLastX, s.petLastY, areas);
+        xRef.current = p.x;
+        yRef.current = p.y;
       } else {
-        xRef.current = workX;
-        yRef.current = screenRef.current.maxY;
+        xRef.current = areas[0].minX;
+        yRef.current = areas[0].maxY;
       }
       centerRef.current = { x: xRef.current, y: yRef.current };
-      targetRef.current = pickWanderTarget(centerRef.current, screenRef.current);
+      targetRef.current = pickWanderTarget(centerRef.current, areas);
       getCurrentWindow()
         .setPosition(new LogicalPosition(xRef.current, yRef.current))
         .catch(() => {});
     });
   }, []);
+
+  // 설정 창에서 배율을 바꾸면 폴링(30초)을 기다리지 않고 즉시 반영한다.
+  useEffect(() => {
+    const un = listen("settings-changed", () => {
+      invoke<Settings>("get_settings")
+        .then((s) => setScale(s.petScale ?? 1))
+        .catch(() => {});
+    });
+    return () => {
+      un.then((f) => f());
+    };
+  }, []);
+
+  // 배율이 바뀌면 설 수 있는 영역이 줄거나 늘어난다 — 다시 만들고 현재 위치를 그 안으로.
+  useEffect(() => {
+    if (worksRef.current.length === 0) return;
+    const areas = buildAreas(worksRef.current, petSize);
+    areasRef.current = areas;
+    const p = clampToAreas(xRef.current, yRef.current, areas);
+    xRef.current = p.x;
+    yRef.current = p.y;
+    centerRef.current = clampToAreas(centerRef.current.x, centerRef.current.y, areas);
+    targetRef.current = pickWanderTarget(centerRef.current, areas);
+    getCurrentWindow().setPosition(new LogicalPosition(p.x, p.y)).catch(() => {});
+  }, [petSize]);
 
   // 배회 루프 — 목표 지점을 향해 상하좌우 대각선 자유롭게 걷다가, 도착하면 잠깐(REST_MS)
   // idle로 멈춰 쉬고, 그다음 홈 중심 반경 WANDER_RADIUS 안에서 새 목표를 뽑아 다시 걷는다.
@@ -390,9 +480,9 @@ function PetOverlay() {
       const dy = target.y - yRef.current;
       const dist = Math.hypot(dx, dy);
       if (dist < WANDER_ARRIVE_DIST) {
-        targetRef.current = pickWanderTarget(centerRef.current, screenRef.current);
+        targetRef.current = pickWanderTarget(centerRef.current, areasRef.current);
         restUntilRef.current = now + REST_MS_MIN + Math.random() * (REST_MS_MAX - REST_MS_MIN);
-        const pose = spriteForRest ? pickRestPose(spriteForRest) : "idle";
+        const pose = spriteForRest ? pickRestPose(spriteForRest, level) : "idle";
         restPoseRef.current = pose;
         setRestPose(pose);
         return;
@@ -448,9 +538,11 @@ function PetOverlay() {
         setDir(-1);
       }
     }
-    const { minX, maxX, minY, maxY } = screenRef.current;
-    const nx = Math.min(maxX, Math.max(minX, e.screenX - dragOffsetRef.current.x));
-    const ny = Math.min(maxY, Math.max(minY, e.screenY - dragOffsetRef.current.y));
+    const { x: nx, y: ny } = clampToAreas(
+      e.screenX - dragOffsetRef.current.x,
+      e.screenY - dragOffsetRef.current.y,
+      areasRef.current
+    );
     xRef.current = nx;
     yRef.current = ny;
     if (!bundle?.sprite && wrapRef.current) {
@@ -473,7 +565,7 @@ function PetOverlay() {
     } else {
       // 놓은 자리를 새 배회 중심으로 삼는다 — 원래 반경으로 되돌아가지 않는다.
       centerRef.current = { x: xRef.current, y: yRef.current };
-      targetRef.current = pickWanderTarget(centerRef.current, screenRef.current);
+      targetRef.current = pickWanderTarget(centerRef.current, areasRef.current);
     }
   }
 
@@ -496,32 +588,38 @@ function PetOverlay() {
   const spriteIsCustomFile = !!bundle?.sprite;
 
   if (sprite) {
-    const scale = SPRITE_DISPLAY_HEIGHT / sprite.frameHeight;
-    const dispW = sprite.frameWidth * scale;
+    const spriteHeight = SPRITE_BASE_HEIGHT * scale;
+    const spriteScale = spriteHeight / sprite.frameHeight;
+    const dispW = sprite.frameWidth * spriteScale;
     const animName = pickSpriteAnimation(sprite, level, dir, dragging, restPose);
     const anim = sprite.animations[animName];
-    const rowOffsetY = -(anim.row * sprite.frameHeight * scale);
+    const rowOffsetY = -(anim.row * sprite.frameHeight * spriteScale);
     const { keyframesCss, animationCss } = buildSpriteAnimationCss({
       keyframesId: animName.replace(/[^a-zA-Z0-9_-]/g, "_"),
       frames: anim.frames,
       fps: sprite.fps,
       frameWidth: sprite.frameWidth,
-      scale,
+      scale: spriteScale,
       rowOffsetY,
       frameDurationsMs: anim.frameDurationsMs,
     });
     const sheetUrl = spriteIsCustomFile ? convertFileSrc(sprite.sheet) : sprite.sheet;
     return (
-      <div ref={wrapRef} className="pet-overlay" {...dragHandlers}>
+      <div
+        ref={wrapRef}
+        className="pet-overlay"
+        style={{ width: petSize, height: petSize }}
+        {...dragHandlers}
+      >
         <style>{keyframesCss}</style>
         <div
           className="pet-sprite-frame"
           style={{
             width: dispW,
-            height: SPRITE_DISPLAY_HEIGHT,
+            height: spriteHeight,
             backgroundImage: `url(${sheetUrl})`,
-            backgroundSize: `${sprite.columns * sprite.frameWidth * scale}px ${
-              sprite.rows * sprite.frameHeight * scale
+            backgroundSize: `${sprite.columns * sprite.frameWidth * spriteScale}px ${
+              sprite.rows * sprite.frameHeight * spriteScale
             }px`,
             animation: animationCss,
           }}
@@ -531,11 +629,17 @@ function PetOverlay() {
   }
 
   return (
-    <div ref={wrapRef} className="pet-overlay" {...dragHandlers}>
+    <div
+      ref={wrapRef}
+      className="pet-overlay"
+      style={{ width: petSize, height: petSize }}
+      {...dragHandlers}
+    >
       <img
         src={src}
         alt=""
         className="pet-sprite pet-bob"
+        style={{ width: SPRITE_BASE_HEIGHT * scale, height: SPRITE_BASE_HEIGHT * scale }}
         onError={() => setSrc(BUILTIN_PET[level])}
       />
     </div>
@@ -622,6 +726,7 @@ interface Settings {
   activePetBundleId: string | null;
   petLastX: number | null;
   petLastY: number | null;
+  petScale: number;
 }
 
 interface ToolInfo {
@@ -1144,6 +1249,7 @@ function SettingsView() {
     activePetBundleId: null,
     petLastX: null,
     petLastY: null,
+    petScale: 1,
   });
   const [petError, setPetError] = useState<string | null>(null);
   const [tools, setTools] = useState<ToolInfo[]>([]);
@@ -1468,6 +1574,24 @@ function SettingsView() {
             onChange={(e) => update({ petEnabled: e.target.checked })}
           />
         </label>
+        {settings.petEnabled && (
+          <>
+            <label className="setting-row">
+              <span>{tr("pet.size")}</span>
+              <span className="setting-value">
+                {Math.round((settings.petScale ?? 1) * 100)}%
+              </span>
+            </label>
+            <input
+              type="range"
+              min={50}
+              max={250}
+              step={10}
+              value={Math.round((settings.petScale ?? 1) * 100)}
+              onChange={(e) => update({ petScale: Number(e.target.value) / 100 })}
+            />
+          </>
+        )}
         {settings.petEnabled && (
           <div className="pet-settings">
             <ul className="pet-list">

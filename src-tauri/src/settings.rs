@@ -89,6 +89,17 @@ pub struct Settings {
     pub pet_last_x: Option<f64>,
     #[serde(default)]
     pub pet_last_y: Option<f64>,
+    /// pet 표시 배율 (1.0 = 기본 크기). PET_SCALE_MIN~MAX로 제한한다.
+    #[serde(default = "default_pet_scale")]
+    pub pet_scale: f64,
+}
+
+/// pet 배율 허용 범위 — 너무 작으면 못 잡고, 너무 크면 화면을 가린다.
+pub const PET_SCALE_MIN: f64 = 0.5;
+pub const PET_SCALE_MAX: f64 = 2.5;
+
+fn default_pet_scale() -> f64 {
+    1.0
 }
 
 fn default_true() -> bool {
@@ -126,6 +137,7 @@ impl Default for Settings {
             active_pet_bundle_id: None,
             pet_last_x: None,
             pet_last_y: None,
+            pet_scale: 1.0,
         }
     }
 }

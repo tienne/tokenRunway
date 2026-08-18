@@ -678,12 +678,18 @@ fn get_settings() -> Settings {
 
 /// 설정을 저장 (디스크 + 전역). 언어 변경에 대비해 트레이/제목을 다시 현지화.
 #[tauri::command]
-fn set_settings(app: AppHandle, settings: Settings) {
+fn set_settings(app: AppHandle, mut settings: Settings) {
+    settings.pet_scale = settings
+        .pet_scale
+        .clamp(settings::PET_SCALE_MIN, settings::PET_SCALE_MAX);
     let pet_enabled = settings.pet_enabled;
+    let pet_scale = settings.pet_scale;
     settings::set(settings);
     refresh_localized_ui(&app);
     if let Some(win) = app.get_webview_window("pet") {
         let _ = if pet_enabled { win.show() } else { win.hide() };
+        // 창을 먼저 키워야 프론트가 그 안에 큰 스프라이트를 그릴 수 있다.
+        let _ = win.set_size(pet_window_size(pet_scale));
     }
     // 다른 창(대시보드)이 즉시 언어·설정을 다시 읽도록 브로드캐스트.
     let _ = app.emit("settings-changed", ());
@@ -779,16 +785,27 @@ fn build_pet_context_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     Menu::with_items(app, &[&toggle_item, &change_submenu])
 }
 
+/// pet 창의 기준 한 변(논리 px) — 배율 1.0일 때 크기. 프론트의 PET_BASE_SIZE와 같아야 한다.
+const PET_WINDOW_BASE: f64 = 100.0;
+
+/// 배율을 적용한 pet 창 크기.
+fn pet_window_size(scale: f64) -> tauri::LogicalSize<f64> {
+    let side = PET_WINDOW_BASE * scale;
+    tauri::LogicalSize::new(side, side)
+}
+
 /// 데스크톱 pet 오버레이 창을 생성 (이미 있으면 아무 것도 안 함). 화면 전체를 돌아다니는
 /// 작은 투명 창 — settings/history와 달리 항상 떠 있어야 하므로 앱 시작 시 1회 생성한다.
 fn create_pet_window(app: &AppHandle) {
     if app.get_webview_window("pet").is_some() {
         return;
     }
-    let visible = settings::get().pet_enabled;
+    let s = settings::get();
+    let visible = s.pet_enabled;
+    let size = pet_window_size(s.pet_scale);
     if let Err(e) = WebviewWindowBuilder::new(app, "pet", WebviewUrl::App("index.html".into()))
         .title("")
-        .inner_size(100.0, 100.0)
+        .inner_size(size.width, size.height)
         .decorations(false)
         .transparent(true)
         .always_on_top(true)
