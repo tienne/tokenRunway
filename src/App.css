@@ -1011,6 +1011,7 @@ h1 {
 /* 데스크톱 pet 오버레이 창 — 투명 배경, 창 전체가 클릭 가능한 스프라이트 영역.
    실제 크기는 배율에 따라 인라인 스타일이 정한다(여기 값은 폴백). */
 .pet-overlay {
+  position: relative;
   width: 96px;
   height: 96px;
   display: flex;
@@ -1024,6 +1025,40 @@ h1 {
 
 .pet-overlay:active {
   cursor: grabbing;
+}
+
+/* pet 창이 100×100 고정 크기라 창 밖으로 못 나간다 — 말풍선은 캐릭터 머리 위에
+   짧은 문구로 겹쳐 보여준다(창 리사이즈는 배회 루프의 setPosition과 계속
+   충돌해서 굳이 안 씀). */
+.pet-speech-bubble {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 90px;
+  padding: 3px 6px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.95);
+  color: #1c1c1e;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1.25;
+  text-align: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+  z-index: 2;
+  animation: pet-bubble-pop 0.2s ease-out;
+}
+
+@keyframes pet-bubble-pop {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
 }
 
 .pet-sprite {

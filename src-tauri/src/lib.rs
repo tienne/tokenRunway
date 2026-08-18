@@ -9,6 +9,8 @@ mod settings;
 
 use settings::Settings;
 
+use serde::Serialize;
+
 use providers::antigravity::AntigravityProvider;
 use providers::claude_code::ClaudeCodeProvider;
 use providers::codex::CodexProvider;
@@ -964,6 +966,14 @@ fn is_quiet_now() -> bool {
     }
 }
 
+/// pet 창에 보내는 경보 알림 — OS 알림 권한이 없어도 pet이 대신 눈에 띄게 반응하도록.
+/// OS 알림과 같은 판정(중복방지·방해금지 시간대 포함) 순간에 함께 쏜다.
+#[derive(Clone, Serialize)]
+struct PetAlertEvent {
+    tool: String,
+    kind: String, // "low" | "eta" | "reset"
+}
+
 fn check_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
     if !settings::notifications_enabled() || is_quiet_now() {
         return;
@@ -1003,9 +1013,14 @@ fn check_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
                 .body(body)
                 .show();
             // 익명: 어떤 종류 경보가 떴는지 메타만 (값 X)
-            analytics::track(
-                "alert_fired",
-                serde_json::json!({ "kind": if eta_hit && !pct_hit { "eta" } else { "low" } }),
+            let kind = if eta_hit && !pct_hit { "eta" } else { "low" };
+            analytics::track("alert_fired", serde_json::json!({ "kind": kind }));
+            let _ = app.emit(
+                "pet-alert",
+                PetAlertEvent {
+                    tool: s.tool.clone(),
+                    kind: kind.to_string(),
+                },
             );
             alerted.insert(s.tool.clone(), true);
         } else if !should_alert && was_alerted {
@@ -1221,6 +1236,13 @@ fn check_reset_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
                 .body(lang.alert_reset(mins, pct))
                 .show();
             analytics::track("alert_fired", serde_json::json!({ "kind": "reset" }));
+            let _ = app.emit(
+                "pet-alert",
+                PetAlertEvent {
+                    tool: s.tool.clone(),
+                    kind: "reset".to_string(),
+                },
+            );
             alerted.insert(s.tool.clone(), true);
         } else if !hit && was {
             // 새 윈도우 시작(리셋 지남) → 재무장

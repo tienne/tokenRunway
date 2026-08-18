@@ -216,10 +216,12 @@ function pickSpriteAnimation(
   level: PetLevel,
   dir: 1 | -1,
   dragging: boolean,
-  restPose: string | null
+  restPose: string | null,
+  alerting: boolean
 ): string {
   const has = (n: string) => Object.prototype.hasOwnProperty.call(sprite.animations, n);
   if (dragging && has("jumping")) return "jumping";
+  if (alerting && has("jumping")) return "jumping";
   // 쉬는 중일 때만 포즈를 바꾼다 — 걷는 도중에 상태별 포즈가 끼어들면 걸음이 끊겨 보인다.
   if (restPose && has(restPose)) return restPose;
   if (level === "idle" && has("idle")) return "idle";
@@ -244,6 +246,8 @@ const WANDER_ARRIVE_DIST = 4;
 /** 도착 후 idle로 쉬는 시간 범위(ms) — 이 사이에서 매번 랜덤. */
 const REST_MS_MIN = 2000;
 const REST_MS_MAX = 6000;
+/** 경보 말풍선이 떠 있는 시간(ms). */
+const ALERT_FLASH_MS = 6000;
 
 /** 모니터 작업영역 원본(논리 px) — pet 크기를 빼기 전. 배율이 바뀌면 여기서 다시 만든다. */
 interface WorkArea {
@@ -336,9 +340,13 @@ function PetOverlay() {
   const [bundle, setBundle] = useState<PetBundle | null>(null);
   const [src, setSrc] = useState(() => petImageSrc("idle", null));
   const [dir, setDir] = useState<1 | -1>(1);
+  const [lang, setLang] = useState<Lang>(resolveLang(null));
   const [dragging, setDragging] = useState(false);
   // 쉬는 동안 보여줄 포즈 이름(idle/waving/waiting 등) — 안 쉬는 중이면 null.
   const [restPose, setRestPose] = useState<string | null>(null);
+  // 경보(소진·예상소진·리셋임박)가 막 떴을 때 잠깐 보여줄 말풍선 — OS 알림 권한이
+  // 없어도 놓치지 않도록 하는 보완 채널. null이면 평소 상태.
+  const [alertFlash, setAlertFlash] = useState<{ tool: string; kind: string } | null>(null);
   const dirRef = useRef<1 | -1>(1);
   const xRef = useRef(0);
   const yRef = useRef(700);
@@ -381,6 +389,7 @@ function PetOverlay() {
         setLevel(worstPetLevel(statuses));
         setBundle(s.petBundles.find((b) => b.id === s.activePetBundleId) ?? null);
         setScale(s.petScale ?? 1);
+        setLang(resolveLang(s.language));
       } catch {
         /* noop */
       }
@@ -388,6 +397,18 @@ function PetOverlay() {
     poll();
     const id = setInterval(poll, 30_000);
     return () => clearInterval(id);
+  }, []);
+
+  // 경보 발생 순간을 Rust에서 직접 통지받아 말풍선 + 점프로 반짝인다 —
+  // OS 알림 권한이 없어도(또는 그냥 놓쳤어도) 데스크톱에서 눈에 띄게.
+  useEffect(() => {
+    const unlisten = listen<{ tool: string; kind: string }>("pet-alert", (event) => {
+      setAlertFlash(event.payload);
+      window.setTimeout(() => setAlertFlash(null), ALERT_FLASH_MS);
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
   }, []);
 
   useEffect(() => {
@@ -581,6 +602,10 @@ function PetOverlay() {
     },
   };
 
+  const speechBubble = alertFlash ? (
+    <div className="pet-speech-bubble">{t(lang, `pet.alert.${alertFlash.kind}`, { tool: alertFlash.tool })}</div>
+  ) : null;
+
   // 커스텀 번들에 sprite가 있으면 그걸, 커스텀 번들 자체가 없으면(기본 펫) 내장
   // 스프라이트를 쓴다. 커스텀 sheet는 파일시스템 절대경로라 convertFileSrc가 필요하고,
   // 내장 sheet는 이미 번들된 정적 자산 URL이라 그대로 쓴다.
@@ -591,7 +616,7 @@ function PetOverlay() {
     const spriteHeight = SPRITE_BASE_HEIGHT * scale;
     const spriteScale = spriteHeight / sprite.frameHeight;
     const dispW = sprite.frameWidth * spriteScale;
-    const animName = pickSpriteAnimation(sprite, level, dir, dragging, restPose);
+    const animName = pickSpriteAnimation(sprite, level, dir, dragging, restPose, !!alertFlash);
     const anim = sprite.animations[animName];
     const rowOffsetY = -(anim.row * sprite.frameHeight * spriteScale);
     const { keyframesCss, animationCss } = buildSpriteAnimationCss({
@@ -612,6 +637,7 @@ function PetOverlay() {
         {...dragHandlers}
       >
         <style>{keyframesCss}</style>
+        {speechBubble}
         <div
           className="pet-sprite-frame"
           style={{
@@ -635,6 +661,7 @@ function PetOverlay() {
       style={{ width: petSize, height: petSize }}
       {...dragHandlers}
     >
+      {speechBubble}
       <img
         src={src}
         alt=""
