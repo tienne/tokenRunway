@@ -1,6 +1,6 @@
 [package]
 name = "token-runway"
-version = "0.2.0"
+version = "0.2.1"
 description = "AI 코딩 어시스턴트 세션 소진 경보 앱"
 authors = ["tienne"]
 edition = "2021"
