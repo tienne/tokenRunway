@@ -1,3 +1,4 @@
+mod activity;
 mod analytics;
 mod atomicfile;
 mod i18n;
@@ -668,6 +669,17 @@ fn get_available_tools() -> Vec<ToolInfo> {
 #[tauri::command]
 async fn get_runway() -> Vec<RunwayStatus> {
     tauri::async_runtime::spawn_blocking(compute_all)
+        .await
+        .unwrap_or_default()
+}
+
+/// 등록된 도구들의 현재 활동 상태 — pet이 "도는 중/막 끝남/쉬는 중"에 반응하는 축.
+///
+/// pet은 이 값을 1~2초 주기로 폴링한다. 잔여율(`get_runway`)과 달리 네트워크도
+/// 전체 파싱도 없지만 파일 I/O는 있으므로 blocking 풀에서 실행한다.
+#[tauri::command]
+async fn get_activity() -> Vec<activity::AgentActivity> {
+    tauri::async_runtime::spawn_blocking(activity::detect_all)
         .await
         .unwrap_or_default()
 }
@@ -1344,6 +1356,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             get_runway,
+            get_activity,
             get_settings,
             set_settings,
             get_available_tools,
