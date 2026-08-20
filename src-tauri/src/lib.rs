@@ -787,6 +787,47 @@ fn build_pet_context_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     Menu::with_items(app, &[&toggle_item, &change_submenu])
 }
 
+/// pet이 설 수 있는 영역 하나(논리 px). 프론트의 Area와 같은 모양.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PetArea {
+    min_x: f64,
+    max_x: f64,
+    min_y: f64,
+    max_y: f64,
+}
+
+/// 연결된 모니터 전부의 작업영역에서 pet이 설 수 있는 사각형을 만든다.
+///
+/// 프론트의 `availableMonitors()`는 창 권한에 걸려 조용히 실패할 수 있어(그러면 주
+/// 모니터만 남아 드래그로 옮긴 pet이 되돌아온다) Rust에서 직접 읽는다.
+/// `pet_size`만큼 오른쪽·아래를 줄여 pet 전체가 화면에 들어오게 한다.
+#[tauri::command]
+fn pet_areas(app: AppHandle, pet_size: f64) -> Vec<PetArea> {
+    let monitors = match app.available_monitors() {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("[pet] available_monitors 실패: {e}");
+            return Vec::new();
+        }
+    };
+    monitors
+        .iter()
+        .map(|m| {
+            let sf = m.scale_factor();
+            let w = m.work_area();
+            let x = w.position.x as f64 / sf;
+            let y = w.position.y as f64 / sf;
+            PetArea {
+                min_x: x,
+                max_x: x + w.size.width as f64 / sf - pet_size,
+                min_y: y,
+                max_y: y + w.size.height as f64 / sf - pet_size - 8.0,
+            }
+        })
+        .collect()
+}
+
 /// pet 창의 기준 한 변(논리 px) — 배율 1.0일 때 크기. 프론트의 PET_BASE_SIZE와 같아야 한다.
 const PET_WINDOW_BASE: f64 = 100.0;
 
@@ -855,6 +896,9 @@ fn open_settings(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("settings") {
         let _ = win.show();
         let _ = win.set_focus();
+        // 창을 닫아도 파괴하지 않고 숨기므로 프론트가 재마운트되지 않는다 — 그동안
+        // pet 우클릭 메뉴 등에서 바뀐 값을 다시 읽도록 알려준다.
+        let _ = app.emit("settings-changed", ());
         return;
     }
     if let Ok(win) = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
@@ -1305,6 +1349,7 @@ pub fn run() {
             get_available_tools,
             get_stats,
             open_settings_window,
+            pet_areas,
             open_history_window,
             track_event,
             import_pet_bundle,

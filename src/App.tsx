@@ -4,7 +4,6 @@ import {
   getCurrentWindow,
   LogicalSize,
   LogicalPosition,
-  availableMonitors,
 } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -249,24 +248,6 @@ const REST_MS_MAX = 6000;
 /** 경보 말풍선이 떠 있는 시간(ms). */
 const ALERT_FLASH_MS = 6000;
 
-/** 모니터 작업영역 원본(논리 px) — pet 크기를 빼기 전. 배율이 바뀌면 여기서 다시 만든다. */
-interface WorkArea {
-  x: number;
-  y: number;
-  width: number;
-  bottom: number;
-}
-
-/** 작업영역들에서 pet이 설 수 있는 영역을 만든다 — pet 크기만큼 오른쪽·아래를 줄인다. */
-function buildAreas(works: WorkArea[], petSize: number): Area[] {
-  return works.map((w) => ({
-    minX: w.x,
-    maxX: w.x + w.width - petSize,
-    minY: w.y,
-    maxY: w.bottom - petSize - 8,
-  }));
-}
-
 /** pet이 설 수 있는 영역 하나(모니터 한 대의 작업영역, 논리 px). */
 interface Area {
   minX: number;
@@ -350,10 +331,9 @@ function PetOverlay() {
   const dirRef = useRef<1 | -1>(1);
   const xRef = useRef(0);
   const yRef = useRef(700);
-  // 연결된 모니터들의 작업영역 원본 — 배율이 바뀌면 여기서 영역을 다시 만든다.
-  const worksRef = useRef<WorkArea[]>([]);
-  // 현재 배율 기준으로 pet이 설 수 있는 곳 전부.
-  const areasRef = useRef<Area[]>([{ minX: 0, maxX: 800, minY: 0, maxY: 900 }]);
+  // 현재 배율 기준으로 pet이 설 수 있는 곳 전부. 비어 있으면(모니터 조회 실패)
+  // 클램프를 하지 않는다 — 임의의 기본 사각형에 갇히는 것보다 자유로운 편이 낫다.
+  const areasRef = useRef<Area[]>([]);
   // 표시 배율 — 설정에서 바꾸면 창 크기와 스프라이트가 같이 커진다.
   const [scale, setScale] = useState(1);
   const petSize = PET_BASE_SIZE * scale;
@@ -419,38 +399,30 @@ function PetOverlay() {
     }
   }, [level, bundle]);
 
-  // 연결된 모니터 전부의 작업영역을 모은다 — pet은 이 영역들 사이를 옮겨 다닌다.
-  // 각 모니터의 scaleFactor로 나눠 논리 좌표로 통일해야 배율이 섞인 구성에서도 맞다.
+  // pet이 설 수 있는 영역을 Rust에서 받아온다 — 연결된 모니터 전부의 작업영역이다.
   // 종료 시점에 저장해둔 위치가 있으면(petLastX/Y) 거기서 이어서 시작한다.
   useEffect(() => {
-    Promise.all([availableMonitors(), invoke<Settings>("get_settings")]).then(([ms, s]) => {
-      const works: WorkArea[] = ms.map((m) => {
-        const sf = m.scaleFactor || 1;
-        return {
-          x: m.workArea.position.x / sf,
-          y: m.workArea.position.y / sf,
-          width: m.workArea.size.width / sf,
-          bottom: (m.workArea.position.y + m.workArea.size.height) / sf,
-        };
-      });
-      if (works.length === 0) return;
-      worksRef.current = works;
-      const areas = buildAreas(works, PET_BASE_SIZE * (s.petScale ?? 1));
-      areasRef.current = areas;
-      if (s.petLastX != null && s.petLastY != null) {
-        const p = clampToAreas(s.petLastX, s.petLastY, areas);
-        xRef.current = p.x;
-        yRef.current = p.y;
-      } else {
-        xRef.current = areas[0].minX;
-        yRef.current = areas[0].maxY;
-      }
-      centerRef.current = { x: xRef.current, y: yRef.current };
-      targetRef.current = pickWanderTarget(centerRef.current, areas);
-      getCurrentWindow()
-        .setPosition(new LogicalPosition(xRef.current, yRef.current))
-        .catch(() => {});
-    });
+    invoke<Settings>("get_settings")
+      .then(async (s) => {
+        const size = PET_BASE_SIZE * (s.petScale ?? 1);
+        const areas = await invoke<Area[]>("pet_areas", { petSize: size });
+        if (areas.length === 0) return;
+        areasRef.current = areas;
+        if (s.petLastX != null && s.petLastY != null) {
+          const p = clampToAreas(s.petLastX, s.petLastY, areas);
+          xRef.current = p.x;
+          yRef.current = p.y;
+        } else {
+          xRef.current = areas[0].minX;
+          yRef.current = areas[0].maxY;
+        }
+        centerRef.current = { x: xRef.current, y: yRef.current };
+        targetRef.current = pickWanderTarget(centerRef.current, areas);
+        getCurrentWindow()
+          .setPosition(new LogicalPosition(xRef.current, yRef.current))
+          .catch(() => {});
+      })
+      .catch((e) => console.warn("[pet] 영역 초기화 실패", e));
   }, []);
 
   // 설정 창에서 배율을 바꾸면 폴링(30초)을 기다리지 않고 즉시 반영한다.
@@ -465,17 +437,24 @@ function PetOverlay() {
     };
   }, []);
 
-  // 배율이 바뀌면 설 수 있는 영역이 줄거나 늘어난다 — 다시 만들고 현재 위치를 그 안으로.
+  // 배율이 바뀌면 설 수 있는 영역이 줄거나 늘어난다 — 다시 받아 현재 위치를 그 안으로.
   useEffect(() => {
-    if (worksRef.current.length === 0) return;
-    const areas = buildAreas(worksRef.current, petSize);
-    areasRef.current = areas;
-    const p = clampToAreas(xRef.current, yRef.current, areas);
-    xRef.current = p.x;
-    yRef.current = p.y;
-    centerRef.current = clampToAreas(centerRef.current.x, centerRef.current.y, areas);
-    targetRef.current = pickWanderTarget(centerRef.current, areas);
-    getCurrentWindow().setPosition(new LogicalPosition(p.x, p.y)).catch(() => {});
+    let alive = true;
+    invoke<Area[]>("pet_areas", { petSize })
+      .then((areas) => {
+        if (!alive || areas.length === 0) return;
+        areasRef.current = areas;
+        const p = clampToAreas(xRef.current, yRef.current, areas);
+        xRef.current = p.x;
+        yRef.current = p.y;
+        centerRef.current = clampToAreas(centerRef.current.x, centerRef.current.y, areas);
+        targetRef.current = pickWanderTarget(centerRef.current, areas);
+        getCurrentWindow().setPosition(new LogicalPosition(p.x, p.y)).catch(() => {});
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
   }, [petSize]);
 
   // 배회 루프 — 목표 지점을 향해 상하좌우 대각선 자유롭게 걷다가, 도착하면 잠깐(REST_MS)
@@ -559,11 +538,10 @@ function PetOverlay() {
         setDir(-1);
       }
     }
-    const { x: nx, y: ny } = clampToAreas(
-      e.screenX - dragOffsetRef.current.x,
-      e.screenY - dragOffsetRef.current.y,
-      areasRef.current
-    );
+    // 드래그 중에는 클램프하지 않는다 — 모니터 사이를 지나갈 때 가로막히면
+    // 다른 화면으로 옮길 수가 없다. 놓는 순간에만 화면 안으로 스냅한다(endDrag).
+    const nx = e.screenX - dragOffsetRef.current.x;
+    const ny = e.screenY - dragOffsetRef.current.y;
     xRef.current = nx;
     yRef.current = ny;
     if (!bundle?.sprite && wrapRef.current) {
@@ -584,8 +562,13 @@ function PetOverlay() {
     if (!dragMovedRef.current) {
       invoke("open_main_window").catch(() => {});
     } else {
-      // 놓은 자리를 새 배회 중심으로 삼는다 — 원래 반경으로 되돌아가지 않는다.
-      centerRef.current = { x: xRef.current, y: yRef.current };
+      // 놓은 자리를 화면 안으로 스냅한 뒤 그곳을 새 배회 중심으로 삼는다 —
+      // 원래 반경으로 되돌아가지 않고, 옮겨준 모니터에서 계속 돌아다닌다.
+      const snapped = clampToAreas(xRef.current, yRef.current, areasRef.current);
+      xRef.current = snapped.x;
+      yRef.current = snapped.y;
+      getCurrentWindow().setPosition(new LogicalPosition(snapped.x, snapped.y)).catch(() => {});
+      centerRef.current = snapped;
       targetRef.current = pickWanderTarget(centerRef.current, areasRef.current);
     }
   }
@@ -1292,6 +1275,20 @@ function SettingsView() {
     isPermissionGranted().then(setPermGranted).catch(() => {});
     isEnabled().then(setAutostart).catch(() => {});
     invoke("track_event", { event: "settings_opened" }).catch(() => {});
+    // pet 우클릭 메뉴·트레이에서 바꾼 값(활성 스킨, 표시 여부)을 화면에 반영한다 —
+    // 안 들으면 여기 state가 낡은 채로 남아 다음 저장에서 그 변경을 덮어쓴다.
+    const reload = () => {
+      invoke<Settings>("get_settings").then(setSettings).catch(() => {});
+    };
+    const unlisten = listen("settings-changed", reload);
+    // 창이 다시 포커스를 받을 때도 읽는다 — 이벤트를 놓쳤더라도 화면을 보는 순간엔 맞다.
+    const unfocus = getCurrentWindow().onFocusChanged(({ payload }) => {
+      if (payload) reload();
+    });
+    return () => {
+      unlisten.then((f) => f());
+      unfocus.then((f) => f());
+    };
   }, []);
 
   async function toggleAutostart(value: boolean) {
@@ -1304,8 +1301,18 @@ function SettingsView() {
     }
   }
 
+  /// set_settings는 전체 구조체를 받으므로, 화면 state가 낡았으면 다른 경로(우클릭 메뉴·
+  /// 트레이)에서 바뀐 값까지 같이 되돌려버린다. 저장 직전에 서버 값을 다시 읽어 그 위에
+  /// 이번 변경만 덮는다.
   async function update(patch: Partial<Settings>) {
-    const next = { ...settings, ...patch };
+    setSettings((prev) => ({ ...prev, ...patch }));
+    let base = settings;
+    try {
+      base = await invoke<Settings>("get_settings");
+    } catch {
+      /* 조회 실패 시엔 화면 state를 기준으로 진행 */
+    }
+    const next = { ...base, ...patch };
     setSettings(next);
     await invoke("set_settings", { settings: next });
   }
