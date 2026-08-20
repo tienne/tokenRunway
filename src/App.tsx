@@ -82,6 +82,18 @@ const PET_SPEED: Record<PetLevel, number> = {
 /** 배율 1.0일 때 pet 한 변(논리 px). Rust의 PET_WINDOW_BASE(100)에서 여백 4px씩 뺀 값. */
 const PET_BASE_SIZE = 96;
 const PET_TICK_MS = 50;
+/** 활동 상태 폴링 주기 — 잔여율(30초)과 달리 이 정도는 돼야 반응이 살아 있어 보인다.
+ * get_activity는 네트워크·전체 파싱 없이 파일 꼬리만 읽어 이 주기를 견딘다. */
+const ACTIVITY_POLL_MS = 1500;
+/** "다 됐어요" 말풍선이 떠 있는 시간(ms). */
+const DONE_FLASH_MS = 6000;
+/** 에이전트가 도는 동안 한 번 산책하는 시간 범위(ms). */
+const STROLL_MS_MIN = 5000;
+const STROLL_MS_MAX = 9000;
+/** 산책 사이 제자리 작업 구간(ms) — 하루종일 도는 날 pet이 얼어 있지 않게, 다만 작업
+ * 포즈가 주인공이도록 드물게. */
+const STROLL_GAP_MIN = 30_000;
+const STROLL_GAP_MAX = 60_000;
 
 /** 스프라이트시트 안의 애니메이션 한 줄: row(0-based y) + frames(가로 프레임 수). */
 interface SpriteAnimation {
@@ -120,6 +132,26 @@ function worstPetLevel(statuses: RunwayStatus[]): PetLevel {
     else if (level === "good" && worst === "idle") worst = "good";
   }
   return worst;
+}
+
+/** 에이전트 활동 상태 — 잔여율(PetLevel)과 독립된 축. Rust `activity::ActivityState`와 짝. */
+type ActivityState = "working" | "justDone" | "idle";
+
+interface AgentActivity {
+  tool: string;
+  state: ActivityState;
+  sinceMs: number;
+  failed: boolean;
+}
+
+/** pet이 따라갈 도구 하나 — 도는 게 있으면 그중 가장 최근, 없으면 가장 최근에 끝난 것.
+ * 여러 도구를 동시에 굴려도 pet은 하나뿐이라 제일 최근에 움직인 쪽을 대표로 보여준다. */
+function leadActivity(list: AgentActivity[]): AgentActivity | null {
+  const pick = (state: ActivityState) =>
+    list
+      .filter((a) => a.state === state)
+      .sort((a, b) => b.sinceMs - a.sinceMs)[0] ?? null;
+  return pick("working") ?? pick("justDone");
 }
 
 function petImageSrc(level: PetLevel, bundle: PetBundle | null): string {
@@ -209,21 +241,33 @@ function buildSpriteAnimationCss(opts: {
 }
 
 /** 상태(danger 등)와 이동 방향에 맞는 애니메이션을 고른다. 번들에 없는 이름은 건너뛴다.
- * restPose는 쉬는 동안 idle 대신 쓸 포즈 이름(그 쉬는 구간 동안 고정) — 안 쉬는 중이면 null. */
-function pickSpriteAnimation(
-  sprite: PetSprite,
-  level: PetLevel,
-  dir: 1 | -1,
-  dragging: boolean,
-  restPose: string | null,
-  alerting: boolean
-): string {
+ * restPose는 쉬는 동안 idle 대신 쓸 포즈 이름(그 쉬는 구간 동안 고정) — 안 쉬는 중이면 null.
+ * activity는 에이전트 활동 상태로, 잔여율 기반 포즈보다 우선한다 — 지금 뭘 하는지가
+ * 얼마 남았는지보다 눈에 먼저 들어와야 해서다. */
+function pickSpriteAnimation(opts: {
+  sprite: PetSprite;
+  level: PetLevel;
+  dir: 1 | -1;
+  dragging: boolean;
+  restPose: string | null;
+  alerting: boolean;
+  activity: AgentActivity | null;
+  strolling: boolean;
+}): string {
+  const { sprite, level, dir, dragging, restPose, alerting, activity, strolling } = opts;
   const has = (n: string) => Object.prototype.hasOwnProperty.call(sprite.animations, n);
   if (dragging && has("jumping")) return "jumping";
   if (alerting && has("jumping")) return "jumping";
+  // 작업 중엔 제자리 작업 포즈가 기본이고, 산책 구간에서만 방향별 걷기로 내려간다.
+  if (activity?.state === "working" && !strolling && has("running")) return "running";
+  if (activity?.state === "justDone") {
+    if (activity.failed && has("failed")) return "failed";
+    if (has("waving")) return "waving";
+  }
   // 쉬는 중일 때만 포즈를 바꾼다 — 걷는 도중에 상태별 포즈가 끼어들면 걸음이 끊겨 보인다.
   if (restPose && has(restPose)) return restPose;
-  if (level === "idle" && has("idle")) return "idle";
+  // 산책 중엔 잔여율이 idle이어도 걷는 그림이어야 한다.
+  if (level === "idle" && !strolling && has("idle")) return "idle";
   // 여기부터는 이동 중 — 방향별 걷기로 고정한다.
   const dirName = dir === 1 ? "running-right" : "running-left";
   if (has(dirName)) return dirName;
@@ -242,9 +286,11 @@ const DRAG_THRESHOLD = 4;
 const WANDER_RADIUS = 160;
 /** 목표 지점에 도착했다고 볼 거리(px). */
 const WANDER_ARRIVE_DIST = 4;
-/** 도착 후 idle로 쉬는 시간 범위(ms) — 이 사이에서 매번 랜덤. */
-const REST_MS_MIN = 2000;
-const REST_MS_MAX = 6000;
+/** 도착 후 idle로 쉬는 시간 범위(ms) — 이 사이에서 매번 랜덤.
+ * 걷는 데 한 번에 10초쯤 걸려서, 이 값이 짧으면 한가할 때가 에이전트 도는 중보다
+ * 훨씬 많이 돌아다니게 된다(신호가 거꾸로 간다). 쉴 때는 늘어져 있도록 길게 잡는다. */
+const REST_MS_MIN = 10_000;
+const REST_MS_MAX = 25_000;
 /** 경보 말풍선이 떠 있는 시간(ms). */
 const ALERT_FLASH_MS = 6000;
 
@@ -328,6 +374,20 @@ function PetOverlay() {
   // 경보(소진·예상소진·리셋임박)가 막 떴을 때 잠깐 보여줄 말풍선 — OS 알림 권한이
   // 없어도 놓치지 않도록 하는 보완 채널. null이면 평소 상태.
   const [alertFlash, setAlertFlash] = useState<{ tool: string; kind: string } | null>(null);
+  // 지금 도는(또는 막 끝난) 에이전트. 아무 도구도 안 움직이면 null.
+  const [activity, setActivity] = useState<AgentActivity | null>(null);
+  // 턴이 끝난 순간 잠깐 띄우는 말풍선 — 잔여율 경보(alertFlash)보다 우선순위가 낮다.
+  const [doneFlash, setDoneFlash] = useState<{ tool: string; failed: boolean } | null>(null);
+  // 배회 루프는 [level, bundle]로만 다시 만들어지므로 활동 상태는 ref로 읽는다 —
+  // 1.5초 폴링마다 interval을 새로 걸면 걸음이 끊긴다.
+  const activityRef = useRef<AgentActivity | null>(null);
+  // 작업 중 산책 구간인지. 걷는 그림을 쓸지 작업 포즈를 쓸지 가른다.
+  const [strolling, setStrolling] = useState(false);
+  const strollingRef = useRef(false);
+  /** 지금 산책이 끝나는 시각. 0이면 산책 중이 아니다. */
+  const strollUntilRef = useRef(0);
+  /** 다음 산책을 시작할 수 있는 가장 이른 시각. 0이면 작업이 막 시작돼 아직 안 정해졌다. */
+  const nextStrollAtRef = useRef(0);
   const dirRef = useRef<1 | -1>(1);
   const xRef = useRef(0);
   const yRef = useRef(700);
@@ -377,6 +437,34 @@ function PetOverlay() {
     poll();
     const id = setInterval(poll, 30_000);
     return () => clearInterval(id);
+  }, []);
+
+  // 활동 상태 폴링 — 잔여율과 주기가 다르다(1.5초). 턴이 끝나는 순간을 잡아 말풍선을
+  // 띄우는데, 같은 턴에 두 번 띄우지 않도록 sinceMs로 구분한다.
+  useEffect(() => {
+    let lastDoneAt = 0;
+    let flashTimer = 0;
+    async function poll() {
+      try {
+        const lead = leadActivity(await invoke<AgentActivity[]>("get_activity"));
+        activityRef.current = lead;
+        setActivity(lead);
+        if (lead?.state === "justDone" && lead.sinceMs !== lastDoneAt) {
+          lastDoneAt = lead.sinceMs;
+          setDoneFlash({ tool: lead.tool, failed: lead.failed });
+          window.clearTimeout(flashTimer);
+          flashTimer = window.setTimeout(() => setDoneFlash(null), DONE_FLASH_MS);
+        }
+      } catch {
+        /* noop */
+      }
+    }
+    poll();
+    const id = setInterval(poll, ACTIVITY_POLL_MS);
+    return () => {
+      clearInterval(id);
+      window.clearTimeout(flashTimer);
+    };
   }, []);
 
   // 경보 발생 순간을 Rust에서 직접 통지받아 말풍선 + 점프로 반짝인다 —
@@ -460,14 +548,53 @@ function PetOverlay() {
   // 배회 루프 — 목표 지점을 향해 상하좌우 대각선 자유롭게 걷다가, 도착하면 잠깐(REST_MS)
   // idle로 멈춰 쉬고, 그다음 홈 중심 반경 WANDER_RADIUS 안에서 새 목표를 뽑아 다시 걷는다.
   // 드래그 중이거나 idle(할 일 없음) 레벨일 땐 항상 멈춘다.
+  // 에이전트가 도는 중엔 대체로 제자리에서 작업 포즈를 보여준다 — 걸으면 방향별 걷기
+  // 그림에 가려 "지금 일하고 있다"가 안 읽힌다. 다만 하루종일 도는 날 계속 얼어 있으면
+  // 그게 더 답답하니 STROLL_GAP마다 한 번씩 짧게(STROLL_MS) 산책을 끼운다.
+  // 턴이 막 끝난(justDone) 동안은 손을 흔들어야 하니 산책하지 않는다.
   // 정지 이미지 모드(커스텀 4장 번들)만 좌우반전 CSS가 필요 — 스프라이트는 방향별 그림이 따로 있다.
   useEffect(() => {
     const win = getCurrentWindow();
     const isStaticImageMode = !!bundle && !bundle.sprite;
     const spriteForRest = bundle ? bundle.sprite : BUILTIN_SPRITE;
     const id = setInterval(() => {
-      if (draggingRef.current || level === "idle") return;
+      if (draggingRef.current) return;
       const now = Date.now();
+      const activity = activityRef.current;
+      const working = activity?.state === "working";
+      if (!working && strollingRef.current) {
+        strollingRef.current = false;
+        strollUntilRef.current = 0;
+        nextStrollAtRef.current = 0;
+        setStrolling(false);
+      }
+      if (activity !== null && !working) return; // 막 끝남 — 제자리에서 손 흔드는 중
+      if (working) {
+        if (!strollingRef.current) {
+          // 작업이 막 시작됐으면 첫 산책까지의 간격을 정한다.
+          if (nextStrollAtRef.current === 0) {
+            nextStrollAtRef.current =
+              now + STROLL_GAP_MIN + Math.random() * (STROLL_GAP_MAX - STROLL_GAP_MIN);
+            return;
+          }
+          if (now < nextStrollAtRef.current) return; // 아직 제자리 작업 구간
+          strollingRef.current = true;
+          strollUntilRef.current =
+            now + STROLL_MS_MIN + Math.random() * (STROLL_MS_MAX - STROLL_MS_MIN);
+          targetRef.current = pickWanderTarget(centerRef.current, areasRef.current);
+          restUntilRef.current = 0; // 짧은 산책이라 중간에 쉬지 않는다
+          setStrolling(true);
+        } else if (now >= strollUntilRef.current) {
+          strollingRef.current = false;
+          strollUntilRef.current = 0;
+          nextStrollAtRef.current =
+            now + STROLL_GAP_MIN + Math.random() * (STROLL_GAP_MAX - STROLL_GAP_MIN);
+          setStrolling(false);
+          return;
+        }
+      } else if (level === "idle") {
+        return;
+      }
       if (now < restUntilRef.current) {
         return; // 쉬는 중 — 움직이지 않는다.
       }
@@ -481,13 +608,19 @@ function PetOverlay() {
       const dist = Math.hypot(dx, dy);
       if (dist < WANDER_ARRIVE_DIST) {
         targetRef.current = pickWanderTarget(centerRef.current, areasRef.current);
+        // 산책은 정해진 시간만큼 계속 걷는다 — 도착했다고 쉬면 산책이 아니라 순간이동이 된다.
+        if (strollingRef.current) return;
         restUntilRef.current = now + REST_MS_MIN + Math.random() * (REST_MS_MAX - REST_MS_MIN);
         const pose = spriteForRest ? pickRestPose(spriteForRest, level) : "idle";
         restPoseRef.current = pose;
         setRestPose(pose);
         return;
       }
-      const speed = PET_SPEED[level];
+      // 산책은 "일하다 잠깐 도는" 그림이라 급할 필요가 없다. 다만 잔여율 idle의
+      // 기본 속도(0.4)면 5초 동안 20px밖에 못 가 걷는 티가 안 나서 최소치를 준다.
+      const speed = strollingRef.current
+        ? Math.max(PET_SPEED[level], PET_SPEED.good)
+        : PET_SPEED[level];
       const nx = xRef.current + (dx / dist) * speed;
       const ny = yRef.current + (dy / dist) * speed;
       xRef.current = nx;
@@ -585,8 +718,15 @@ function PetOverlay() {
     },
   };
 
+  // 잔여율 경보가 활동 알림보다 급하니 먼저 자리를 차지한다.
   const speechBubble = alertFlash ? (
     <div className="pet-speech-bubble">{t(lang, `pet.alert.${alertFlash.kind}`, { tool: alertFlash.tool })}</div>
+  ) : doneFlash ? (
+    <div className="pet-speech-bubble">
+      {t(lang, doneFlash.failed ? "pet.activity.failed" : "pet.activity.done", {
+        tool: doneFlash.tool,
+      })}
+    </div>
   ) : null;
 
   // 커스텀 번들에 sprite가 있으면 그걸, 커스텀 번들 자체가 없으면(기본 펫) 내장
@@ -599,7 +739,16 @@ function PetOverlay() {
     const spriteHeight = SPRITE_BASE_HEIGHT * scale;
     const spriteScale = spriteHeight / sprite.frameHeight;
     const dispW = sprite.frameWidth * spriteScale;
-    const animName = pickSpriteAnimation(sprite, level, dir, dragging, restPose, !!alertFlash);
+    const animName = pickSpriteAnimation({
+      sprite,
+      level,
+      dir,
+      dragging,
+      restPose,
+      alerting: !!alertFlash,
+      activity,
+      strolling,
+    });
     const anim = sprite.animations[animName];
     const rowOffsetY = -(anim.row * sprite.frameHeight * spriteScale);
     const { keyframesCss, animationCss } = buildSpriteAnimationCss({
