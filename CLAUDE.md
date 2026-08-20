@@ -12,6 +12,7 @@ JSONL 시계열로 소진 속도·ETA를 더한다(차별점). 사용자 로그�
 src-tauri/src/
 ├ lib.rs            앱 진입점: provider 등록, get_runway/get_stats command, tray, AlertManager
 ├ runway.rs         RunwayEngine — 샘플/공식사용률 → RunwayStatus 계산
+├ activity.rs       에이전트 활동 감지(도는 중/막 끝남/쉬는 중) — pet 반응용
 ├ rollup.rs         일별 사용량·사용률 롤업 영속화(rollup.json) — 30일+ 히스토리용
 ├ atomicfile.rs     영속 파일 원자적 쓰기(tmp→rename) + 손상 파일 보존
 └ providers/
@@ -177,6 +178,31 @@ trait UsageProvider {
     - 슬롯은 윈도우 `[resets_at - 7d, resets_at)`가 걸친 날짜 전부 —
       리셋이 자정이면 7칸, 하루 중간이면 양끝이 부분일이라 8칸이다.
     - 일별 사용량은 롤업(과거) + 오늘 실시간 분으로 얻어 **추가 JSONL 파싱이 없다**.
+- **활동 감지** (`activity.rs`): pet이 "지금 도는 중 / 막 끝남 / 쉬는 중"에 반응하게 하는 축.
+  잔여율과 별개다 — 잔여율은 30초 폴링이면 되지만 활동은 1.5초여야 반응이 살아 있다.
+  그래서 `get_activity`는 네트워크도 전체 파싱도 없이 **도구별 최근 파일 하나의 꼬리
+  256KB만** 읽는다. 트리 탐색은 `SCAN_TTL`(10초) 주기로만 하고 그 사이엔 찾아둔 경로를 재사용
+  (실측: 1,300개·2GB `~/.claude/projects` 탐색 한 번 80ms, 탐색 없는 폴링은 사실상 공짜).
+  - **Codex**: `event_msg`의 `task_started`/`task_complete` — 턴 경계가 명시적
+  - **Grok**: `sessionUpdate == "turn_completed"`. `hook_execution`·`session_recap`은 턴이
+    끝난 뒤에도 붙어서 판정에서 뺀다
+  - **Claude Code**: 마지막 `assistant`/`user` 엔트리로 추론 — `stop_reason == "tool_use"`면
+    툴 실행 중, `user`면 응답 대기, 그 밖의 `assistant`면 턴 종료.
+    `attachment`·`system`·`ai-title` 등 부수 엔트리는 건너뛴다
+  - **Gemini**: `~/.gemini/tmp/<프로젝트>/chats/session-*.jsonl`의 마지막 엔트리
+    (`user`/`gemini`/`error`). 다섯 도구 중 유일하게 **실패까지** 구분된다.
+    provider가 읽는 `logs.json`은 사용자 메시지만 있어 활동 감지에 못 쓴다
+  - **Antigravity**: 완료 이벤트가 없어 `streamGenerateContent` 신선도로만 추론.
+    `JustDone`을 만들지 않는다 — 끝난 시점을 모르는데 손을 흔들면 엉뚱한 타이밍에 흔든다
+  - 여러 도구가 동시에 돌면 프론트 `leadActivity`가 **가장 최근에 움직인 하나**를 고른다
+    (pet은 한 마리라서). 매핑: `working`→`running` 포즈로 제자리,
+    `justDone`→`waving` + "다 됐어요" 말풍선, `idle`→기존 배회
+  - 작업 중에도 `STROLL_GAP`(30~60초)마다 한 번씩 `STROLL_MS`(5~9초) 짧게 산책한다 —
+    에이전트를 하루종일 돌리면 제자리 정지만으로는 pet이 얼어 있는 것처럼 보인다.
+    산책 중엔 방향별 걷기 그림을 쓰고, 도착해도 쉬지 않고 계속 걷는다
+  - **한가할 때가 일할 때보다 더 돌아다니면 신호가 거꾸로 간다** — 배회는 한 번 걸을 때
+    10초쯤 걸리므로 `REST_MS`를 짧게 두면 idle 쪽 걷는 비중이 작업 중보다 커진다.
+    그래서 휴식을 10~25초로 길게 잡아 "쉴 때는 늘어져 있다"에 맞춘다
 - **AlertManager** (`lib.rs`): 세 가지 경보, 각 도구별 1회 발사 + 회복 시 재무장.
   - 소진 경보 — 잔여율 ≤ 임계치
   - 예상 소진 경보 — ETA ≤ `eta_alert_minutes` **이고** verdict가 `danger`
@@ -214,6 +240,13 @@ pnpm tauri dev                  # 실제 실행 (메뉴바 + 알림 권한 다�
   잡은 채로 타면 응답이 늦을 때 UI 폴링·백그라운드 루프가 전부 매달려 앱이 굳는다.
   중복 갱신은 `FETCH_GUARD.try_lock()`으로 막고, 실패하면 기다리지 않고 직전 값을 쓴다.
   ureq에는 반드시 `.timeout()`을 건다.
+- **활동 감지에 mtime을 그대로 쓰면 안 된다** — Antigravity 로그는 언어 서버라 아무것도
+  안 할 때도 `quotaRefreshLoop` 같은 줄을 계속 쓴다. mtime만 보면 항상 "작업 중"이 된다.
+  마지막 줄과 마지막 요청 줄의 glog 시각차를 재고 거기에 파일 경과를 더한다.
+  glog 머리(`I0622 17:55:06`)에는 연도가 없어 절대 시각을 못 만드니 **같은 파일 안의 두 줄
+  비교로만** 쓴다.
+- **활동 판정엔 staleness 컷이 필수** — 턴 중간에 도구를 종료하면 마지막 줄이 "도는 중"
+  모양으로 남아 pet이 영원히 일한다. `STALE_MS`(5분) 넘게 안 자란 파일은 쉬는 것으로 본다.
 - **영속 파일은 `atomicfile::write_atomic`으로** — `fs::write` 중 크래시하면 파일이
   깨지고, 롤업은 원본 JSONL이 사라진 뒤의 유일한 히스토리라 복구가 안 된다.
   파싱 실패 시엔 조용히 기본값으로 넘어가지 말고 `preserve_corrupt`로 남긴다.
@@ -270,6 +303,13 @@ pnpm tauri dev                  # 실제 실행 (메뉴바 + 알림 권한 다�
   CI는 `TAURI_SIGNING_PRIVATE_KEY` secret). **남은 것: Apple 서명·공증(`APPLE_*` secret)**
 - [x] Grok 잔여율 — billing API 연동. 주기가 응답에 따라 달라져 `window_secs()`가
   동적이다. UI 윈도우 라벨도 길이에 맞춰 "세션/일간/주간/월간"으로 바뀐다
+- [x] pet이 에이전트 활동에 반응 — 도는 중/막 끝남/쉬는 중을 로그 꼬리로 감지해
+  `running`/`waving` 포즈와 "다 됐어요" 말풍선으로 (`activity.rs`, `get_activity`).
+  Codex·Grok은 명시적 턴 이벤트, Claude·Gemini는 마지막 엔트리 추론, Antigravity는
+  요청 신선도. 커스텀 정지 이미지 4장 번들은 포즈가 없어 말풍선만 뜬다
+- [ ] pet 활동 감지 정확도 — Claude Code는 `Stop`/`PreToolUse` 훅으로 상태 파일을
+  떨어뜨리면 추측이 없어진다. 사용자 `settings.json`을 건드려야 하니 설정 토글로 얹을 것.
+  Antigravity의 완료 시점도 훅 말고는 방법이 없다
 - [ ] 주간 ETA에 요일 가중 — `seven_day_eta_minutes`는 경과 시간 대비 선형 페이스라
   평일에 완만하고 주말에 몰아 쓰는 패턴에서 낙관적으로 어긋난다. 2026-08 실측(롤업):
   화 21% → 목 55% → 일 84% → 월 100%가 2주 연속(8/2, 8/10)이라, 목요일까지는 "리셋까지
