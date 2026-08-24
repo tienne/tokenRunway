@@ -703,6 +703,9 @@ function PetOverlay() {
       getCurrentWindow().setPosition(new LogicalPosition(snapped.x, snapped.y)).catch(() => {});
       centerRef.current = snapped;
       targetRef.current = pickWanderTarget(centerRef.current, areasRef.current);
+      // 옮긴 자리를 바로 저장한다 — 종료 때만 저장하면 강제 종료·크래시·업데이트
+      // 재시작으로 죽었을 때 주 모니터로 되돌아간다.
+      invoke("save_pet_pos").catch(() => {});
     }
   }
 

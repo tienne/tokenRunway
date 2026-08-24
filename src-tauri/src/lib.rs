@@ -876,8 +876,19 @@ fn create_pet_window(app: &AppHandle) {
     }
 }
 
-/// 종료 직전 pet 창의 현재 위치(논리 px)를 설정에 저장 — 다음 실행에서 이어서 시작한다.
-/// 프론트가 관여할 필요 없이 Rust가 실제 OS 창 위치를 직접 읽는다.
+/// pet을 놓은 자리를 즉시 저장한다 — 다음 실행에서 그 모니터에서 시작하게.
+///
+/// 종료 때만 저장하면 안 된다: `save_pet_position`은 트레이 "종료"에서만 불리고,
+/// 강제 종료·크래시·업데이트 재시작·개발 중 리빌드로 죽으면 저장이 안 된다.
+/// 그러면 다음 실행에서 `petLastX/Y`가 없어 주 모니터 좌하단으로 돌아가고,
+/// 사용자에겐 "다른 모니터로 옮겼는데 원래 모니터로 되돌아갔다"로 보인다.
+#[tauri::command]
+fn save_pet_pos(app: AppHandle) {
+    save_pet_position(&app);
+}
+
+/// pet 창의 현재 위치(논리 px)를 설정에 저장. 프론트가 좌표를 넘기지 않고
+/// Rust가 실제 OS 창 위치를 직접 읽는다.
 fn save_pet_position(app: &AppHandle) {
     let Some(win) = app.get_webview_window("pet") else {
         return;
@@ -1357,6 +1368,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_runway,
             get_activity,
+            save_pet_pos,
             get_settings,
             set_settings,
             get_available_tools,
@@ -1515,8 +1527,14 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        // 트레이 "종료" 외의 경로(⌘Q·로그아웃·업데이트 재시작)로 끝날 때도 위치를 남긴다.
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+                save_pet_position(app);
+            }
+        });
 }
 
 /// 업데이트 확인. `install`이면 발견 시 다운로드·설치 후 재시작(메뉴용),
