@@ -87,6 +87,9 @@ const PET_TICK_MS = 50;
 const ACTIVITY_POLL_MS = 1500;
 /** "다 됐어요" 말풍선이 떠 있는 시간(ms). */
 const DONE_FLASH_MS = 6000;
+/** 설 수 있는 영역을 다시 받는 주기(ms) — 모니터 연결·해제를 알려주는 이벤트가 없어
+ * 주기적으로 확인한다. 드롭 순간에는 이와 별개로 항상 다시 받는다. */
+const AREA_SYNC_MS = 15_000;
 /** 에이전트가 도는 동안 한 번 산책하는 시간 범위(ms). */
 const STROLL_MS_MIN = 5000;
 const STROLL_MS_MAX = 9000;
@@ -311,6 +314,11 @@ function areaAt(x: number, y: number, areas: Area[]): Area | null {
   return areas.find((a) => inArea(x, y, a)) ?? null;
 }
 
+/** 모니터 배치의 지문 — 연결·해제나 배치 변경을 알아채는 데 쓴다. */
+function areasKey(areas: Area[]): string {
+  return areas.map((a) => `${a.minX},${a.maxX},${a.minY},${a.maxY}`).join("|");
+}
+
 /** 점을 가장 가까운 영역 안으로 끌어당긴다 — 드래그로 모니터 밖에 놓았을 때. */
 function clampToAreas(x: number, y: number, areas: Area[]): { x: number; y: number } {
   if (areas.length === 0) return { x, y };
@@ -381,6 +389,8 @@ function PetOverlay() {
   // 배회 루프는 [level, bundle]로만 다시 만들어지므로 활동 상태는 ref로 읽는다 —
   // 1.5초 폴링마다 interval을 새로 걸면 걸음이 끊긴다.
   const activityRef = useRef<AgentActivity | null>(null);
+  // 마지막으로 본 모니터 배치의 지문 — 실제로 바뀌었을 때만 위치를 다시 잡으려고 둔다.
+  const areasKeyRef = useRef("");
   // 작업 중 산책 구간인지. 걷는 그림을 쓸지 작업 포즈를 쓸지 가른다.
   const [strolling, setStrolling] = useState(false);
   const strollingRef = useRef(false);
@@ -525,25 +535,52 @@ function PetOverlay() {
     };
   }, []);
 
+  /** 설 수 있는 영역을 다시 받아 캐시를 갱신하고, 갱신된 목록을 돌려준다.
+   *
+   * 모니터를 뺐다 꽂으면 배치가 통째로 바뀌는데(각 화면의 원점 좌표까지) 앱은 그걸 알
+   * 방법이 없다. 갱신을 안 하면 캐시된 목록에 없는 모니터에 pet을 놓게 되고, 그러면
+   * "가장 가까운" 예전 모니터로 끌려가 모니터 간 이동이 막힌 것처럼 보인다.
+   * 받기 실패하거나 빈 목록이면 이전 캐시를 유지한다 — 빈 목록으로 덮으면 클램프가
+   * 통째로 풀려 pet이 화면 밖으로 나갈 수 있다. */
+  const refreshAreas = useCallback(async (): Promise<{ areas: Area[]; changed: boolean }> => {
+    try {
+      const areas = await invoke<Area[]>("pet_areas", { petSize });
+      if (areas.length > 0) {
+        const key = areasKey(areas);
+        const changed = key !== areasKeyRef.current;
+        areasKeyRef.current = key;
+        areasRef.current = areas;
+        return { areas, changed };
+      }
+    } catch {
+      /* 이전 캐시 유지 */
+    }
+    return { areas: areasRef.current, changed: false };
+  }, [petSize]);
+
   // 배율이 바뀌면 설 수 있는 영역이 줄거나 늘어난다 — 다시 받아 현재 위치를 그 안으로.
+  // 같은 주기로 디스플레이 구성 변경도 따라잡는다: 모니터 연결·해제를 알려주는 이벤트가
+  // 없어서 주기적으로 다시 받는 것 말고는 방법이 없다.
   useEffect(() => {
     let alive = true;
-    invoke<Area[]>("pet_areas", { petSize })
-      .then((areas) => {
-        if (!alive || areas.length === 0) return;
-        areasRef.current = areas;
-        const p = clampToAreas(xRef.current, yRef.current, areas);
-        xRef.current = p.x;
-        yRef.current = p.y;
-        centerRef.current = clampToAreas(centerRef.current.x, centerRef.current.y, areas);
-        targetRef.current = pickWanderTarget(centerRef.current, areas);
-        getCurrentWindow().setPosition(new LogicalPosition(p.x, p.y)).catch(() => {});
-      })
-      .catch(() => {});
+    async function sync() {
+      const { areas, changed } = await refreshAreas();
+      // 배치가 그대로면 아무것도 건드리지 않는다 — 목표를 다시 뽑으면 걷던 걸음이 끊긴다.
+      if (!alive || !changed || areas.length === 0) return;
+      const p = clampToAreas(xRef.current, yRef.current, areas);
+      xRef.current = p.x;
+      yRef.current = p.y;
+      centerRef.current = clampToAreas(centerRef.current.x, centerRef.current.y, areas);
+      targetRef.current = pickWanderTarget(centerRef.current, areas);
+      getCurrentWindow().setPosition(new LogicalPosition(p.x, p.y)).catch(() => {});
+    }
+    sync();
+    const id = setInterval(sync, AREA_SYNC_MS);
     return () => {
       alive = false;
+      clearInterval(id);
     };
-  }, [petSize]);
+  }, [petSize, refreshAreas]);
 
   // 배회 루프 — 목표 지점을 향해 상하좌우 대각선 자유롭게 걷다가, 도착하면 잠깐(REST_MS)
   // idle로 멈춰 쉬고, 그다음 홈 중심 반경 WANDER_RADIUS 안에서 새 목표를 뽑아 다시 걷는다.
@@ -697,15 +734,21 @@ function PetOverlay() {
     } else {
       // 놓은 자리를 화면 안으로 스냅한 뒤 그곳을 새 배회 중심으로 삼는다 —
       // 원래 반경으로 되돌아가지 않고, 옮겨준 모니터에서 계속 돌아다닌다.
-      const snapped = clampToAreas(xRef.current, yRef.current, areasRef.current);
-      xRef.current = snapped.x;
-      yRef.current = snapped.y;
-      getCurrentWindow().setPosition(new LogicalPosition(snapped.x, snapped.y)).catch(() => {});
-      centerRef.current = snapped;
-      targetRef.current = pickWanderTarget(centerRef.current, areasRef.current);
-      // 옮긴 자리를 바로 저장한다 — 종료 때만 저장하면 강제 종료·크래시·업데이트
-      // 재시작으로 죽었을 때 주 모니터로 되돌아간다.
-      invoke("save_pet_pos").catch(() => {});
+      // 놓는 순간 영역을 다시 받는다 — 모니터를 뺐다 꽂으면 캐시된 목록엔 그 모니터가
+      // 없어서, 거기에 놓아도 "가장 가까운" 예전 모니터로 끌려간다(이동이 막힌 것처럼 보인다).
+      const dropX = xRef.current;
+      const dropY = yRef.current;
+      refreshAreas().then(({ areas }) => {
+        const snapped = clampToAreas(dropX, dropY, areas);
+        xRef.current = snapped.x;
+        yRef.current = snapped.y;
+        getCurrentWindow().setPosition(new LogicalPosition(snapped.x, snapped.y)).catch(() => {});
+        centerRef.current = snapped;
+        targetRef.current = pickWanderTarget(centerRef.current, areas);
+        // 옮긴 자리를 바로 저장한다 — 종료 때만 저장하면 강제 종료·크래시·업데이트
+        // 재시작으로 죽었을 때 주 모니터로 되돌아간다.
+        invoke("save_pet_pos").catch(() => {});
+      });
     }
   }
 
