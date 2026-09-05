@@ -6,8 +6,8 @@
 use std::collections::HashMap;
 
 use crate::providers::{
-    Insight, ModelBreakdown, OfficialUsage, RunwayStatus, UsageProvider, UsageSample, Verdict,
-    WeeklyDay,
+    AccountStatus, Insight, ModelBreakdown, OfficialUsage, RunwayStatus, UsageProvider,
+    UsageSample, Verdict, WeeklyDay,
 };
 use chrono::{Datelike, Local, NaiveDate};
 
@@ -326,7 +326,11 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
 
             // 공식 사용률 %와 같은 윈도우의 로컬 누적 토큰으로 한도(분모)를 역산해
             // ETA를 계산한다. (Anthropic은 절대 토큰 한도를 공개하지 않는다)
-            let eta = if u.five_hour_utilization > 0.0 && burn_rate_per_min > 0.0 {
+            // 한도 역산은 이 사용률과 로컬 토큰이 같은 계정일 때만 성립한다.
+            let eta = if u.matches_local_samples
+                && u.five_hour_utilization > 0.0
+                && burn_rate_per_min > 0.0
+            {
                 let implied_limit = window_usage as f64 / (u.five_hour_utilization / 100.0);
                 let remaining = (implied_limit - window_usage as f64).max(0.0);
                 Some(remaining / burn_rate_per_min)
@@ -395,6 +399,8 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
     // 주간 한도를 날짜별로 쪼갠 소진 분해 — 어느 날 몰아 썼는지 보이게 한다.
     let weekly_breakdown = official
         .as_ref()
+        // 로컬 일별 토큰으로 안분하는 계산이라, 사용률이 다른 계정 것이면 성립하지 않는다.
+        .filter(|u| u.matches_local_samples)
         .map(|u| weekly_days(provider.tool_name(), u, now_ms, daily_usage))
         .unwrap_or_default();
 
@@ -435,7 +441,64 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
         is_estimate,
         plan,
         note,
+        accounts: account_statuses(provider, now_ms, window_secs),
     }
+}
+
+/// 계정별 잔여 상태 — 카드를 펼쳤을 때 그릴 줄들.
+///
+/// 계정이 하나뿐이면 카드 본문과 같은 말을 반복하게 되니 빈 목록을 돌려준다.
+/// JSONL에는 어느 계정으로 쓴 건지가 안 남아서 계정별 소진 속도를 잴 수 없다.
+/// 그래서 ETA는 전부 윈도우 경과 대비 페이스 추정이다.
+fn account_statuses(
+    provider: &dyn UsageProvider,
+    now_ms: i64,
+    window_secs: i64,
+) -> Vec<AccountStatus> {
+    let accounts = provider.accounts();
+    if accounts.len() < 2 {
+        return Vec::new();
+    }
+    accounts
+        .iter()
+        .map(|a| {
+            let usage = a.usage.as_ref();
+            let has_weekly = |u: &&OfficialUsage| !u.seven_day_resets_at.is_empty();
+            AccountStatus {
+                id: a.id.clone(),
+                label: a.label.clone(),
+                plan: a.plan.clone(),
+                is_active: a.is_active,
+                percent_remaining: usage.map(|u| (100.0 - u.five_hour_utilization).max(0.0)),
+                resets_at: usage
+                    .map(|u| u.five_hour_resets_at.clone())
+                    .filter(|s| !s.is_empty()),
+                eta_minutes: usage.and_then(|u| {
+                    pace_eta_minutes(
+                        u.five_hour_utilization,
+                        &u.five_hour_resets_at,
+                        window_secs,
+                        now_ms,
+                    )
+                }),
+                seven_day_remaining: usage
+                    .filter(has_weekly)
+                    .map(|u| (100.0 - u.seven_day_utilization).max(0.0)),
+                seven_day_resets_at: usage
+                    .filter(has_weekly)
+                    .map(|u| u.seven_day_resets_at.clone()),
+                seven_day_eta_minutes: usage.and_then(|u| {
+                    pace_eta_minutes(
+                        u.seven_day_utilization,
+                        &u.seven_day_resets_at,
+                        WEEK_SECS,
+                        now_ms,
+                    )
+                }),
+                note: a.note.clone(),
+            }
+        })
+        .collect()
 }
 
 /// 요금제 상향 힌트 — 주간 사용률 기반.
@@ -473,7 +536,10 @@ mod tests {
         // 20~40분 전에 활발히 썼고 최근 15분은 쉬었다.
         let samples: Vec<_> = (20..40).map(|m| sample(now - m * min, 1_000)).collect();
         let rate = burn_rate(&samples, now);
-        assert!(rate > 0.0, "짧은 공백에 속도가 0으로 죽으면 안 된다: {rate}");
+        assert!(
+            rate > 0.0,
+            "짧은 공백에 속도가 0으로 죽으면 안 된다: {rate}"
+        );
     }
 
     #[test]
@@ -512,7 +578,10 @@ mod tests {
             .unwrap()
             .to_rfc3339();
         let eta = pace_eta_minutes(90.0, &reset, 5 * 3600, now).expect("소진 예상이 나와야 한다");
-        assert!(eta > 0.0 && eta < 150.0, "리셋(150분)보다 빨라야 한다: {eta}");
+        assert!(
+            eta > 0.0 && eta < 150.0,
+            "리셋(150분)보다 빨라야 한다: {eta}"
+        );
     }
 
     #[test]
@@ -547,7 +616,10 @@ mod tests {
         let usage = [0, 1_390, 720, 300, 0, 0, 0];
         let days = allocate(&d, &usage, 47.0, "2026-08-06");
         let sum: f64 = days.iter().map(|x| x.daily_percent).sum();
-        assert!((sum - 47.0).abs() < 1e-9, "합계가 공식 사용률과 달라졌다: {sum}");
+        assert!(
+            (sum - 47.0).abs() < 1e-9,
+            "합계가 공식 사용률과 달라졌다: {sum}"
+        );
         assert!((days.last().unwrap().cumulative_percent - 47.0).abs() < 1e-9);
     }
 
@@ -573,7 +645,10 @@ mod tests {
     fn marks_today_and_future_slots() {
         let d = dates(7); // 08-03 ~ 08-09
         let days = allocate(&d, &[1, 1, 1, 1, 0, 0, 0], 20.0, "2026-08-06");
-        let today = days.iter().find(|x| x.is_today).expect("오늘이 있어야 한다");
+        let today = days
+            .iter()
+            .find(|x| x.is_today)
+            .expect("오늘이 있어야 한다");
         assert_eq!(today.date, "08/06");
         assert_eq!(days.iter().filter(|x| x.is_future).count(), 3); // 07,08,09
         assert!(!days[0].is_future);
@@ -631,6 +706,7 @@ mod tests {
             plan: None,
             rate_limit_multiplier: None,
             is_estimate: false,
+            matches_local_samples: true,
         };
         assert!(weekly_days("Claude Code", &official, now, 0).is_empty());
     }
