@@ -1113,8 +1113,17 @@ fn check_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
 /// 그 항목은 재무장될 기회가 없어, 나중에 같은 키가 다시 생겨도 이미 발사한 것으로
 /// 읽혀 조용히 안 운다.
 fn prune_alert_keys(alerted: &mut HashMap<String, bool>, targets: &[AlertTarget]) {
-    let live: std::collections::HashSet<&str> = targets.iter().map(|t| t.key.as_str()).collect();
-    alerted.retain(|key, _| live.contains(key.as_str()));
+    let live_keys: std::collections::HashSet<&str> =
+        targets.iter().map(|t| t.key.as_str()).collect();
+    let live_tools: std::collections::HashSet<&str> =
+        targets.iter().map(|t| t.tool.as_str()).collect();
+    alerted.retain(|key, _| {
+        // 이번 라운드에 대상이 하나도 없는 도구는 건드리지 않는다. 429나 콜드 스타트로
+        // 잠깐 결측된 것뿐인데 키를 지우면, 복구했을 때 잔여율이 임계 이하 그대로인데도
+        // 경보가 다시 울린다. 정리 대상은 키 공간이 실제로 바뀐 도구뿐이다.
+        let tool = key.split('#').next().unwrap_or(key);
+        !live_tools.contains(tool) || live_keys.contains(key.as_str())
+    });
 }
 
 /// 경보 판정 단위.
@@ -1159,15 +1168,25 @@ fn alert_targets(s: &RunwayStatus) -> Vec<AlertTarget> {
     s.accounts
         .iter()
         .filter_map(|a| {
+            // 활성 계정은 카드가 쓰는 ETA와 verdict를 그대로 쓴다. 계정별 페이스
+            // 추정으로 갈아끼우면 같은 계정인데 카드 본문과 알림의 숫자가 달라진다.
+            // 나머지 계정은 로컬 시계열이 없어 페이스 추정뿐이고, 그 값은 리셋 전에
+            // 바닥날 때만 있으므로 값의 존재가 곧 "리셋 전 소진" 판정이다.
+            let (eta, runs_out_first) = if a.is_active {
+                (
+                    s.eta_minutes,
+                    s.verdict.as_ref().is_some_and(|v| v.level == "danger"),
+                )
+            } else {
+                (a.eta_minutes, a.eta_minutes.is_some())
+            };
             Some(AlertTarget {
                 key: format!("{}#{}", s.tool, a.id),
                 title_name: format!("{} · {}", s.tool, a.label),
                 tool: s.tool.clone(),
                 percent: a.percent_remaining?,
-                // 계정별 ETA는 페이스 추정이라 리셋 전에 바닥날 때만 값이 있다.
-                // 값이 있다는 것 자체가 "리셋 전 소진" 판정이다.
-                runs_out_first: a.eta_minutes.is_some(),
-                eta_minutes: a.eta_minutes,
+                runs_out_first,
+                eta_minutes: eta,
                 resets_at: a.resets_at.clone(),
             })
         })
@@ -1687,5 +1706,54 @@ fn toggle_popover(app: &AppHandle, force_show: bool) {
         let _ = win.move_window(Position::TrayBottomCenter);
         let _ = win.show();
         let _ = win.set_focus();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn target(tool: &str, key: &str) -> AlertTarget {
+        AlertTarget {
+            key: key.to_string(),
+            title_name: tool.to_string(),
+            tool: tool.to_string(),
+            percent: 50.0,
+            eta_minutes: None,
+            runs_out_first: false,
+            resets_at: None,
+        }
+    }
+
+    #[test]
+    fn prunes_keys_from_the_old_key_space() {
+        // 계정이 둘에서 하나로 줄면 tool#id 키가 남는다. 그대로 두면 재무장될
+        // 기회가 없어 나중에 같은 키가 다시 생겨도 조용히 안 운다.
+        let mut alerted = HashMap::from([
+            ("Claude Code#org-a".to_string(), true),
+            ("Claude Code#org-b".to_string(), true),
+        ]);
+        prune_alert_keys(&mut alerted, &[target("Claude Code", "Claude Code")]);
+        assert_eq!(alerted.len(), 0);
+    }
+
+    #[test]
+    fn keeps_keys_of_tools_that_went_missing() {
+        // 429나 콜드 스타트로 한 라운드 결측된 것뿐이면 발사 플래그를 지우면 안 된다.
+        // 지우면 복구할 때 잔여율이 그대로인데도 같은 경보가 다시 울린다.
+        let mut alerted = HashMap::from([
+            ("Claude Code#org-a".to_string(), true),
+            ("Codex".to_string(), true),
+        ]);
+        prune_alert_keys(&mut alerted, &[target("Codex", "Codex")]);
+        assert_eq!(alerted.get("Claude Code#org-a"), Some(&true));
+        assert_eq!(alerted.get("Codex"), Some(&true));
+    }
+
+    #[test]
+    fn keeps_live_keys_untouched() {
+        let mut alerted = HashMap::from([("Claude Code#org-a".to_string(), true)]);
+        prune_alert_keys(&mut alerted, &[target("Claude Code", "Claude Code#org-a")]);
+        assert_eq!(alerted.get("Claude Code#org-a"), Some(&true));
     }
 }
