@@ -122,7 +122,6 @@ impl UsageProvider for GeminiProvider {
             rate_limit_multiplier: None,
             // 한도를 가정해 만든 값이다 — 공식 사용률과 같은 무게로 다루면 안 된다.
             is_estimate: true,
-            matches_local_samples: true,
         })
     }
 }

@@ -5,18 +5,20 @@
 //! 그래서 활성 계정만 읽으면 나머지 계정의 잔여율이 통째로 안 보인다.
 //!
 //! 훑는 곳은 세 군데다.
-//! 1. Keychain `Claude Code-credentials[-<sha256(config_dir) 앞 8자>]` — 활성 계정.
-//!    `CLAUDE_CONFIG_DIR`로 계정을 나눠 쓰면 여기에 항목이 여러 개 생긴다.
-//! 2. 오르카 `claude-runtime-auth/system-default-auth.json` — 오르카 계정으로
-//!    전환되면서 밀려난 원래 로그인.
-//! 3. 오르카 `claude-accounts/<uuid>/` + Keychain `Orca Claude Code Managed Credentials`.
+//! 1. Keychain `Claude Code-credentials[-<sha256(config_dir) 앞 8자>]` — `CLAUDE_CONFIG_DIR`로
+//!    계정을 나누면 여기에 항목이 여러 개 생긴다. 해시는 되돌릴 수 없으니 후보 디렉토리를
+//!    해싱해 서비스 이름을 만들고 그 이름으로 직접 조회한다
+//! 2. 오르카 `claude-runtime-auth/system-default-auth.json` — 오르카 계정으로 전환되면서
+//!    밀려난 원래 로그인
+//! 3. 오르카 `claude-accounts/<uuid>/` + Keychain `Orca Claude Code Managed Credentials`
 //!
 //! 2번과 3번은 오르카 내부 구조라 포맷이 바뀌면 못 읽는다. 실패하면 조용히 건너뛰고
-//! 활성 계정만 쓴다 — 계정 하나라도 보이는 게 아무것도 안 보이는 것보다 낫다.
+//! 나머지 계정만 쓴다 — 계정 하나라도 보이는 게 아무것도 안 보이는 것보다 낫다.
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -28,7 +30,7 @@ const KEYCHAIN_PREFIX: &str = "Claude Code-credentials";
 const ORCA_KEYCHAIN_SERVICE: &str = "Orca Claude Code Managed Credentials";
 
 /// 찾아낸 계정 하나.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ClaudeAccount {
     /// 조직 UUID. 이메일이 같아도 조직이 다르면 쿼터가 따로 돌아서 이걸로 가른다.
     /// 조직을 못 읽으면 토큰 지문으로 대신한다.
@@ -39,11 +41,30 @@ pub struct ClaudeAccount {
     pub plan: Option<String>,
     pub rate_mult: Option<f64>,
     /// 지금 Claude Code가 실제로 쓰는 계정인지.
-    /// 로컬 JSONL 시계열은 이 계정 것이라, 한도 역산도 이 계정에만 유효하다.
+    ///
+    /// 로컬 JSONL(`~/.claude/projects`)의 주인이 이 계정 하나뿐이라, 한도 역산이
+    /// 성립하는지도 이 값으로 가른다.
     pub is_active: bool,
 }
 
-/// 계정 이름표를 만드는 데 쓰는 프로필 조각.
+/// 토큰을 든 구조체라 Debug를 파생하지 않는다.
+///
+/// 파생해두면 나중에 디버그 출력이나 panic 메시지 한 줄이 베어러 토큰을 그대로
+/// 로그에 남긴다. 실수로 `{:?}`를 써도 안전하도록 여기서 가린다.
+impl fmt::Debug for ClaudeAccount {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClaudeAccount")
+            .field("id", &self.id)
+            .field("label", &self.label)
+            .field("token", &"<redacted>")
+            .field("plan", &self.plan)
+            .field("rate_mult", &self.rate_mult)
+            .field("is_active", &self.is_active)
+            .finish()
+    }
+}
+
+/// 계정 이름표와 활성 판정에 쓰는 프로필 조각.
 #[derive(Debug, Clone, Deserialize)]
 struct Profile {
     #[serde(rename = "organizationUuid")]
@@ -93,44 +114,76 @@ struct ClaudeAiOauth {
 ///
 /// 계정을 못 찾으면 빈 목록 — 호출자가 기존 단일 계정 경로로 돌아간다.
 pub fn discover() -> Vec<ClaudeAccount> {
-    let mut out = active_accounts();
-    out.extend(orca_system_account());
-    out.extend(orca_managed_accounts());
+    // 지금 Claude Code가 쓰는 조직. 활성 판정의 기준점이다.
+    let active_org = dirs::home_dir()
+        .and_then(|h| read_profile(&h.join(".claude.json")))
+        .and_then(|p| p.organization_uuid)
+        .filter(|s| !s.is_empty());
 
-    // 같은 조직이 여러 소스에 걸쳐 나온다. 먼저 들어온 쪽(활성)이 이긴다.
+    // 홈 스캔은 한 번만 한다 — 서비스 후보마다 다시 훑으면 계정 수만큼 반복된다.
+    let candidates = config_dir_candidates();
+
+    let mut out = keychain_accounts(&candidates, active_org.as_deref());
+    out.extend(orca_system_account(active_org.as_deref()));
+    out.extend(orca_managed_accounts(active_org.as_deref()));
+
+    // 같은 조직이 여러 소스에 걸쳐 나온다. 먼저 들어온 쪽이 이긴다.
     let mut seen: HashSet<String> = HashSet::new();
     out.retain(|a| seen.insert(a.id.clone()));
+    out.sort_by_key(|a| !a.is_active);
     out
 }
 
-/// Keychain의 Claude Code credential 항목들. 활성 계정 후보다.
-fn active_accounts() -> Vec<ClaudeAccount> {
-    let home_profile = dirs::home_dir().and_then(|h| read_profile(&h.join(".claude.json")));
+/// Keychain의 Claude Code credential 항목들.
+fn keychain_accounts(candidates: &[PathBuf], active_org: Option<&str>) -> Vec<ClaudeAccount> {
     let mut out = Vec::new();
-    for service in claude_keychain_services() {
+    for (service, config_dir) in keychain_services(candidates) {
         let Some(raw) = keychain_password(&service, None) else {
             continue;
         };
-        let profile = profile_for_service(&service).or_else(|| home_profile.clone());
-        if let Some(acc) = from_credentials(&raw, profile, true) {
+        // 프로필을 못 읽으면 홈 것으로 때우지 않는다. 다른 config dir의 계정이
+        // 홈 조직 UUID를 얻으면 중복 제거에 삼켜져 목록에서 통째로 사라진다.
+        let profile = profile_paths(&config_dir)
+            .iter()
+            .find_map(|p| read_profile(p));
+        if let Some(acc) = from_credentials(&raw, profile, active_org) {
             out.push(acc);
         }
     }
     out
 }
 
+/// 조회할 Keychain 서비스 이름과 그 이름이 가리키는 config dir.
+///
+/// 예전에는 `security dump-keychain`으로 이름을 긁었는데, 그러면 Claude와 무관한
+/// 항목까지 키체인 전체를 훑고 출력 형식(hex blob, 이스케이프된 따옴표)에도 약했다.
+/// 후보 디렉토리를 해싱해 이름을 만들면 그 두 문제가 함께 없어진다.
+fn keychain_services(candidates: &[PathBuf]) -> Vec<(String, PathBuf)> {
+    let home_claude = dirs::home_dir()
+        .map(|h| h.join(".claude"))
+        .unwrap_or_default();
+    // 접미사 없는 레거시 항목은 기본 config dir 것이다.
+    let mut out = vec![(KEYCHAIN_PREFIX.to_string(), home_claude)];
+    for dir in candidates {
+        if let Some(hash) = dir_hash(dir) {
+            out.push((format!("{KEYCHAIN_PREFIX}-{hash}"), dir.clone()));
+        }
+    }
+    out
+}
+
 /// 오르카가 자기 계정으로 전환하면서 밀어낸 원래 로그인.
-fn orca_system_account() -> Option<ClaudeAccount> {
+fn orca_system_account(active_org: Option<&str>) -> Option<ClaudeAccount> {
     let path = orca_dir()?
         .join("claude-runtime-auth")
         .join("system-default-auth.json");
     let auth: OrcaSystemAuth = serde_json::from_str(&fs::read_to_string(path).ok()?).ok()?;
     let creds = auth.keychain.or(auth.legacy)?;
-    from_credentials(&creds, auth.profile, false)
+    from_credentials(&creds, auth.profile, active_org)
 }
 
 /// 오르카가 관리하는 계정들 — 디렉토리에서 이름표, Keychain에서 토큰을 얻는다.
-fn orca_managed_accounts() -> Vec<ClaudeAccount> {
+fn orca_managed_accounts(active_org: Option<&str>) -> Vec<ClaudeAccount> {
     let Some(root) = orca_dir().map(|d| d.join("claude-accounts")) else {
         return Vec::new();
     };
@@ -146,7 +199,7 @@ fn orca_managed_accounts() -> Vec<ClaudeAccount> {
             continue;
         };
         let profile = read_profile(&entry.path().join("auth").join("oauth-account.json"));
-        if let Some(acc) = from_credentials(&raw, profile, false) {
+        if let Some(acc) = from_credentials(&raw, profile, active_org) {
             out.push(acc);
         }
     }
@@ -154,7 +207,11 @@ fn orca_managed_accounts() -> Vec<ClaudeAccount> {
 }
 
 /// credential JSON + 프로필 → 계정. 토큰이 없으면 쓸모가 없어 버린다.
-fn from_credentials(raw: &str, profile: Option<Profile>, is_active: bool) -> Option<ClaudeAccount> {
+fn from_credentials(
+    raw: &str,
+    profile: Option<Profile>,
+    active_org: Option<&str>,
+) -> Option<ClaudeAccount> {
     let creds: Credentials = serde_json::from_str(raw.trim()).ok()?;
     let o = creds.claude_ai_oauth;
     if o.access_token.is_empty() {
@@ -164,11 +221,15 @@ fn from_credentials(raw: &str, profile: Option<Profile>, is_active: bool) -> Opt
         o.rate_limit_tier.as_deref(),
         o.subscription_type.as_deref(),
     );
-    let id = profile
+    let org = profile
         .as_ref()
         .and_then(|p| p.organization_uuid.clone())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| fingerprint(&o.access_token));
+        .filter(|s| !s.is_empty());
+    let id = org.clone().unwrap_or_else(|| fingerprint(&o.access_token));
+    // Keychain에 항목이 있다는 것만으로 활성이라고 보면 config dir을 나눈 환경에서
+    // 활성이 여럿이 된다. 로컬 JSONL의 주인은 `~/.claude.json`이 가리키는 계정
+    // 하나뿐이라 그 조직과 맞는 계정만 활성이다.
+    let is_active = matches!((org.as_deref(), active_org), (Some(a), Some(b)) if a == b);
     let label = profile
         .as_ref()
         .and_then(|p| {
@@ -188,43 +249,6 @@ fn from_credentials(raw: &str, profile: Option<Profile>, is_active: bool) -> Opt
         token: o.access_token,
         is_active,
     })
-}
-
-/// Keychain에서 `Claude Code-credentials`로 시작하는 서비스 이름들.
-///
-/// `security dump-keychain`은 비밀 값 없이 메타데이터만 뱉어서 접근 프롬프트가 뜨지
-/// 않는다. 실패하면 접미사 없는 기본 이름 하나로 폴백한다.
-#[cfg(target_os = "macos")]
-fn claude_keychain_services() -> Vec<String> {
-    let fallback = || vec![KEYCHAIN_PREFIX.to_string()];
-    let Ok(out) = Command::new("security").arg("dump-keychain").output() else {
-        return fallback();
-    };
-    let Ok(text) = String::from_utf8(out.stdout) else {
-        return fallback();
-    };
-    let mut found: Vec<String> = Vec::new();
-    for line in text.lines() {
-        let Some(rest) = line.trim().strip_prefix("\"svce\"<blob>=\"") else {
-            continue;
-        };
-        let Some(name) = rest.strip_suffix('"') else {
-            continue;
-        };
-        if name.starts_with(KEYCHAIN_PREFIX) && !found.iter().any(|f| f == name) {
-            found.push(name.to_string());
-        }
-    }
-    if found.is_empty() {
-        fallback()
-    } else {
-        found
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn claude_keychain_services() -> Vec<String> {
-    Vec::new()
 }
 
 /// Keychain 항목의 비밀 값. account를 주면 같은 서비스 안에서 그 계정 것만 집는다.
@@ -249,22 +273,6 @@ fn keychain_password(_service: &str, _account: Option<&str>) -> Option<String> {
     None
 }
 
-/// 서비스 이름의 해시 접미사가 가리키는 config dir을 찾아 그 계정 프로필을 읽는다.
-///
-/// 접미사는 config dir 절대경로의 sha256 앞 8자다. 해시는 되돌릴 수 없으니
-/// 후보 디렉토리를 해싱해 맞춰본다.
-fn profile_for_service(service: &str) -> Option<Profile> {
-    let suffix = service.strip_prefix(KEYCHAIN_PREFIX)?.strip_prefix('-');
-    let dir = match suffix {
-        // 접미사가 없는 레거시 항목은 기본 config dir(~/.claude) 것이다.
-        None => dirs::home_dir()?.join(".claude"),
-        Some(hash) => config_dir_candidates()
-            .into_iter()
-            .find(|d| dir_hash(d).is_some_and(|h| h == hash))?,
-    };
-    profile_paths(&dir).iter().find_map(|p| read_profile(p))
-}
-
 /// config dir의 계정 프로필 파일 후보. `~/.claude` → `~/.claude.json` 규칙을 먼저 본다.
 fn profile_paths(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -275,7 +283,7 @@ fn profile_paths(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// `CLAUDE_CONFIG_DIR`로 쓸 만한 디렉토리들. 해시를 맞춰볼 후보다.
+/// `CLAUDE_CONFIG_DIR`로 쓸 만한 디렉토리들. 서비스 이름을 만들 후보다.
 fn config_dir_candidates() -> Vec<PathBuf> {
     let mut out = Vec::new();
     let Some(home) = dirs::home_dir() else {
@@ -358,13 +366,32 @@ fn hex(s: &str) -> String {
 mod tests {
     use super::*;
 
+    fn creds(token: &str, sub: &str) -> String {
+        format!(r#"{{"claudeAiOauth":{{"accessToken":"{token}","subscriptionType":"{sub}"}}}}"#)
+    }
+
+    fn profile(org: &str, name: &str) -> Profile {
+        Profile {
+            organization_uuid: Some(org.to_string()),
+            organization_name: Some(name.to_string()),
+            email_address: None,
+        }
+    }
+
     #[test]
-    fn service_suffix_matches_config_dir_hash() {
+    fn service_name_uses_config_dir_hash() {
         // Keychain 접미사 규칙이 경로 sha256 앞 8자라는 전제를 고정한다.
-        let dir = Path::new("/Users/example/.claude");
-        let hash = dir_hash(dir).expect("경로 해시가 나와야 한다");
-        assert_eq!(hash.len(), 8);
-        assert_eq!(hash, sha8("/Users/example/.claude"));
+        let dirs = vec![PathBuf::from("/Users/example/.claude-work")];
+        let services = keychain_services(&dirs);
+        let expected = format!("{KEYCHAIN_PREFIX}-{}", sha8("/Users/example/.claude-work"));
+        assert!(services.iter().any(|(name, _)| *name == expected));
+    }
+
+    #[test]
+    fn legacy_service_name_comes_first() {
+        // 접미사 없는 항목은 기본 config dir 것이라 항상 조회 대상이다.
+        let services = keychain_services(&[]);
+        assert_eq!(services[0].0, KEYCHAIN_PREFIX);
     }
 
     #[test]
@@ -374,34 +401,46 @@ mod tests {
     }
 
     #[test]
-    fn credentials_without_profile_fall_back_to_plan_label() {
-        let raw = r#"{"claudeAiOauth":{"accessToken":"tok","subscriptionType":"team"}}"#;
-        let acc = from_credentials(raw, None, true).expect("계정이 나와야 한다");
+    fn only_the_org_claude_code_uses_is_active() {
+        // 로컬 JSONL의 주인은 하나뿐이라 그 조직과 맞는 계정만 활성이어야 한다.
+        let mine = from_credentials(
+            &creds("tok-a", "team"),
+            Some(profile("org-a", "A")),
+            Some("org-a"),
+        )
+        .expect("계정이 나와야 한다");
+        let other = from_credentials(
+            &creds("tok-b", "team"),
+            Some(profile("org-b", "B")),
+            Some("org-a"),
+        )
+        .expect("계정이 나와야 한다");
+        assert!(mine.is_active);
+        assert!(!other.is_active);
+    }
+
+    #[test]
+    fn unknown_org_is_never_active() {
+        // 조직을 못 읽으면 로컬 샘플의 주인인지 확인할 방법이 없다.
+        let acc = from_credentials(&creds("tok", "team"), None, Some("org-a"))
+            .expect("계정이 나와야 한다");
+        assert!(!acc.is_active);
         assert_eq!(acc.label, "Team");
-        assert!(acc.is_active);
         // 조직을 모르면 토큰 지문이 id가 된다 — 토큰 원문이 새지 않아야 한다.
         assert_ne!(acc.id, "tok");
     }
 
     #[test]
-    #[ignore = "로컬 Keychain 상태에 의존하는 진단용"]
-    fn probe_local_accounts() {
-        let accounts = discover();
-        println!("발견한 계정 {}개", accounts.len());
-        for a in &accounts {
-            println!(
-                "  label={:<20} active={:<5} plan={:?} id={}",
-                a.label,
-                a.is_active,
-                a.plan,
-                &a.id[..a.id.len().min(8)]
-            );
-        }
+    fn empty_token_is_rejected() {
+        assert!(from_credentials(&creds("", "team"), None, None).is_none());
     }
 
     #[test]
-    fn empty_token_is_rejected() {
-        let raw = r#"{"claudeAiOauth":{"accessToken":""}}"#;
-        assert!(from_credentials(raw, None, true).is_none());
+    fn debug_hides_the_token() {
+        let acc = from_credentials(&creds("secret-token", "team"), None, None)
+            .expect("계정이 나와야 한다");
+        let shown = format!("{acc:?}");
+        assert!(!shown.contains("secret-token"));
+        assert!(shown.contains("redacted"));
     }
 }

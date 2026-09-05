@@ -51,8 +51,12 @@ type CachedAccounts = Option<(Instant, Vec<ClaudeAccount>)>;
 static ACCOUNTS_CACHE: LazyLock<Mutex<CachedAccounts>> = LazyLock::new(|| Mutex::new(None));
 
 /// 갱신 중복 방지용. 이 락을 잡은 스레드만 HTTP를 호출한다 —
-/// 데이터 락(USAGE_CACHE)은 네트워크 대기 중에 절대 잡고 있지 않는다.
+/// 데이터 락(USAGE_CACHE)은 네트워크 대기 중에 절대 잡고 있지 않다.
 static FETCH_GUARD: Mutex<()> = Mutex::new(());
+
+/// 계정 발견 중복 실행 방지용. UI 폴링(30초)과 백그라운드 루프(60초)가 캐시 만료
+/// 시점에 겹치면 키체인 조회와 홈 스캔을 두 번 한다.
+static DISCOVER_GUARD: Mutex<()> = Mutex::new(());
 
 /// 시계열 샘플 캐시 TTL. 통계 기간 토글·대시보드 폴링이 같은 파싱 결과를 재사용.
 const SAMPLES_CACHE_TTL: Duration = Duration::from_secs(60);
@@ -175,12 +179,7 @@ impl UsageProvider for ClaudeCodeProvider {
     }
 
     fn official_usage(&self) -> Option<OfficialUsage> {
-        let accounts = accounts_usage();
-        let rep = representative(&accounts)?;
-        let mut usage = rep.usage.clone()?;
-        // 대표가 지금 로그를 쌓는 계정이 아니면 로컬 토큰으로 한도를 역산하면 안 된다.
-        usage.matches_local_samples = rep.is_active;
-        Some(usage)
+        representative(&accounts_usage())?.usage.clone()
     }
 
     fn accounts(&self) -> Vec<AccountUsage> {
@@ -192,11 +191,17 @@ impl UsageProvider for ClaudeCodeProvider {
         if accounts.is_empty() {
             return Some("error.no_token".to_string());
         }
-        // 대표 계정이 정상이면 알릴 게 없다. 하나도 못 받았을 때만 사유를 올린다.
-        if accounts.iter().any(|a| a.usage.is_some()) {
-            return None;
+        // 카드가 세우는 건 활성 계정뿐이라, 그 계정을 못 받으면 다른 계정이
+        // 성공했어도 헤더는 빈다. 왜 비었는지를 여기서 알린다.
+        match accounts.iter().find(|a| a.is_active) {
+            Some(active) if active.usage.is_some() => None,
+            Some(active) => active
+                .note
+                .clone()
+                .or_else(|| Some("error.unavailable".to_string())),
+            // 로그인은 돼 있는데 어느 계정이 활성인지 못 가린 경우다.
+            None => Some("error.no_token".to_string()),
         }
-        accounts.iter().find_map(|a| a.note.clone())
     }
 }
 
@@ -210,13 +215,7 @@ fn accounts_usage() -> Vec<AccountUsage> {
     if !accounts.iter().all(|a| is_fresh(&a.id)) {
         // 이미 다른 스레드가 갱신 중이면 기다리지 않고 직전 값을 쓴다.
         if let Ok(_guard) = FETCH_GUARD.try_lock() {
-            for acc in &accounts {
-                if is_fresh(&acc.id) {
-                    continue;
-                }
-                let (usage, error) = fetch_official_usage(acc);
-                store_usage(&acc.id, usage, error);
-            }
+            refresh_stale(&accounts);
         }
     }
     accounts
@@ -235,37 +234,74 @@ fn accounts_usage() -> Vec<AccountUsage> {
         .collect()
 }
 
+/// 만료된 계정들의 사용률을 한꺼번에 갱신한다.
+///
+/// 계정마다 순차로 돌면 `FETCH_GUARD` 보유 시간이 계정 수에 비례해 늘어난다
+/// (계정당 최대 `HTTP_TIMEOUT`). 계정들은 대개 같은 주기에 함께 만료되므로 그
+/// 몰림이 캐시 TTL마다 반복된다. 동시에 쏘면 한 번의 타임아웃으로 끝난다.
+///
+/// 요청 수가 계정 수만큼 늘지만 계정별 캐시 TTL이 그대로라 폴링 빈도는 안 변한다.
+fn refresh_stale(accounts: &[ClaudeAccount]) {
+    let stale: Vec<&ClaudeAccount> = accounts.iter().filter(|a| !is_fresh(&a.id)).collect();
+    if stale.is_empty() {
+        return;
+    }
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = stale
+            .iter()
+            .map(|acc| scope.spawn(move || (acc.id.clone(), fetch_official_usage(acc))))
+            .collect();
+        for handle in handles {
+            if let Ok((id, (usage, error))) = handle.join() {
+                store_usage(&id, usage, error);
+            }
+        }
+    });
+}
+
 /// 카드 대표로 세울 계정 — 지금 쓰는 계정.
 ///
 /// 잔여율이 가장 낮은 계정을 세우고 싶어지지만 그러면 안 된다. 안 쓰는 계정이
-/// 바닥나 있으면 트레이에 0%가 뜨는데 정작 지금 작업하는 세션은 멀쩡해서 숫자가
-/// 거짓말을 한다. 게다가 로컬 JSONL은 활성 계정 것이라, 대표가 다른 계정이면
-/// 소진 속도·ETA·주간 분해·요금제 추천이 전부 근거를 잃는다.
-/// 다른 계정이 더 위험한 건 계정 줄과 계정별 경보가 알린다.
+/// 바닥나 있으면 트레이에 0%가 뜨는데 정작 작업 중인 세션은 멀쩡해서, 그 숫자만
+/// 보고는 상황을 잘못 판단하게 된다. 게다가 로컬 JSONL은 활성 계정 것이라 대표가
+/// 다른 계정이면 소진 속도와 ETA, 주간 분해, 요금제 추천이 전부 근거를 잃는다.
+///
+/// **활성 계정을 못 받아도 다른 계정으로 대신하지 않는다.** 대신 세우면 남의
+/// 사용률이 카드 헤더와 트레이, 배터리 레벨, 경보 임계 판정에 그대로 올라가
+/// 위에 적은 그 상황이 다시 생긴다. 아무것도 안 내놓고 `status_note`가 사유를
+/// 알리는 쪽이 맞다 — 다른 계정 값은 계정 줄에 그대로 남아 정보를 잃지 않는다.
 fn representative(accounts: &[AccountUsage]) -> Option<&AccountUsage> {
-    accounts
-        .iter()
-        .find(|a| a.is_active && a.usage.is_some())
-        // 활성 계정 조회가 실패하면 받아온 아무 계정이라도 세운다. 이때는
-        // matches_local_samples가 false라 역산 계산이 알아서 꺼진다.
-        .or_else(|| accounts.iter().find(|a| a.usage.is_some()))
-        .or_else(|| accounts.first())
+    accounts.iter().find(|a| a.is_active && a.usage.is_some())
 }
 
 /// 발견한 계정 목록 (짧은 캐시). Keychain 훑기는 폴링마다 할 만큼 싸지 않다.
 fn cached_accounts() -> Vec<ClaudeAccount> {
-    if let Ok(guard) = ACCOUNTS_CACHE.lock() {
-        if let Some((at, accounts)) = guard.as_ref() {
-            if at.elapsed() < ACCOUNTS_CACHE_TTL {
-                return accounts.clone();
-            }
-        }
+    if let Some(fresh) = cached_account_list(true) {
+        return fresh;
+    }
+    // 이미 다른 스레드가 훑는 중이면 기다리지 않고 직전 값을 쓴다.
+    let Ok(_guard) = DISCOVER_GUARD.try_lock() else {
+        return cached_account_list(false).unwrap_or_default();
+    };
+    // 락을 얻는 사이에 그 스레드가 채워놨을 수 있다.
+    if let Some(fresh) = cached_account_list(true) {
+        return fresh;
     }
     let found = claude_accounts::discover();
     if let Ok(mut guard) = ACCOUNTS_CACHE.lock() {
         *guard = Some((Instant::now(), found.clone()));
     }
     found
+}
+
+/// 캐시된 계정 목록. `require_fresh`면 TTL 안쪽일 때만 돌려준다.
+fn cached_account_list(require_fresh: bool) -> Option<Vec<ClaudeAccount>> {
+    let guard = ACCOUNTS_CACHE.lock().ok()?;
+    let (at, accounts) = guard.as_ref()?;
+    if require_fresh && at.elapsed() >= ACCOUNTS_CACHE_TTL {
+        return None;
+    }
+    Some(accounts.clone())
 }
 
 fn is_fresh(id: &str) -> bool {
@@ -344,8 +380,6 @@ fn fetch_official_usage(account: &ClaudeAccount) -> (Option<OfficialUsage>, Opti
             plan: account.plan.clone(),
             rate_limit_multiplier: account.rate_mult,
             is_estimate: false,
-            // 대표 계정 판정은 official_usage에서 덮어쓴다.
-            matches_local_samples: account.is_active,
         }),
         None,
     )
@@ -515,7 +549,6 @@ mod tests {
                 plan: None,
                 rate_limit_multiplier: None,
                 is_estimate: false,
-                matches_local_samples: is_active,
             }),
             note: None,
         }
@@ -532,17 +565,20 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_when_active_account_lookup_failed() {
-        // 활성 계정 조회가 실패하면 받아온 계정이라도 세운다.
+    fn no_fallback_when_active_account_lookup_failed() {
+        // 다른 계정을 대신 세우면 남의 사용률이 카드 헤더와 트레이에 올라간다.
+        // 이 기능이 막으려던 그 상황이라, 차라리 아무것도 안 내놓는다.
         let accounts = vec![
             account("mine", true, None),
             account("other", false, Some(30.0)),
         ];
-        assert_eq!(representative(&accounts).unwrap().label, "other");
+        assert!(representative(&accounts).is_none());
     }
 
     #[test]
-    fn no_accounts_means_no_representative() {
+    fn no_representative_without_an_active_account() {
+        let accounts = vec![account("other", false, Some(30.0))];
+        assert!(representative(&accounts).is_none());
         assert!(representative(&[]).is_none());
     }
 }

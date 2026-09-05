@@ -229,7 +229,6 @@ impl CodexProvider {
             plan,
             rate_limit_multiplier: None, // Codex는 소비자 사다리 배수 미상.
             is_estimate: false,          // Codex가 직접 기록한 공식 사용률.
-            matches_local_samples: true,
         };
         (Some(usage), window_secs)
     }
