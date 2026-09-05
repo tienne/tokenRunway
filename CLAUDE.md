@@ -18,6 +18,7 @@ src-tauri/src/
 └ providers/
    ├ mod.rs         UsageProvider trait + 공용 타입 + find_recent_jsonl 헬퍼
    ├ claude_code.rs Keychain OAuth + ~/.claude JSONL
+   ├ claude_accounts.rs Claude 계정 발견(Keychain 해시 규칙 + 오르카 저장소)
    ├ codex.rs       ~/.codex JSONL (token_count + rate_limits)
    ├ gemini.rs      ~/.gemini 로그 요청 수
    └ antigravity.rs ~/.gemini/antigravity-cli 전송 로그
@@ -79,6 +80,25 @@ trait UsageProvider {
   - **180초 캐싱 필수** — 이 엔드포인트는 공격적 rate limit. `USAGE_CACHE` 전역.
   - 응답: `five_hour.utilization`, `seven_day.utilization`, `resets_at`
 - **플랜**: 같은 credentials의 `rateLimitTier`(`default_claude_max_5x` → "Max 5x")
+- **계정이 여럿일 때** (`claude_accounts.rs`) — 한 머신에 Claude 계정이 여러 개 있으면
+  전부 찾아 계정마다 잔여율을 받는다. 훑는 곳은 세 군데다.
+  - Keychain `Claude Code-credentials[-<sha256(config_dir) 앞 8자>]` — 활성 계정.
+    `CLAUDE_CONFIG_DIR`로 계정을 나누면 여기 항목이 여러 개 생긴다. 접미사 해시는
+    되돌릴 수 없어 후보 디렉토리(`~/.claude*`, `~/.config/*claude*`)를 해싱해 맞춘다.
+    서비스 이름 목록은 `security dump-keychain`으로 얻는다 — 메타데이터만 나와서
+    접근 프롬프트가 뜨지 않는다
+  - 오르카 `~/Library/Application Support/orca/claude-runtime-auth/system-default-auth.json`
+    — 오르카 계정으로 전환되며 밀려난 원래 로그인(`keychainCredentialsJson`) + 라벨
+  - 오르카 `claude-accounts/<uuid>/auth/oauth-account.json`(라벨) + Keychain
+    `Orca Claude Code Managed Credentials`(토큰, account=`<uuid>`)
+  - **오르카는 `CLAUDE_CONFIG_DIR`이 아니라 Keychain 항목을 통째로 바꿔치기**해서
+    계정을 전환한다. 활성 계정만 읽으면 나머지 계정이 통째로 안 보인다
+  - 계정 구분은 조직 UUID로 한다 — 같은 이메일로 조직 두 곳(Team/Enterprise)에
+    속하면 쿼터가 따로 돌기 때문에 이메일로는 못 가른다. 조직을 못 읽으면 토큰 지문
+  - 오르카 쪽 두 소스는 내부 구조라 포맷이 바뀌면 못 읽는다. 실패하면 조용히 건너뛰고
+    활성 계정만 쓴다
+  - 사용률 180초 캐시는 계정별로 나눠 잡는다(`USAGE_CACHE`는 계정 id 맵). 계정 목록
+    자체는 60초 캐시 — Keychain 훑기를 폴링마다 할 만큼 싸지 않다
 
 ### Codex (`codex.rs`) — 정확, 더 쉬움
 - **시계열**: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, `event_msg`/`token_count`의
@@ -261,6 +281,17 @@ pnpm tauri dev                  # 실제 실행 (메뉴바 + 알림 권한 다�
   상향 쪽으로 치우친다.
 - **사용률은 관측 시점에만 남길 수 있다** — 과거 JSONL로 되돌려 계산할 수 없다.
   `rollup::update`가 샘플을 재집계할 때 `peak_*_util`을 덮어쓰지 않도록 주의.
+- **대표 계정은 "가장 적게 남은" 쪽이 아니라 "지금 쓰는" 쪽이다** — 안 쓰는 계정이
+  바닥나 있으면 트레이에 0%가 뜨는데 정작 작업 중인 세션은 멀쩡해서 숫자가 거짓말을
+  한다. 게다가 로컬 JSONL은 활성 계정 것이라, 대표가 다른 계정이면 한도 역산에 딸린
+  ETA·주간 일별 분해·요금제 추천이 전부 근거를 잃는다. 그 판정을
+  `OfficialUsage.matches_local_samples`가 들고 다니고, false면 역산 계산이 스스로 꺼진다
+- **JSONL에는 계정 표시가 없다** — 라인을 다 뒤져도 조직·계정 필드가 없다
+  (`message.usage.service_tier`뿐). 계정별 시계열을 못 나누니 계정별 소진 속도도 못 잰다.
+  그래서 계정 줄의 ETA는 전부 윈도우 경과 대비 페이스 추정(`pace_eta_minutes`)이다
+- **사용률 이력에 다른 계정 값을 섞지 말 것** — `record_utilizations`는 활성 계정 값만
+  남긴다. 이 이력은 요금제 추천이 "최악의 주"를 판정하는 근거라 계정이 섞이면 그대로
+  왜곡된다
 - 토큰 등 시크릿은 로그/커밋에 절대 노출 금지 (Keychain 직접 읽기)
 - `official_usage` 우선 — 로컬 토큰 합산보다 공식 사용률이 정확
 - 새 provider의 `window_secs`/`unit`이 다르면 UI는 자동 대응 (라벨 동적)
@@ -313,6 +344,12 @@ pnpm tauri dev                  # 실제 실행 (메뉴바 + 알림 권한 다�
   `running`/`waving` 포즈와 "다 됐어요" 말풍선으로 (`activity.rs`, `get_activity`).
   Codex·Grok은 명시적 턴 이벤트, Claude·Gemini는 마지막 엔트리 추론, Antigravity는
   요청 신선도. 커스텀 정지 이미지 4장 번들은 포즈가 없어 말풍선만 뜬다
+- [x] Claude 계정 여러 개 동시 표시 — 계정별 잔여율·리셋·주간을 한 카드 안에서
+  펼쳐 본다(`claude_accounts.rs`, `RunwayStatus.accounts`). 카드 헤더와 트레이는 지금
+  쓰는 계정, 펼치면 계정별 줄. 경보도 계정마다 따로 울고 제목에 계정 이름이 붙는다
+- [ ] 사용률 이력에 계정 축 — 롤업이 도구명만 키로 써서 계정을 전환하면 같은 키에
+  두 계정 이력이 이어 붙는다. 요금제 추천의 "최악의 주" 판정이 그만큼 어긋난다.
+  히스토리 창 조회도 도구명 기준이라 키를 바꾸면 과거 이력이 끊긴다 — 마이그레이션 필요
 - [ ] pet 활동 감지 정확도 — Claude Code는 `Stop`/`PreToolUse` 훅으로 상태 파일을
   떨어뜨리면 추측이 없어진다. 사용자 `settings.json`을 건드려야 하니 설정 토글로 얹을 것.
   Antigravity의 완료 시점도 훅 말고는 방법이 없다
