@@ -311,12 +311,7 @@ fn compute_plan_advice(
 
     let u = official.seven_day_utilization;
     // 신뢰 가드: 배수 없음/사용률 낮음/사용량 0이면 사다리 계산 불가.
-    let ladder_ok = anchor.is_some()
-        && u >= 3.0
-        && this_week_usage > 0
-        && typical_weekly > 0.0
-        // 주간 한도 역산도 사용률과 로컬 사용량의 계정이 같아야 성립한다.
-        && official.matches_local_samples;
+    let ladder_ok = anchor.is_some() && u >= 3.0 && this_week_usage > 0 && typical_weekly > 0.0;
 
     if !ladder_ok {
         // 관리형은 최소한 추정 5시간 한도라도 보여준다. 소비자는 표시 안 함.
@@ -415,8 +410,7 @@ fn estimate_5h_limit(
     now_ms: i64,
 ) -> Option<LimitEstimate> {
     let util = official.five_hour_utilization;
-    // 로컬 토큰을 남의 계정 사용률로 나누면 한도가 엉뚱하게 나온다.
-    if util < 3.0 || !official.matches_local_samples {
+    if util < 3.0 {
         return None;
     }
     let window_secs = provider.window_secs();
@@ -1069,7 +1063,10 @@ fn check_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
     let Ok(mut alerted) = ALERTED.lock() else {
         return;
     };
-    for t in statuses.iter().flat_map(alert_targets) {
+    let targets: Vec<AlertTarget> = statuses.iter().flat_map(alert_targets).collect();
+    prune_alert_keys(&mut alerted, &targets);
+
+    for t in &targets {
         let was_alerted = alerted.get(&t.key).copied().unwrap_or(false);
 
         let pct_hit = t.percent <= threshold;
@@ -1110,6 +1107,16 @@ fn check_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
     }
 }
 
+/// 이번 라운드에 없는 경보 키를 걷어낸다.
+///
+/// 계정 수가 바뀌면 키 공간이 `tool`과 `tool#id` 사이를 오간다. 지나간 키를 남겨두면
+/// 그 항목은 재무장될 기회가 없어, 나중에 같은 키가 다시 생겨도 이미 발사한 것으로
+/// 읽혀 조용히 안 운다.
+fn prune_alert_keys(alerted: &mut HashMap<String, bool>, targets: &[AlertTarget]) {
+    let live: std::collections::HashSet<&str> = targets.iter().map(|t| t.key.as_str()).collect();
+    alerted.retain(|key, _| live.contains(key.as_str()));
+}
+
 /// 경보 판정 단위.
 struct AlertTarget {
     /// 발사·재무장 키. 계정이 여럿이면 계정마다 따로 잡는다.
@@ -1122,6 +1129,8 @@ struct AlertTarget {
     eta_minutes: Option<f64>,
     /// 리셋보다 소진이 먼저 오는 페이스인지.
     runs_out_first: bool,
+    /// 윈도우 리셋 시각 (RFC3339). 리셋 임박 경보가 쓴다.
+    resets_at: Option<String>,
 }
 
 /// 도구 하나가 만들어내는 경보 대상들.
@@ -1142,6 +1151,7 @@ fn alert_targets(s: &RunwayStatus) -> Vec<AlertTarget> {
                 // 리셋이 소진보다 먼저 오면 실제로는 바닥나지 않는다. verdict가 이미
                 // 그 판정을 해뒀으니 "리셋 전 소진"일 때만 ETA 경보를 울린다.
                 runs_out_first: s.verdict.as_ref().is_some_and(|v| v.level == "danger"),
+                resets_at: s.resets_at.clone(),
             })
             .into_iter()
             .collect();
@@ -1158,6 +1168,7 @@ fn alert_targets(s: &RunwayStatus) -> Vec<AlertTarget> {
                 // 값이 있다는 것 자체가 "리셋 전 소진" 판정이다.
                 runs_out_first: a.eta_minutes.is_some(),
                 eta_minutes: a.eta_minutes,
+                resets_at: a.resets_at.clone(),
             })
         })
         .collect()
@@ -1345,41 +1356,40 @@ fn check_reset_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
     let Ok(mut alerted) = RESET_ALERTED.lock() else {
         return;
     };
-    for s in statuses {
-        let Some(pct) = s.percent_remaining else {
-            continue;
-        };
-        let Some(resets_at) = &s.resets_at else {
-            continue;
-        };
-        let Some(mins) = minutes_until(resets_at) else {
+    // 소진 경보와 같은 대상 목록을 쓴다. 한쪽만 계정별로 울면 같은 카드에서
+    // 소진은 계정마다, 리셋은 대표 계정만 우는 비대칭이 생긴다.
+    let targets: Vec<AlertTarget> = statuses.iter().flat_map(alert_targets).collect();
+    prune_alert_keys(&mut alerted, &targets);
+
+    for t in &targets {
+        let Some(mins) = t.resets_at.as_deref().and_then(minutes_until) else {
             continue;
         };
 
         // 리셋이 임박했고 아직 여유가 있으면(잔여 > 소진 임계치) = 곧 사라질 토큰이 많음.
-        let hit = mins > 0.0 && mins <= reset_min && pct > threshold;
-        let was = alerted.get(&s.tool).copied().unwrap_or(false);
+        let hit = mins > 0.0 && mins <= reset_min && t.percent > threshold;
+        let was = alerted.get(&t.key).copied().unwrap_or(false);
 
         if hit && !was {
             let lang = i18n::current();
             let _ = app
                 .notification()
                 .builder()
-                .title(lang.reset_title(&s.tool))
-                .body(lang.alert_reset(mins, pct))
+                .title(lang.reset_title(&t.title_name))
+                .body(lang.alert_reset(mins, t.percent))
                 .show();
             analytics::track("alert_fired", serde_json::json!({ "kind": "reset" }));
             let _ = app.emit(
                 "pet-alert",
                 PetAlertEvent {
-                    tool: s.tool.clone(),
+                    tool: t.tool.clone(),
                     kind: "reset".to_string(),
                 },
             );
-            alerted.insert(s.tool.clone(), true);
+            alerted.insert(t.key.clone(), true);
         } else if !hit && was {
             // 새 윈도우 시작(리셋 지남) → 재무장
-            alerted.insert(s.tool.clone(), false);
+            alerted.insert(t.key.clone(), false);
         }
     }
 }
@@ -1391,24 +1401,16 @@ fn check_reset_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
 /// 가정한 한도로 만든 추정치는 남기지 않는다 — 이력으로서 의미가 없다.
 fn record_utilizations(statuses: &[RunwayStatus]) {
     for s in statuses {
-        if s.is_estimate {
-            continue;
-        }
-        // 계정이 여럿이면 지금 쓰는 계정 값만 남긴다. 이 이력은 요금제 추천이
-        // "최악의 주"를 판정하는 근거라, 안 쓰는 계정 사용률이 섞이면 그대로 왜곡된다.
-        let (five, seven) = match s.accounts.iter().find(|a| a.is_active) {
-            Some(a) => (a.percent_remaining, a.seven_day_remaining),
-            None if s.accounts.is_empty() => (s.percent_remaining, s.seven_day_remaining),
-            // 활성 계정을 못 찾으면 어느 계정 값인지 알 수 없어 아예 기록하지 않는다.
-            None => continue,
-        };
-        if five.is_none() && seven.is_none() {
+        // 카드 값은 항상 지금 쓰는 계정 것이다 — 대표 폴백이 없어 다른 계정 사용률이
+        // 여기 섞일 경로가 없다. 이 이력은 요금제 추천이 최악의 주를 판정하는 근거라
+        // 계정이 섞이면 그대로 왜곡된다.
+        if s.is_estimate || (s.percent_remaining.is_none() && s.seven_day_remaining.is_none()) {
             continue;
         }
         rollup::record_utilization(
             &s.tool,
-            five.map_or(0.0, |p| 100.0 - p),
-            seven.map_or(0.0, |p| 100.0 - p),
+            s.percent_remaining.map_or(0.0, |p| 100.0 - p),
+            s.seven_day_remaining.map_or(0.0, |p| 100.0 - p),
         );
     }
 }
