@@ -1179,17 +1179,22 @@ function pctLevel(pct: number): string {
 /** 계정별 잔여 상태 줄. 계정을 여럿 쓸 때만 그려진다 */
 function AccountRows({
   id,
+  tool,
   accounts,
   lang,
+  hidden,
 }: {
   id: string;
+  tool: string;
   accounts: AccountStatus[];
   lang: Lang;
+  hidden: boolean;
 }) {
   return (
-    <div className="accounts" id={id}>
+    <div className="accounts" id={id} hidden={hidden}>
       {accounts.map((a) => {
         const reset = formatResetsAt(a.resetsAt, lang);
+        const weeklyReset = formatResetsAt(a.sevenDayResetsAt, lang);
         return (
           <div
             className={`acct-row${a.isActive ? " active" : ""}`}
@@ -1197,7 +1202,10 @@ function AccountRows({
             aria-current={a.isActive ? "true" : undefined}
           >
             <div className="acct-line">
-              <span className="acct-name">
+              <span
+                className="acct-name"
+                title={a.isActive ? t(lang, "acctActive") : undefined}
+              >
                 {a.label}
                 {/* 초록 점은 CSS content라 보조기술에 안 닿는다 */}
                 {a.isActive && (
@@ -1210,7 +1218,7 @@ function AccountRows({
                   `${a.percentRemaining.toFixed(0)}%`
                 ) : (
                   <span className="acct-fail">
-                    {t(lang, a.note ?? "acctFailed", { tool: a.label })}
+                    {t(lang, a.note ?? "acctFailed", { tool })}
                   </span>
                 )}
               </span>
@@ -1230,6 +1238,7 @@ function AccountRows({
               {a.sevenDayRemaining != null && (
                 <span>
                   {t(lang, "acctWeekly", { n: a.sevenDayRemaining.toFixed(0) })}
+                  {weeklyReset && ` · ${weeklyReset}`}
                 </span>
               )}
             </div>
@@ -1406,8 +1415,15 @@ function Dashboard() {
             <p className="resets">⏱ {formatResetsAt(s.resetsAt, lang)}</p>
           )}
 
-          {s.accounts.length > 1 && openAccounts[s.tool] && (
-            <AccountRows id={`accounts-${s.tool}`} accounts={s.accounts} lang={lang} />
+          {/* 접혔을 때도 DOM에 남겨야 배지의 aria-controls가 가리킬 대상이 있다 */}
+          {s.accounts.length > 1 && (
+            <AccountRows
+              id={`accounts-${s.tool}`}
+              tool={s.tool}
+              accounts={s.accounts}
+              lang={lang}
+              hidden={!openAccounts[s.tool]}
+            />
           )}
 
           <div className="today-section">
