@@ -4,6 +4,7 @@
 //! `UsageProvider`를 구현한 뒤 `lib.rs`의 provider 목록에 등록하면 된다.
 
 pub mod antigravity;
+pub mod claude_accounts;
 pub mod claude_code;
 pub mod codex;
 pub mod gemini;
@@ -60,6 +61,56 @@ pub struct OfficialUsage {
     /// Gemini처럼 한도를 가정해 만든 수치는 공식 사용률과 같은 무게로 다루면
     /// 안 된다 — 트레이 자동 선택에서 공식 데이터에 밀리게 한다.
     pub is_estimate: bool,
+    /// 이 사용률이 로컬 시계열(JSONL)과 같은 계정 것인지.
+    ///
+    /// Claude 계정이 여럿이면 잔여율이 가장 낮은 계정을 대표로 세우는데, 그게
+    /// 지금 로그를 쌓고 있는 계정이 아닐 수 있다. 그때 로컬 토큰 합으로 한도를
+    /// 역산하면 남의 사용률을 내 토큰으로 나누는 셈이라 ETA가 엉뚱해진다.
+    pub matches_local_samples: bool,
+}
+
+/// 도구 하나에 딸린 계정별 공식 사용률.
+///
+/// Claude Code는 계정을 바꿔가며 쓸 수 있어 한 도구 안에 쿼터가 여러 벌 돈다.
+#[derive(Debug, Clone)]
+pub struct AccountUsage {
+    /// 계정 식별자 (조직 UUID 또는 토큰 지문).
+    pub id: String,
+    /// 표시용 이름 (조직명 등).
+    pub label: String,
+    /// 지금 도구가 실제로 쓰는 계정인지.
+    pub is_active: bool,
+    /// 구독 플랜 배지.
+    pub plan: Option<String>,
+    /// 공식 사용률. 조회에 실패하면 None.
+    pub usage: Option<OfficialUsage>,
+    /// 실패 사유 (i18n 키).
+    pub note: Option<String>,
+}
+
+/// 계정 하나의 잔여 상태 — 카드를 펼쳤을 때 한 줄로 그려진다.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountStatus {
+    pub id: String,
+    pub label: String,
+    pub plan: Option<String>,
+    /// 지금 도구가 쓰는 계정인지. UI에서 점으로 표시한다.
+    pub is_active: bool,
+    /// 세션 윈도우 남은 비율 (%).
+    pub percent_remaining: Option<f64>,
+    /// 세션 윈도우 리셋 시각 (RFC3339).
+    pub resets_at: Option<String>,
+    /// 소진까지 예상 시간(분). 비활성 계정은 윈도우 경과 대비 페이스 추정이다.
+    pub eta_minutes: Option<f64>,
+    /// 주간 남은 비율 (%).
+    pub seven_day_remaining: Option<f64>,
+    /// 주간 리셋 시각 (RFC3339).
+    pub seven_day_resets_at: Option<String>,
+    /// 주간 소진까지 예상 시간(분).
+    pub seven_day_eta_minutes: Option<f64>,
+    /// 상태 보조 설명 (i18n 키).
+    pub note: Option<String>,
 }
 
 /// 효율 인사이트 한 건 — i18n 키 + 레벨(색 구분용).
@@ -187,6 +238,8 @@ pub struct RunwayStatus {
     pub plan: Option<String>,
     /// 상태 보조 설명.
     pub note: Option<String>,
+    /// 계정별 잔여 상태. 계정이 하나뿐인 도구는 빈 배열이라 UI가 기존과 같다.
+    pub accounts: Vec<AccountStatus>,
 }
 
 /// 도구별 사용량 수집기.
@@ -213,6 +266,13 @@ pub trait UsageProvider: Send + Sync {
     /// 공식(권위) 사용률. 제공 가능한 도구만 Some을 반환한다 (기본 None).
     fn official_usage(&self) -> Option<OfficialUsage> {
         None
+    }
+
+    /// 계정별 공식 사용률. 계정을 여럿 들고 있는 도구만 채운다 (기본 빈 목록).
+    ///
+    /// 비어 있으면 `official_usage`의 단일 계정 경로를 그대로 쓴다.
+    fn accounts(&self) -> Vec<AccountUsage> {
+        Vec::new()
     }
 
     /// 공식 사용률을 못 받은 이유 (i18n 키). 정상이거나 해당 없으면 None.

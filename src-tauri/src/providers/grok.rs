@@ -272,6 +272,7 @@ fn parse_billing(body: &Value) -> (Option<OfficialUsage>, Option<&'static str>, 
                 .map(|s| s.to_string()),
             rate_limit_multiplier: None,
             is_estimate: false,
+            matches_local_samples: true,
         }),
         None,
         window_secs,
@@ -337,7 +338,11 @@ fn parse_session_file(path: &Path, since_ms: i64, out: &mut Vec<UsageSample>) {
                 turn = None;
             }
             push_turn(turn.take(), out);
-            turn = Some(Turn::new(last_total.unwrap_or(0), ts, current_model.clone()));
+            turn = Some(Turn::new(
+                last_total.unwrap_or(0),
+                ts,
+                current_model.clone(),
+            ));
         }
 
         let Some(total) = extract_total_tokens(&v) else {
@@ -354,7 +359,11 @@ fn parse_session_file(path: &Path, since_ms: i64, out: &mut Vec<UsageSample>) {
         }
         // 사용자 메시지 없이 토큰이 늘면(첫 턴 등) 턴을 만들어준다.
         if turn.is_none() {
-            turn = Some(Turn::new(last_total.unwrap_or(0), ts, current_model.clone()));
+            turn = Some(Turn::new(
+                last_total.unwrap_or(0),
+                ts,
+                current_model.clone(),
+            ));
         }
         if let Some(t) = turn.as_mut() {
             t.observe(total, ts);
@@ -611,7 +620,8 @@ mod tests {
         // 타입 문자열이 뭐든 실제 간격을 따른다 — 주기 종류가 늘어도 맞는다.
         let mut body = billing_body();
         body["config"]["currentPeriod"]["type"] = serde_json::json!("USAGE_PERIOD_TYPE_MONTHLY");
-        body["config"]["currentPeriod"]["end"] = serde_json::json!("2026-08-31T21:28:47.680036+00:00");
+        body["config"]["currentPeriod"]["end"] =
+            serde_json::json!("2026-08-31T21:28:47.680036+00:00");
         let (_, _, window) = parse_billing(&body);
         assert_eq!(window, 30 * 24 * 3600);
     }
@@ -623,7 +633,10 @@ mod tests {
         body["config"]["billingPeriodEnd"] = Value::Null;
         let (usage, _, window) = parse_billing(&body);
         assert_eq!(window, DEFAULT_PERIOD_SECS);
-        assert!(usage.expect("사용률은 살아야 한다").five_hour_resets_at.is_empty());
+        assert!(usage
+            .expect("사용률은 살아야 한다")
+            .five_hour_resets_at
+            .is_empty());
     }
 
     #[test]
