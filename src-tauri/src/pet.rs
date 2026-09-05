@@ -417,11 +417,7 @@ fn import_codex_bundle(src: &Path) -> Result<PetBundle, String> {
                         .collect()
                 })
                 .unwrap_or_default();
-            (
-                manifest.frame.map(|f| (f.width, f.height)),
-                fps,
-                anims,
-            )
+            (manifest.frame.map(|f| (f.width, f.height)), fps, anims)
         };
 
     let default_animation = if should_apply_codex_defaults {
@@ -450,8 +446,8 @@ fn import_codex_bundle(src: &Path) -> Result<PetBundle, String> {
     let sprite = match frame {
         None => None,
         Some((fw, fh)) => {
-            let (sheet_w, sheet_h) = image::image_dimensions(&dest_sheet)
-                .map_err(|_| "pet.err.badSheet".to_string())?;
+            let (sheet_w, sheet_h) =
+                image::image_dimensions(&dest_sheet).map_err(|_| "pet.err.badSheet".to_string())?;
             if fw == 0 || fh == 0 || sheet_w % fw != 0 || sheet_h % fh != 0 {
                 return Err("pet.err.badFrameSize".into());
             }

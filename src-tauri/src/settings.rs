@@ -219,7 +219,10 @@ pub fn eta_alert_minutes() -> f64 {
 
 /// 모니터링 제외 도구 목록.
 pub fn disabled_tools() -> Vec<String> {
-    SETTINGS.lock().map(|s| s.disabled_tools.clone()).unwrap_or_default()
+    SETTINGS
+        .lock()
+        .map(|s| s.disabled_tools.clone())
+        .unwrap_or_default()
 }
 
 /// 비활성(최근 사용량 0) 도구 숨김 여부.
@@ -244,12 +247,18 @@ pub fn tray_tool() -> Option<String> {
 
 /// 리셋 임박 알림 임계치(분). 0이면 비활성.
 pub fn reset_alert_minutes() -> f64 {
-    SETTINGS.lock().map(|s| s.reset_alert_minutes).unwrap_or(0.0)
+    SETTINGS
+        .lock()
+        .map(|s| s.reset_alert_minutes)
+        .unwrap_or(0.0)
 }
 
 /// OS 알림 마스터 스위치.
 pub fn notifications_enabled() -> bool {
-    SETTINGS.lock().map(|s| s.notifications_enabled).unwrap_or(true)
+    SETTINGS
+        .lock()
+        .map(|s| s.notifications_enabled)
+        .unwrap_or(true)
 }
 
 /// 설정 언어 (None이면 auto).
@@ -259,7 +268,10 @@ pub fn language() -> Option<String> {
 
 /// 익명 분석 활성화 여부.
 pub fn analytics_enabled() -> bool {
-    SETTINGS.lock().map(|s| s.analytics_enabled).unwrap_or(false)
+    SETTINGS
+        .lock()
+        .map(|s| s.analytics_enabled)
+        .unwrap_or(false)
 }
 
 /// 익명 ID — 없으면 생성·저장 후 반환.
