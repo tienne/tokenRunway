@@ -1113,16 +1113,26 @@ fn check_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
 /// 그 항목은 재무장될 기회가 없어, 나중에 같은 키가 다시 생겨도 이미 발사한 것으로
 /// 읽혀 조용히 안 운다.
 fn prune_alert_keys(alerted: &mut HashMap<String, bool>, targets: &[AlertTarget]) {
-    let live_keys: std::collections::HashSet<&str> =
-        targets.iter().map(|t| t.key.as_str()).collect();
-    let live_tools: std::collections::HashSet<&str> =
-        targets.iter().map(|t| t.tool.as_str()).collect();
+    // 도구마다 이번 라운드가 쓰는 키 모양(`tool`이냐 `tool#id`냐).
+    // 도구명에는 `#`가 없다는 전제다 — provider의 `tool_name()`이 전부 상수 리터럴이라
+    // 지금은 지켜지지만, 새 도구 이름을 지을 때 `#`를 넣으면 이 판정이 깨진다.
+    let live_shapes: HashMap<&str, bool> = targets
+        .iter()
+        .map(|t| (t.tool.as_str(), t.key.contains('#')))
+        .collect();
     alerted.retain(|key, _| {
-        // 이번 라운드에 대상이 하나도 없는 도구는 건드리지 않는다. 429나 콜드 스타트로
-        // 잠깐 결측된 것뿐인데 키를 지우면, 복구했을 때 잔여율이 임계 이하 그대로인데도
-        // 경보가 다시 울린다. 정리 대상은 키 공간이 실제로 바뀐 도구뿐이다.
-        let tool = key.split('#').next().unwrap_or(key);
-        !live_tools.contains(tool) || live_keys.contains(key.as_str())
+        let (tool, keyed_by_account) = match key.split_once('#') {
+            Some((tool, _)) => (tool, true),
+            None => (key.as_str(), false),
+        };
+        match live_shapes.get(tool) {
+            // 키 모양이 그대로면 남긴다. 429나 콜드 스타트로 계정 하나가 잠깐
+            // 결측된 것뿐인데 지우면 복구할 때 잔여율이 임계 이하 그대로인데도
+            // 경보가 다시 울린다.
+            Some(&now) => now == keyed_by_account,
+            // 이번 라운드에 아예 안 보인 도구도 같은 이유로 건드리지 않는다.
+            None => true,
+        }
     });
 }
 
@@ -1170,7 +1180,7 @@ fn alert_targets(s: &RunwayStatus) -> Vec<AlertTarget> {
         .filter_map(|a| {
             // 활성 계정은 카드가 쓰는 ETA와 verdict를 그대로 쓴다. 계정별 페이스
             // 추정으로 갈아끼우면 같은 계정인데 카드 본문과 알림의 숫자가 달라진다.
-            // 나머지 계정은 로컬 시계열이 없어 페이스 추정뿐이고, 그 값은 리셋 전에
+            // 나머지 계정은 로컬 시계열이 없어 페이스 추정뿐이다. 그 값은 리셋 전에
             // 바닥날 때만 있으므로 값의 존재가 곧 "리셋 전 소진" 판정이다.
             let (eta, runs_out_first) = if a.is_active {
                 (
@@ -1420,8 +1430,8 @@ fn check_reset_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
 /// 가정한 한도로 만든 추정치는 남기지 않는다 — 이력으로서 의미가 없다.
 fn record_utilizations(statuses: &[RunwayStatus]) {
     for s in statuses {
-        // 카드 값은 항상 지금 쓰는 계정 것이다 — 대표 폴백이 없어 다른 계정 사용률이
-        // 여기 섞일 경로가 없다. 이 이력은 요금제 추천이 최악의 주를 판정하는 근거라
+        // 카드 값은 항상 로컬 시계열을 쌓는 계정 것이다 — 대표 폴백이 없어 다른
+        // 계정 사용률이 여기 섞일 경로가 없다. 이 이력은 요금제 추천이 최악의 주를 판정하는 근거라
         // 계정이 섞이면 그대로 왜곡된다.
         if s.is_estimate || (s.percent_remaining.is_none() && s.seven_day_remaining.is_none()) {
             continue;
@@ -1748,6 +1758,19 @@ mod tests {
         prune_alert_keys(&mut alerted, &[target("Codex", "Codex")]);
         assert_eq!(alerted.get("Claude Code#org-a"), Some(&true));
         assert_eq!(alerted.get("Codex"), Some(&true));
+    }
+
+    #[test]
+    fn keeps_an_account_that_missed_one_round() {
+        // 계정 A만 조회에 실패하고 B는 성공한 라운드다. 도구는 살아 있지만 A의
+        // 발사 플래그를 지우면 복구했을 때 경보가 다시 울린다.
+        let mut alerted = HashMap::from([
+            ("Claude Code#org-a".to_string(), true),
+            ("Claude Code#org-b".to_string(), true),
+        ]);
+        prune_alert_keys(&mut alerted, &[target("Claude Code", "Claude Code#org-b")]);
+        assert_eq!(alerted.get("Claude Code#org-a"), Some(&true));
+        assert_eq!(alerted.get("Claude Code#org-b"), Some(&true));
     }
 
     #[test]
