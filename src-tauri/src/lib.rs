@@ -28,8 +28,8 @@ use tauri::{
     AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_notification::NotificationExt;
-use tauri_plugin_updater::UpdaterExt;
 use tauri_plugin_positioner::{Position, WindowExt};
+use tauri_plugin_updater::UpdaterExt;
 
 /// 백그라운드 경보 체크 주기.
 const ALERT_CHECK_SECS: u64 = 60;
@@ -305,12 +305,18 @@ fn compute_plan_advice(
     // 표시명이 소비자 사다리에 없으면(Enterprise/Team) 관리형 — 개인 전환 대상이 아니다.
     let managed = plan_multiplier(plan).is_none();
     // 사다리 앵커 배수: rateLimitTier(좌석 등급, 엔터프라이즈도 존재) 우선, 없으면 표시명.
-    let anchor = official.rate_limit_multiplier.or_else(|| plan_multiplier(plan));
+    let anchor = official
+        .rate_limit_multiplier
+        .or_else(|| plan_multiplier(plan));
 
     let u = official.seven_day_utilization;
     // 신뢰 가드: 배수 없음/사용률 낮음/사용량 0이면 사다리 계산 불가.
-    let ladder_ok =
-        anchor.is_some() && u >= 3.0 && this_week_usage > 0 && typical_weekly > 0.0;
+    let ladder_ok = anchor.is_some()
+        && u >= 3.0
+        && this_week_usage > 0
+        && typical_weekly > 0.0
+        // 주간 한도 역산도 사용률과 로컬 사용량의 계정이 같아야 성립한다.
+        && official.matches_local_samples;
 
     if !ladder_ok {
         // 관리형은 최소한 추정 5시간 한도라도 보여준다. 소비자는 표시 안 함.
@@ -409,7 +415,8 @@ fn estimate_5h_limit(
     now_ms: i64,
 ) -> Option<LimitEstimate> {
     let util = official.five_hour_utilization;
-    if util < 3.0 {
+    // 로컬 토큰을 남의 계정 사용률로 나누면 한도가 엉뚱하게 나온다.
+    if util < 3.0 || !official.matches_local_samples {
         return None;
     }
     let window_secs = provider.window_secs();
@@ -712,9 +719,11 @@ fn set_settings(app: AppHandle, mut settings: Settings) {
 /// 커스텀 pet 번들 폴더를 검증·복사한다. 파일 I/O가 있어 blocking 풀에서 실행.
 #[tauri::command]
 async fn import_pet_bundle(source_dir: String) -> Result<pet::PetBundle, String> {
-    tauri::async_runtime::spawn_blocking(move || pet::import_bundle(std::path::PathBuf::from(source_dir)))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        pet::import_bundle(std::path::PathBuf::from(source_dir))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// 저장해둔 커스텀 pet 번들 하나를 삭제한다.
@@ -782,8 +791,13 @@ fn build_pet_menu_entries(
         change_items.push(Box::new(item));
     }
     change_items.push(Box::new(PredefinedMenuItem::separator(app)?));
-    let import_item =
-        MenuItem::with_id(app, "pet-import", lang.menu_pet_import(), true, None::<&str>)?;
+    let import_item = MenuItem::with_id(
+        app,
+        "pet-import",
+        lang.menu_pet_import(),
+        true,
+        None::<&str>,
+    )?;
     change_items.push(Box::new(import_item));
 
     let refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
@@ -924,13 +938,14 @@ fn open_settings(app: &AppHandle) {
         let _ = app.emit("settings-changed", ());
         return;
     }
-    if let Ok(win) = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
-        .title(i18n::current().settings_title())
-        .inner_size(420.0, 640.0)
-        .min_inner_size(420.0, 480.0)
-        .resizable(true)
-        .title_bar_style(tauri::TitleBarStyle::Visible)
-        .build()
+    if let Ok(win) =
+        WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
+            .title(i18n::current().settings_title())
+            .inner_size(420.0, 640.0)
+            .min_inner_size(420.0, 480.0)
+            .resizable(true)
+            .title_bar_style(tauri::TitleBarStyle::Visible)
+            .build()
     {
         hide_on_close(&win);
     }
@@ -978,12 +993,16 @@ fn track_event(event: String, properties: Option<serde_json::Value>) {
 fn build_tray_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let lang = i18n::current();
     let show = MenuItem::with_id(app, "show", lang.menu_open(), true, None::<&str>)?;
-    let history_item =
-        MenuItem::with_id(app, "history", lang.menu_history(), true, None::<&str>)?;
+    let history_item = MenuItem::with_id(app, "history", lang.menu_history(), true, None::<&str>)?;
     let settings_item =
         MenuItem::with_id(app, "settings", lang.menu_settings(), true, None::<&str>)?;
-    let update_item =
-        MenuItem::with_id(app, "check_update", lang.menu_check_update(), true, None::<&str>)?;
+    let update_item = MenuItem::with_id(
+        app,
+        "check_update",
+        lang.menu_check_update(),
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", lang.menu_quit(), true, None::<&str>)?;
     let (pet_toggle, pet_change) = build_pet_menu_entries(app)?;
     Menu::with_items(
@@ -1050,33 +1069,27 @@ fn check_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
     let Ok(mut alerted) = ALERTED.lock() else {
         return;
     };
-    for s in statuses {
-        let Some(pct) = s.percent_remaining else {
-            continue;
-        };
-        let was_alerted = alerted.get(&s.tool).copied().unwrap_or(false);
+    for t in statuses.iter().flat_map(alert_targets) {
+        let was_alerted = alerted.get(&t.key).copied().unwrap_or(false);
 
-        let pct_hit = pct <= threshold;
-        // 리셋이 소진보다 먼저 오면 실제로는 바닥나지 않는다. verdict가 이미
-        // 그 판정을 해뒀으니 "리셋 전 소진"일 때만 ETA 경보를 울린다.
-        let runs_out_first = s.verdict.as_ref().is_some_and(|v| v.level == "danger");
+        let pct_hit = t.percent <= threshold;
         let eta_hit = eta_threshold > 0.0
-            && runs_out_first
-            && s.eta_minutes.is_some_and(|e| e <= eta_threshold);
+            && t.runs_out_first
+            && t.eta_minutes.is_some_and(|e| e <= eta_threshold);
         let should_alert = pct_hit || eta_hit;
 
         if should_alert && !was_alerted {
             let lang = i18n::current();
             // ETA만 걸렸으면 시간 중심 메시지, 그 외엔 잔여율 메시지
             let body = if eta_hit && !pct_hit {
-                lang.alert_eta(s.eta_minutes.unwrap_or(0.0), pct)
+                lang.alert_eta(t.eta_minutes.unwrap_or(0.0), t.percent)
             } else {
-                lang.alert_low(pct)
+                lang.alert_low(t.percent)
             };
             let _ = app
                 .notification()
                 .builder()
-                .title(lang.alert_title(&s.tool))
+                .title(lang.alert_title(&t.title_name))
                 .body(body)
                 .show();
             // 익명: 어떤 종류 경보가 떴는지 메타만 (값 X)
@@ -1085,16 +1098,69 @@ fn check_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
             let _ = app.emit(
                 "pet-alert",
                 PetAlertEvent {
-                    tool: s.tool.clone(),
+                    tool: t.tool.clone(),
                     kind: kind.to_string(),
                 },
             );
-            alerted.insert(s.tool.clone(), true);
+            alerted.insert(t.key.clone(), true);
         } else if !should_alert && was_alerted {
             // 리셋 등으로 회복 → 다음 소진 시 다시 알림 가능하게 재무장
-            alerted.insert(s.tool.clone(), false);
+            alerted.insert(t.key.clone(), false);
         }
     }
+}
+
+/// 경보 판정 단위.
+struct AlertTarget {
+    /// 발사·재무장 키. 계정이 여럿이면 계정마다 따로 잡는다.
+    key: String,
+    /// 알림 제목에 넣을 이름.
+    title_name: String,
+    /// 익명 통계·pet 이벤트용 도구명.
+    tool: String,
+    percent: f64,
+    eta_minutes: Option<f64>,
+    /// 리셋보다 소진이 먼저 오는 페이스인지.
+    runs_out_first: bool,
+}
+
+/// 도구 하나가 만들어내는 경보 대상들.
+///
+/// 계정을 여럿 쓰면 카드 값은 가장 적게 남은 계정 것이라, 도구 단위로만 판정하면
+/// 그 계정이 리셋으로 회복될 때 다른 계정의 소진이 통째로 묻힌다. 그래서 계정이
+/// 둘 이상이면 계정마다 따로 판정하고 알림 제목에 계정 이름을 붙인다.
+fn alert_targets(s: &RunwayStatus) -> Vec<AlertTarget> {
+    if s.accounts.len() < 2 {
+        return s
+            .percent_remaining
+            .map(|pct| AlertTarget {
+                key: s.tool.clone(),
+                title_name: s.tool.clone(),
+                tool: s.tool.clone(),
+                percent: pct,
+                eta_minutes: s.eta_minutes,
+                // 리셋이 소진보다 먼저 오면 실제로는 바닥나지 않는다. verdict가 이미
+                // 그 판정을 해뒀으니 "리셋 전 소진"일 때만 ETA 경보를 울린다.
+                runs_out_first: s.verdict.as_ref().is_some_and(|v| v.level == "danger"),
+            })
+            .into_iter()
+            .collect();
+    }
+    s.accounts
+        .iter()
+        .filter_map(|a| {
+            Some(AlertTarget {
+                key: format!("{}#{}", s.tool, a.id),
+                title_name: format!("{} · {}", s.tool, a.label),
+                tool: s.tool.clone(),
+                percent: a.percent_remaining?,
+                // 계정별 ETA는 페이스 추정이라 리셋 전에 바닥날 때만 값이 있다.
+                // 값이 있다는 것 자체가 "리셋 전 소진" 판정이다.
+                runs_out_first: a.eta_minutes.is_some(),
+                eta_minutes: a.eta_minutes,
+            })
+        })
+        .collect()
 }
 
 /// 트레이 타이틀 + 아이콘 갱신.
@@ -1325,13 +1391,24 @@ fn check_reset_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
 /// 가정한 한도로 만든 추정치는 남기지 않는다 — 이력으로서 의미가 없다.
 fn record_utilizations(statuses: &[RunwayStatus]) {
     for s in statuses {
-        if s.is_estimate || (s.percent_remaining.is_none() && s.seven_day_remaining.is_none()) {
+        if s.is_estimate {
+            continue;
+        }
+        // 계정이 여럿이면 지금 쓰는 계정 값만 남긴다. 이 이력은 요금제 추천이
+        // "최악의 주"를 판정하는 근거라, 안 쓰는 계정 사용률이 섞이면 그대로 왜곡된다.
+        let (five, seven) = match s.accounts.iter().find(|a| a.is_active) {
+            Some(a) => (a.percent_remaining, a.seven_day_remaining),
+            None if s.accounts.is_empty() => (s.percent_remaining, s.seven_day_remaining),
+            // 활성 계정을 못 찾으면 어느 계정 값인지 알 수 없어 아예 기록하지 않는다.
+            None => continue,
+        };
+        if five.is_none() && seven.is_none() {
             continue;
         }
         rollup::record_utilization(
             &s.tool,
-            s.percent_remaining.map_or(0.0, |p| 100.0 - p),
-            s.seven_day_remaining.map_or(0.0, |p| 100.0 - p),
+            five.map_or(0.0, |p| 100.0 - p),
+            seven.map_or(0.0, |p| 100.0 - p),
         );
     }
 }
@@ -1555,11 +1632,7 @@ async fn run_update(app: AppHandle, install: bool) {
                     .show();
                 // 설치 중엔 트레이를 충전 차오름으로 — 진행 표시.
                 set_tray_mode(TRAY_MODE_CHARGE);
-                if update
-                    .download_and_install(|_, _| {}, || {})
-                    .await
-                    .is_ok()
-                {
+                if update.download_and_install(|_, _| {}, || {}).await.is_ok() {
                     app.restart();
                 }
                 // 실패 시 직전 상태로 복귀 (재시작했다면 여기 도달 안 함).
