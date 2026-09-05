@@ -59,6 +59,12 @@ static FETCH_GUARD: Mutex<()> = Mutex::new(());
 /// 시점에 겹치면 키체인 조회와 홈 스캔을 두 번 한다.
 static DISCOVER_GUARD: Mutex<()> = Mutex::new(());
 
+/// 계정 발견에 두는 상한.
+///
+/// `security` 서브프로세스는 키체인 접근 확인 다이얼로그가 뜨면 사용자가 누를 때까지
+/// 안 돌아온다. 상한이 없으면 그동안 폴링과 백그라운드 루프가 통째로 매달린다.
+const DISCOVER_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// 시계열 샘플 캐시 TTL. 통계 기간 토글·대시보드 폴링이 같은 파싱 결과를 재사용.
 const SAMPLES_CACHE_TTL: Duration = Duration::from_secs(60);
 
@@ -283,11 +289,26 @@ fn cached_accounts() -> Vec<ClaudeAccount> {
     if let Some(fresh) = cached_account_list(true) {
         return fresh;
     }
-    let found = claude_accounts::discover();
+    // 상한 안에 못 끝나면 직전 값을 쓰고 다음 폴링에서 다시 시도한다.
+    let Some(found) = discover_with_timeout() else {
+        return cached_account_list(false).unwrap_or_default();
+    };
     if let Ok(mut guard) = ACCOUNTS_CACHE.lock() {
         *guard = Some((Instant::now(), found.clone()));
     }
     found
+}
+
+/// 계정 발견을 별도 스레드에서 돌리고 상한만큼만 기다린다.
+///
+/// 상한을 넘기면 그 스레드는 계속 돌지만 결과는 버린다 — 다이얼로그가 떠 있는 동안
+/// 앱이 멈추는 것보다 한 번 건너뛰는 쪽이 낫다.
+fn discover_with_timeout() -> Option<Vec<ClaudeAccount>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(claude_accounts::discover());
+    });
+    rx.recv_timeout(DISCOVER_TIMEOUT).ok()
 }
 
 /// 캐시된 계정 목록. `require_fresh`면 TTL 안쪽일 때만 돌려준다.
