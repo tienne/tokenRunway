@@ -16,6 +16,16 @@
   .bar {
     background: #3a3a3c !important;
   }
+  .acct-bar {
+    background: #3a3a3c;
+  }
+  .acct-toggle {
+    background: #3a3a3c;
+    color: #d1d1d6;
+  }
+  .acct-toggle:hover {
+    background: #48484a;
+  }
 }
 
 * {
@@ -290,6 +300,123 @@ h1 {
 .resets {
   margin: 0 0 10px;
   font-size: 11px;
+  color: #8e8e93;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 계정 목록 — Claude 계정을 여럿 쓸 때만 나온다 */
+.acct-toggle {
+  margin-left: 6px;
+  padding: 2px 7px;
+  border: none;
+  border-radius: 10px;
+  background: #e5e5ea;
+  color: #48484a;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.acct-toggle:hover {
+  background: #d1d1d6;
+}
+
+.acct-caret {
+  margin-left: 3px;
+  font-size: 8px;
+}
+
+.accounts {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(120, 120, 128, 0.08);
+}
+
+.acct-row + .acct-row {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(120, 120, 128, 0.16);
+}
+
+.acct-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.acct-name {
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 지금 쓰는 계정에 점을 찍어 구분한다 */
+.acct-row.active .acct-name::before {
+  content: "●";
+  margin-right: 4px;
+  color: #30d158;
+  font-size: 9px;
+  vertical-align: middle;
+}
+
+.acct-plan {
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(10, 132, 255, 0.15);
+  color: #0a84ff;
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.acct-pct {
+  margin-left: auto;
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.acct-fail {
+  font-size: 10px;
+  font-weight: 500;
+  color: #8e8e93;
+}
+
+.acct-bar {
+  height: 4px;
+  margin-top: 5px;
+  border-radius: 2px;
+  background: #e5e5ea;
+  overflow: hidden;
+}
+
+.acct-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+
+.acct-bar-fill.ok {
+  background: #30d158;
+}
+
+.acct-bar-fill.warn {
+  background: #ffd60a;
+}
+
+.acct-bar-fill.danger {
+  background: #ff453a;
+}
+
+.acct-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 10px;
   color: #8e8e93;
   font-variant-numeric: tabular-nums;
 }

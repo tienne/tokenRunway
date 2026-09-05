@@ -881,6 +881,21 @@ interface Verdict {
   resetMinutes: number | null;
 }
 
+/** 계정 하나의 잔여 상태 — 카드를 펼치면 줄로 나온다 */
+interface AccountStatus {
+  id: string;
+  label: string;
+  plan: string | null;
+  isActive: boolean;
+  percentRemaining: number | null;
+  resetsAt: string | null;
+  etaMinutes: number | null;
+  sevenDayRemaining: number | null;
+  sevenDayResetsAt: string | null;
+  sevenDayEtaMinutes: number | null;
+  note: string | null;
+}
+
 interface RunwayStatus {
   tool: string;
   available: boolean;
@@ -908,6 +923,8 @@ interface RunwayStatus {
   isEstimate: boolean;
   plan: string | null;
   note: string | null;
+  /** 계정이 하나뿐이면 빈 배열 */
+  accounts: AccountStatus[];
 }
 
 interface Settings {
@@ -1151,6 +1168,67 @@ function formatResetsAt(iso: string | null, lang: Lang): string | null {
   return t(lang, "afterReset", { t: time });
 }
 
+/** 잔여율 구간별 색 — 계정 줄의 미니 바에 쓴다 */
+function pctLevel(pct: number): string {
+  if (pct <= 20) return "danger";
+  if (pct <= 40) return "warn";
+  return "ok";
+}
+
+/** 계정별 잔여 상태 줄. 계정을 여럿 쓸 때만 그려진다 */
+function AccountRows({
+  accounts,
+  lang,
+}: {
+  accounts: AccountStatus[];
+  lang: Lang;
+}) {
+  return (
+    <div className="accounts">
+      {accounts.map((a) => {
+        const reset = formatResetsAt(a.resetsAt, lang);
+        return (
+          <div className={`acct-row${a.isActive ? " active" : ""}`} key={a.id}>
+            <div className="acct-line">
+              <span className="acct-name" title={a.isActive ? t(lang, "acctActive") : undefined}>
+                {a.label}
+              </span>
+              {a.plan && <span className="acct-plan">{a.plan}</span>}
+              <span className="acct-pct">
+                {a.percentRemaining != null ? (
+                  `${a.percentRemaining.toFixed(0)}%`
+                ) : (
+                  <span className="acct-fail">
+                    {t(lang, a.note ?? "acctFailed")}
+                  </span>
+                )}
+              </span>
+            </div>
+            {a.percentRemaining != null && (
+              <div className="acct-bar">
+                <div
+                  className={`acct-bar-fill ${pctLevel(a.percentRemaining)}`}
+                  style={{
+                    width: `${Math.max(0, Math.min(100, a.percentRemaining))}%`,
+                  }}
+                />
+              </div>
+            )}
+            <div className="acct-meta">
+              {reset && <span>⏱ {reset}</span>}
+              {a.sevenDayRemaining != null && (
+                <span>
+                  {t(lang, "acctWeekly", { n: a.sevenDayRemaining.toFixed(0) })}
+                </span>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /** 트레이 팝오버 — 런웨이 대시보드 */
 function Dashboard() {
   const [statuses, setStatuses] = useState<RunwayStatus[]>([]);
@@ -1158,6 +1236,8 @@ function Dashboard() {
   const [pollSeconds, setPollSeconds] = useState(30);
   const [lang, setLang] = useState<Lang>(resolveLang(null));
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
+  // 도구별 계정 목록 펼침 상태. 기본은 접어두고 지금 쓰는 계정만 카드에 세운다.
+  const [openAccounts, setOpenAccounts] = useState<Record<string, boolean>>({});
 
   async function refresh() {
     try {
@@ -1262,6 +1342,19 @@ function Dashboard() {
             <span className="tool">
               {s.tool}
               {s.plan && <span className="plan-badge">{s.plan}</span>}
+              {s.accounts.length > 1 && (
+                <button
+                  className="acct-toggle"
+                  onClick={() =>
+                    setOpenAccounts((o) => ({ ...o, [s.tool]: !o[s.tool] }))
+                  }
+                >
+                  {t(lang, "accounts", { n: String(s.accounts.length) })}
+                  <span className="acct-caret">
+                    {openAccounts[s.tool] ? "▾" : "▸"}
+                  </span>
+                </button>
+              )}
             </span>
             <span className="pct">
               {s.percentRemaining != null ? (
@@ -1292,6 +1385,10 @@ function Dashboard() {
 
           {formatResetsAt(s.resetsAt, lang) && (
             <p className="resets">⏱ {formatResetsAt(s.resetsAt, lang)}</p>
+          )}
+
+          {s.accounts.length > 1 && openAccounts[s.tool] && (
+            <AccountRows accounts={s.accounts} lang={lang} />
           )}
 
           <div className="today-section">
