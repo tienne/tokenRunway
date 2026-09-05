@@ -154,7 +154,9 @@ fn tail_lines(path: &Path) -> Vec<String> {
 }
 
 fn rfc3339_ms(raw: &str) -> Option<i64> {
-    DateTime::parse_from_rfc3339(raw).ok().map(|d| d.timestamp_millis())
+    DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|d| d.timestamp_millis())
 }
 
 // --- 도구별 판정 ---
@@ -232,7 +234,11 @@ fn detect_claude(lines: &[String], now_ms: i64, mtime_ms: i64) -> Option<AgentAc
                 });
             }
             Some("user") => {
-                return Some(AgentActivity::new("Claude Code", ActivityState::Working, ts));
+                return Some(AgentActivity::new(
+                    "Claude Code",
+                    ActivityState::Working,
+                    ts,
+                ));
             }
             _ => continue,
         }
@@ -341,14 +347,20 @@ fn detect_antigravity(lines: &[String], now_ms: i64, mtime_ms: i64) -> Option<Ag
 
     for line in lines.iter().rev() {
         if line.contains("Terminal gone, shutting down") || line.contains("CLI program exited") {
-            return Some(AgentActivity::new("Antigravity", ActivityState::Idle, mtime_ms));
+            return Some(AgentActivity::new(
+                "Antigravity",
+                ActivityState::Idle,
+                mtime_ms,
+            ));
         }
         if !line.contains("streamGenerateContent")
             && !line.contains("Sending user message to conversation")
         {
             continue;
         }
-        let Some(tod) = glog_tod_ms(line) else { continue };
+        let Some(tod) = glog_tod_ms(line) else {
+            continue;
+        };
         // 자정을 넘겼으면 음수가 되므로 하루를 더해 되돌린다.
         let mut gap = last_tod - tod;
         if gap < 0 {
@@ -463,11 +475,15 @@ mod tests {
             r#"{{"type":"assistant","timestamp":"{ts}","message":{{"stop_reason":"end_turn"}}}}"#
         )];
         assert_eq!(
-            detect_claude(&lines, done_ms + 1_000, done_ms).unwrap().state,
+            detect_claude(&lines, done_ms + 1_000, done_ms)
+                .unwrap()
+                .state,
             ActivityState::JustDone
         );
         assert_eq!(
-            detect_claude(&lines, done_ms + 60_000, done_ms).unwrap().state,
+            detect_claude(&lines, done_ms + 60_000, done_ms)
+                .unwrap()
+                .state,
             ActivityState::Idle
         );
     }
@@ -488,7 +504,9 @@ mod tests {
         // turn_completed 뒤에 붙는 session_recap·hook_execution이 판정을 흐리지 않아야 한다.
         let done_ms = NOW - 1_000;
         let lines = vec![
-            format!(r#"{{"params":{{"update":{{"sessionUpdate":"turn_completed"}},"_meta":{{"agentTimestampMs":{done_ms}}}}}}}"#),
+            format!(
+                r#"{{"params":{{"update":{{"sessionUpdate":"turn_completed"}},"_meta":{{"agentTimestampMs":{done_ms}}}}}}}"#
+            ),
             r#"{"params":{"update":{"sessionUpdate":"session_recap"}}}"#.to_string(),
             r#"{"params":{"update":{"sessionUpdate":"hook_execution"}}}"#.to_string(),
         ];
@@ -565,4 +583,3 @@ mod tests {
         assert_eq!(glog_tod_ms("not a glog line"), None);
     }
 }
-
