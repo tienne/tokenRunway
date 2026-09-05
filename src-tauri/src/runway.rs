@@ -6,8 +6,8 @@
 use std::collections::HashMap;
 
 use crate::providers::{
-    AccountStatus, Insight, ModelBreakdown, OfficialUsage, RunwayStatus, UsageProvider,
-    UsageSample, Verdict, WeeklyDay,
+    AccountStatus, AccountUsage, Insight, ModelBreakdown, OfficialUsage, RunwayStatus,
+    UsageProvider, UsageSample, Verdict, WeeklyDay,
 };
 use chrono::{Datelike, Local, NaiveDate};
 
@@ -210,6 +210,9 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
     let rolling_start = now_ms - window_secs * 1000;
     let day_start = local_midnight_ms();
 
+    // 계정별 잔여 상태. 여기서 한 번만 받아 카드 줄까지 그대로 쓴다.
+    let accounts = provider.accounts();
+
     // 공식 사용률(OAuth·로컬 rate_limits)이 있으면 우선 사용 — 로컬 합산보다 정확하다.
     let official = provider.official_usage();
 
@@ -326,11 +329,7 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
 
             // 공식 사용률 %와 같은 윈도우의 로컬 누적 토큰으로 한도(분모)를 역산해
             // ETA를 계산한다. (Anthropic은 절대 토큰 한도를 공개하지 않는다)
-            // 한도 역산은 이 사용률과 로컬 토큰이 같은 계정일 때만 성립한다.
-            let eta = if u.matches_local_samples
-                && u.five_hour_utilization > 0.0
-                && burn_rate_per_min > 0.0
-            {
+            let eta = if u.five_hour_utilization > 0.0 && burn_rate_per_min > 0.0 {
                 let implied_limit = window_usage as f64 / (u.five_hour_utilization / 100.0);
                 let remaining = (implied_limit - window_usage as f64).max(0.0);
                 Some(remaining / burn_rate_per_min)
@@ -399,8 +398,6 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
     // 주간 한도를 날짜별로 쪼갠 소진 분해 — 어느 날 몰아 썼는지 보이게 한다.
     let weekly_breakdown = official
         .as_ref()
-        // 로컬 일별 토큰으로 안분하는 계산이라, 사용률이 다른 계정 것이면 성립하지 않는다.
-        .filter(|u| u.matches_local_samples)
         .map(|u| weekly_days(provider.tool_name(), u, now_ms, daily_usage))
         .unwrap_or_default();
 
@@ -441,7 +438,7 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
         is_estimate,
         plan,
         note,
-        accounts: account_statuses(provider, now_ms, window_secs),
+        accounts: account_statuses(&accounts, now_ms, window_secs),
     }
 }
 
@@ -451,11 +448,10 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
 /// JSONL에는 어느 계정으로 쓴 건지가 안 남아서 계정별 소진 속도를 잴 수 없다.
 /// 그래서 ETA는 전부 윈도우 경과 대비 페이스 추정이다.
 fn account_statuses(
-    provider: &dyn UsageProvider,
+    accounts: &[AccountUsage],
     now_ms: i64,
     window_secs: i64,
 ) -> Vec<AccountStatus> {
-    let accounts = provider.accounts();
     if accounts.len() < 2 {
         return Vec::new();
     }
@@ -706,7 +702,6 @@ mod tests {
             plan: None,
             rate_limit_multiplier: None,
             is_estimate: false,
-            matches_local_samples: true,
         };
         assert!(weekly_days("Claude Code", &official, now, 0).is_empty());
     }
