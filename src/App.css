@@ -352,6 +352,23 @@ h1 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* flex 자식은 기본 min-width가 auto라 내용 너비 아래로 안 줄어든다.
+     0으로 낮춰야 ellipsis가 실제로 걸리고 긴 이름이 줄을 밀지 않는다 */
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* 화면에는 안 보이고 보조기술에만 읽히는 텍스트 */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* 지금 쓰는 계정에 점을 찍어 구분한다 */
@@ -366,10 +383,11 @@ h1 {
 .acct-plan {
   padding: 1px 6px;
   border-radius: 8px;
-  background: rgba(10, 132, 255, 0.15);
-  color: #0a84ff;
-  font-size: 9px;
+  background: #0a84ff;
+  color: white;
+  font-size: 10px;
   font-weight: 600;
+  flex: 0 0 auto;
 }
 
 .acct-pct {
@@ -377,6 +395,7 @@ h1 {
   font-size: 13px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
 }
 
 .acct-fail {

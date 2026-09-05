@@ -893,6 +893,7 @@ interface AccountStatus {
   sevenDayRemaining: number | null;
   sevenDayResetsAt: string | null;
   sevenDayEtaMinutes: number | null;
+  /** 상태 보조 설명. 백엔드가 항상 i18n 키를 준다 (자유 문자열이 아니다) */
   note: string | null;
 }
 
@@ -1177,21 +1178,31 @@ function pctLevel(pct: number): string {
 
 /** 계정별 잔여 상태 줄. 계정을 여럿 쓸 때만 그려진다 */
 function AccountRows({
+  id,
   accounts,
   lang,
 }: {
+  id: string;
   accounts: AccountStatus[];
   lang: Lang;
 }) {
   return (
-    <div className="accounts">
+    <div className="accounts" id={id}>
       {accounts.map((a) => {
         const reset = formatResetsAt(a.resetsAt, lang);
         return (
-          <div className={`acct-row${a.isActive ? " active" : ""}`} key={a.id}>
+          <div
+            className={`acct-row${a.isActive ? " active" : ""}`}
+            key={a.id}
+            aria-current={a.isActive ? "true" : undefined}
+          >
             <div className="acct-line">
-              <span className="acct-name" title={a.isActive ? t(lang, "acctActive") : undefined}>
+              <span className="acct-name">
                 {a.label}
+                {/* 초록 점은 CSS content라 보조기술에 안 닿는다 */}
+                {a.isActive && (
+                  <span className="sr-only"> ({t(lang, "acctActive")})</span>
+                )}
               </span>
               {a.plan && <span className="acct-plan">{a.plan}</span>}
               <span className="acct-pct">
@@ -1199,7 +1210,7 @@ function AccountRows({
                   `${a.percentRemaining.toFixed(0)}%`
                 ) : (
                   <span className="acct-fail">
-                    {t(lang, a.note ?? "acctFailed")}
+                    {t(lang, a.note ?? "acctFailed", { tool: a.label })}
                   </span>
                 )}
               </span>
@@ -1243,6 +1254,12 @@ function Dashboard() {
     try {
       const data = await invoke<RunwayStatus[]>("get_runway");
       setStatuses(data);
+      // 목록에서 빠진 도구의 펼침 상태를 남겨두지 않는다.
+      setOpenAccounts((o) =>
+        Object.fromEntries(
+          Object.entries(o).filter(([tool]) => data.some((d) => d.tool === tool)),
+        ),
+      );
       setLastUpdated(Date.now());
     } finally {
       setLoading(false);
@@ -1345,6 +1362,8 @@ function Dashboard() {
               {s.accounts.length > 1 && (
                 <button
                   className="acct-toggle"
+                  aria-expanded={!!openAccounts[s.tool]}
+                  aria-controls={`accounts-${s.tool}`}
                   onClick={() =>
                     setOpenAccounts((o) => ({ ...o, [s.tool]: !o[s.tool] }))
                   }
@@ -1388,7 +1407,7 @@ function Dashboard() {
           )}
 
           {s.accounts.length > 1 && openAccounts[s.tool] && (
-            <AccountRows accounts={s.accounts} lang={lang} />
+            <AccountRows id={`accounts-${s.tool}`} accounts={s.accounts} lang={lang} />
           )}
 
           <div className="today-section">
