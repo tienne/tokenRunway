@@ -1190,8 +1190,13 @@ function AccountRows({
   lang: Lang;
   hidden: boolean;
 }) {
+  // 접혔을 때도 배지의 aria-controls가 가리킬 노드는 있어야 한다. 다만 계정 줄
+  // 매핑까지 매 폴링 돌릴 이유는 없어 앵커만 남긴다.
+  if (hidden) {
+    return <div className="accounts" id={id} hidden />;
+  }
   return (
-    <div className="accounts" id={id} hidden={hidden}>
+    <div className="accounts" id={id}>
       {accounts.map((a) => {
         const reset = formatResetsAt(a.resetsAt, lang);
         const weeklyReset = formatResetsAt(a.sevenDayResetsAt, lang);
