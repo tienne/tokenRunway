@@ -40,10 +40,11 @@ pub struct ClaudeAccount {
     pub token: String,
     pub plan: Option<String>,
     pub rate_mult: Option<f64>,
-    /// 지금 Claude Code가 실제로 쓰는 계정인지.
+    /// 로컬 JSONL(`~/.claude/projects`)을 쌓는 계정인지.
     ///
-    /// 로컬 JSONL(`~/.claude/projects`)의 주인이 이 계정 하나뿐이라, 한도 역산이
-    /// 성립하는지도 이 값으로 가른다.
+    /// 시계열을 그 디렉토리 하나에서만 읽으므로 한도 역산이 성립하는지도 이 값으로
+    /// 가른다. `CLAUDE_CONFIG_DIR`로 홈이 아닌 자리에서 작업하면 그쪽이 아니라 기본
+    /// 계정이 활성으로 잡힌다 — CLAUDE.md의 알려진 제약이다.
     pub is_active: bool,
     /// 기본 config dir(`~/.claude`)에서 온 계정인지.
     ///
@@ -144,16 +145,23 @@ pub fn discover() -> Vec<ClaudeAccount> {
         id_new && token_new
     });
 
-    // 조직 UUID로 활성을 못 가렸으면 기본 config dir 계정을 세운다. 이 폴백이 없으면
-    // 홈 config가 없거나 oauthAccount가 빈 환경에서 계정이 하나뿐인데도 대표가 안 서고
-    // 카드가 통째로 빈다.
-    if !out.iter().any(|a| a.is_active) {
-        if let Some(fallback) = out.iter_mut().find(|a| a.from_default_dir) {
-            fallback.is_active = true;
-        }
-    }
+    ensure_active(&mut out);
     out.sort_by_key(|a| !a.is_active);
     out
+}
+
+/// 조직 비교로 활성을 못 가린 목록에 마지막 규칙을 적용한다.
+///
+/// 계정이 하나뿐이면 그 하나가 대표다 — 남의 사용률이 카드에 올라올 위험 자체가
+/// 없기 때문이다. 이 갈래가 없으면 커스텀 `CLAUDE_CONFIG_DIR`만 쓰는 사용자는 계정이
+/// 하나인데도 활성이 안 잡혀 카드가 통째로 빈다.
+///
+/// 둘 이상일 때는 뒤집지 않는다. 조직이 다르다고 이미 판정한 계정을 근거 없이 세우면
+/// `representative`가 폴백을 없앤 이유가 그대로 무너진다.
+fn ensure_active(accounts: &mut [ClaudeAccount]) {
+    if accounts.len() == 1 {
+        accounts[0].is_active = true;
+    }
 }
 
 /// Keychain의 Claude Code credential 항목들.
@@ -260,7 +268,7 @@ fn from_credentials(
     // 하나뿐이라 그 조직과 맞는 계정만 활성이다.
     //
     // 조직을 못 읽었으면 기본 config dir 계정을 세운다. 그 디렉토리가 JSONL을 쌓는
-    // 자리이고, 이 폴백이 없으면 홈 config가 없는 환경에서 카드가 통째로 빈다.
+    // 자리다. 이 폴백이 없으면 홈 config가 없는 환경에서 카드가 통째로 빈다.
     let is_active = match (org.as_deref(), active_org) {
         (Some(mine), Some(current)) => mine == current,
         _ => from_default_dir,
@@ -485,6 +493,42 @@ mod tests {
     }
 
     #[test]
+    fn a_lone_account_is_always_active() {
+        // 계정이 하나뿐이면 남의 사용률이 올라올 위험이 없다. 활성을 못 가려
+        // 카드가 통째로 비는 쪽이 훨씬 나쁘다.
+        let mut only = [
+            from_credentials(&creds("tok", "team"), None, Some("org-a"), false)
+                .expect("계정이 나와야 한다"),
+        ];
+        assert!(!only[0].is_active);
+        ensure_active(&mut only);
+        assert!(only[0].is_active);
+    }
+
+    #[test]
+    fn two_accounts_keep_their_org_verdict() {
+        // 조직이 다르다고 이미 판정한 계정을 뒤집으면 대표 폴백을 없앤 뜻이 사라진다.
+        let mut pair = [
+            from_credentials(
+                &creds("tok-a", "team"),
+                Some(profile("org-x", "X")),
+                Some("org-a"),
+                true,
+            )
+            .expect("계정이 나와야 한다"),
+            from_credentials(
+                &creds("tok-b", "team"),
+                Some(profile("org-y", "Y")),
+                Some("org-a"),
+                false,
+            )
+            .expect("계정이 나와야 한다"),
+        ];
+        ensure_active(&mut pair);
+        assert!(pair.iter().all(|a| !a.is_active));
+    }
+
+    #[test]
     fn empty_token_is_rejected() {
         assert!(from_credentials(&creds("", "team"), None, None, false).is_none());
     }
@@ -498,12 +542,22 @@ mod tests {
         assert!(shown.contains("redacted"));
     }
 
+    /// 테스트가 패닉해도 임시 디렉토리를 지운다.
+    struct TempDir(PathBuf);
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn read_profile_handles_both_schemas() {
         // 홈 config는 oauthAccount로 감싸고 오르카 계정 파일은 프로필 자체를 담는다.
         // 이 파싱이 깨지면 활성 계정을 아무도 못 가려 대표가 항상 비게 된다.
         let dir = std::env::temp_dir().join(format!("tr-profile-{}", std::process::id()));
         fs::create_dir_all(&dir).expect("임시 디렉토리");
+        let _cleanup = TempDir(dir.clone());
 
         let wrapped = dir.join("wrapped.json");
         fs::write(
@@ -526,7 +580,5 @@ mod tests {
             read_profile(&flat).and_then(|p| p.organization_uuid),
             Some("org-b".to_string())
         );
-
-        let _ = fs::remove_dir_all(&dir);
     }
 }
