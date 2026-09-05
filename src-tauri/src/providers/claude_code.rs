@@ -5,6 +5,7 @@
 //! 토큰을 추출해 시계열 샘플로 변환한다.
 
 use super::claude_accounts::{self, ClaudeAccount};
+use super::representative;
 use super::{
     find_recent_jsonl, AccountUsage, OfficialUsage, SampleCache, UsageProvider, UsageSample,
 };
@@ -199,8 +200,9 @@ impl UsageProvider for ClaudeCodeProvider {
                 .note
                 .clone()
                 .or_else(|| Some("error.unavailable".to_string())),
-            // 로그인은 돼 있는데 어느 계정이 활성인지 못 가린 경우다.
-            None => Some("error.no_token".to_string()),
+            // 로그인은 돼 있는데 어느 계정이 활성인지 못 가린 경우다. 재로그인을
+            // 권하면 사용자가 그대로 해도 문제가 안 풀린다.
+            None => Some("error.active_unknown".to_string()),
         }
     }
 }
@@ -259,29 +261,23 @@ fn refresh_stale(accounts: &[ClaudeAccount]) {
     });
 }
 
-/// 카드 대표로 세울 계정 — 지금 쓰는 계정.
-///
-/// 잔여율이 가장 낮은 계정을 세우고 싶어지지만 그러면 안 된다. 안 쓰는 계정이
-/// 바닥나 있으면 트레이에 0%가 뜨는데 정작 작업 중인 세션은 멀쩡해서, 그 숫자만
-/// 보고는 상황을 잘못 판단하게 된다. 게다가 로컬 JSONL은 활성 계정 것이라 대표가
-/// 다른 계정이면 소진 속도와 ETA, 주간 분해, 요금제 추천이 전부 근거를 잃는다.
-///
-/// **활성 계정을 못 받아도 다른 계정으로 대신하지 않는다.** 대신 세우면 남의
-/// 사용률이 카드 헤더와 트레이, 배터리 레벨, 경보 임계 판정에 그대로 올라가
-/// 위에 적은 그 상황이 다시 생긴다. 아무것도 안 내놓고 `status_note`가 사유를
-/// 알리는 쪽이 맞다 — 다른 계정 값은 계정 줄에 그대로 남아 정보를 잃지 않는다.
-fn representative(accounts: &[AccountUsage]) -> Option<&AccountUsage> {
-    accounts.iter().find(|a| a.is_active && a.usage.is_some())
-}
-
 /// 발견한 계정 목록 (짧은 캐시). Keychain 훑기는 폴링마다 할 만큼 싸지 않다.
 fn cached_accounts() -> Vec<ClaudeAccount> {
     if let Some(fresh) = cached_account_list(true) {
         return fresh;
     }
-    // 이미 다른 스레드가 훑는 중이면 기다리지 않고 직전 값을 쓴다.
-    let Ok(_guard) = DISCOVER_GUARD.try_lock() else {
-        return cached_account_list(false).unwrap_or_default();
+    // 이미 다른 스레드가 훑는 중이면 기다리지 않고 직전 값을 쓴다. 다만 캐시가
+    // 아직 한 번도 안 채워졌으면 돌려줄 직전 값이 없어 카드가 순간 "계정 없음"으로
+    // 보인다. 그 첫 회만 기다린다.
+    let _guard = match DISCOVER_GUARD.try_lock() {
+        Ok(guard) => guard,
+        Err(_) => match cached_account_list(false) {
+            Some(stale) => return stale,
+            None => match DISCOVER_GUARD.lock() {
+                Ok(guard) => guard,
+                Err(_) => return Vec::new(),
+            },
+        },
     };
     // 락을 얻는 사이에 그 스레드가 채워놨을 수 있다.
     if let Some(fresh) = cached_account_list(true) {

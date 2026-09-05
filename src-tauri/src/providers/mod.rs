@@ -82,6 +82,21 @@ pub struct AccountUsage {
     pub note: Option<String>,
 }
 
+/// 카드 대표로 세울 계정 — 지금 쓰는 계정.
+///
+/// 잔여율이 가장 낮은 계정을 세우고 싶어지지만 그러면 안 된다. 안 쓰는 계정이
+/// 바닥나 있으면 트레이에 0%가 뜨는데 정작 작업 중인 세션은 멀쩡해서 그 숫자만
+/// 보고는 상황을 잘못 판단하게 된다. 게다가 로컬 시계열은 활성 계정 것이라 대표가
+/// 다른 계정이면 소진 속도와 ETA, 주간 분해, 요금제 추천이 전부 근거를 잃는다.
+///
+/// **활성 계정을 못 받아도 다른 계정으로 대신하지 않는다.** 대신 세우면 남의
+/// 사용률이 카드 헤더와 트레이, 배터리 레벨, 경보 임계 판정에 그대로 올라가
+/// 위에 적은 그 상황이 다시 생긴다. 아무것도 안 내놓고 `status_note`가 사유를
+/// 알리는 쪽이 맞다 — 다른 계정 값은 계정 줄에 그대로 남아 정보를 잃지 않는다.
+pub fn representative(accounts: &[AccountUsage]) -> Option<&AccountUsage> {
+    accounts.iter().find(|a| a.is_active && a.usage.is_some())
+}
+
 /// 계정 하나의 잔여 상태 — 카드를 펼쳤을 때 한 줄로 그려진다.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
