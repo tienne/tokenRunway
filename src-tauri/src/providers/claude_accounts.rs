@@ -45,6 +45,11 @@ pub struct ClaudeAccount {
     /// 로컬 JSONL(`~/.claude/projects`)의 주인이 이 계정 하나뿐이라, 한도 역산이
     /// 성립하는지도 이 값으로 가른다.
     pub is_active: bool,
+    /// 기본 config dir(`~/.claude`)에서 온 계정인지.
+    ///
+    /// 조직 UUID로 활성을 못 가렸을 때의 폴백 기준이다. 그 디렉토리가 JSONL을
+    /// 쌓는 자리라, 홈 config를 못 읽어도 이 계정을 세우면 카드가 안 빈다.
+    from_default_dir: bool,
 }
 
 /// 토큰을 든 구조체라 Debug를 파생하지 않는다.
@@ -60,6 +65,7 @@ impl fmt::Debug for ClaudeAccount {
             .field("plan", &self.plan)
             .field("rate_mult", &self.rate_mult)
             .field("is_active", &self.is_active)
+            .field("from_default_dir", &self.from_default_dir)
             .finish()
     }
 }
@@ -128,14 +134,31 @@ pub fn discover() -> Vec<ClaudeAccount> {
     out.extend(orca_managed_accounts(active_org.as_deref()));
 
     // 같은 조직이 여러 소스에 걸쳐 나온다. 먼저 들어온 쪽이 이긴다.
-    let mut seen: HashSet<String> = HashSet::new();
-    out.retain(|a| seen.insert(a.id.clone()));
+    // 토큰 지문도 함께 보는 이유는 소스마다 프로필 유무가 달라서다 — 한쪽은 조직
+    // UUID를, 다른 쪽은 토큰 지문을 id로 받으면 같은 계정이 두 줄로 남는다.
+    let mut seen_ids: HashSet<String> = HashSet::new();
+    let mut seen_tokens: HashSet<String> = HashSet::new();
+    out.retain(|a| {
+        let id_new = seen_ids.insert(a.id.clone());
+        let token_new = seen_tokens.insert(fingerprint(&a.token));
+        id_new && token_new
+    });
+
+    // 조직 UUID로 활성을 못 가렸으면 기본 config dir 계정을 세운다. 이 폴백이 없으면
+    // 홈 config가 없거나 oauthAccount가 빈 환경에서 계정이 하나뿐인데도 대표가 안 서고
+    // 카드가 통째로 빈다.
+    if !out.iter().any(|a| a.is_active) {
+        if let Some(fallback) = out.iter_mut().find(|a| a.from_default_dir) {
+            fallback.is_active = true;
+        }
+    }
     out.sort_by_key(|a| !a.is_active);
     out
 }
 
 /// Keychain의 Claude Code credential 항목들.
 fn keychain_accounts(candidates: &[PathBuf], active_org: Option<&str>) -> Vec<ClaudeAccount> {
+    let default_dir = default_config_dir();
     let mut out = Vec::new();
     for (service, config_dir) in keychain_services(candidates) {
         let Some(raw) = keychain_password(&service, None) else {
@@ -146,11 +169,16 @@ fn keychain_accounts(candidates: &[PathBuf], active_org: Option<&str>) -> Vec<Cl
         let profile = profile_paths(&config_dir)
             .iter()
             .find_map(|p| read_profile(p));
-        if let Some(acc) = from_credentials(&raw, profile, active_org) {
+        let from_default = Some(&config_dir) == default_dir.as_ref();
+        if let Some(acc) = from_credentials(&raw, profile, active_org, from_default) {
             out.push(acc);
         }
     }
     out
+}
+
+fn default_config_dir() -> Option<PathBuf> {
+    Some(dirs::home_dir()?.join(".claude"))
 }
 
 /// 조회할 Keychain 서비스 이름과 그 이름이 가리키는 config dir.
@@ -179,7 +207,7 @@ fn orca_system_account(active_org: Option<&str>) -> Option<ClaudeAccount> {
         .join("system-default-auth.json");
     let auth: OrcaSystemAuth = serde_json::from_str(&fs::read_to_string(path).ok()?).ok()?;
     let creds = auth.keychain.or(auth.legacy)?;
-    from_credentials(&creds, auth.profile, active_org)
+    from_credentials(&creds, auth.profile, active_org, false)
 }
 
 /// 오르카가 관리하는 계정들 — 디렉토리에서 이름표, Keychain에서 토큰을 얻는다.
@@ -199,7 +227,7 @@ fn orca_managed_accounts(active_org: Option<&str>) -> Vec<ClaudeAccount> {
             continue;
         };
         let profile = read_profile(&entry.path().join("auth").join("oauth-account.json"));
-        if let Some(acc) = from_credentials(&raw, profile, active_org) {
+        if let Some(acc) = from_credentials(&raw, profile, active_org, false) {
             out.push(acc);
         }
     }
@@ -211,6 +239,7 @@ fn from_credentials(
     raw: &str,
     profile: Option<Profile>,
     active_org: Option<&str>,
+    from_default_dir: bool,
 ) -> Option<ClaudeAccount> {
     let creds: Credentials = serde_json::from_str(raw.trim()).ok()?;
     let o = creds.claude_ai_oauth;
@@ -229,7 +258,13 @@ fn from_credentials(
     // Keychain에 항목이 있다는 것만으로 활성이라고 보면 config dir을 나눈 환경에서
     // 활성이 여럿이 된다. 로컬 JSONL의 주인은 `~/.claude.json`이 가리키는 계정
     // 하나뿐이라 그 조직과 맞는 계정만 활성이다.
-    let is_active = matches!((org.as_deref(), active_org), (Some(a), Some(b)) if a == b);
+    //
+    // 조직을 못 읽었으면 기본 config dir 계정을 세운다. 그 디렉토리가 JSONL을 쌓는
+    // 자리이고, 이 폴백이 없으면 홈 config가 없는 환경에서 카드가 통째로 빈다.
+    let is_active = match (org.as_deref(), active_org) {
+        (Some(mine), Some(current)) => mine == current,
+        _ => from_default_dir,
+    };
     let label = profile
         .as_ref()
         .and_then(|p| {
@@ -248,6 +283,7 @@ fn from_credentials(
         plan,
         token: o.access_token,
         is_active,
+        from_default_dir,
     })
 }
 
@@ -284,38 +320,46 @@ fn profile_paths(dir: &Path) -> Vec<PathBuf> {
 }
 
 /// `CLAUDE_CONFIG_DIR`로 쓸 만한 디렉토리들. 서비스 이름을 만들 후보다.
+///
+/// 후보 하나마다 Keychain 조회가 한 번씩 붙으므로 이름만 보고 담지 않는다. 실제로
+/// Claude가 쓰는 자리인지(프로필 파일이나 projects 디렉토리) 확인해 무관한 디렉토리를
+/// 미리 걸러낸다.
 fn config_dir_candidates() -> Vec<PathBuf> {
     let mut out = Vec::new();
     let Some(home) = dirs::home_dir() else {
         return out;
     };
+    // 기본 config dir은 확인 없이 담는다 — 없으면 조회가 그냥 실패할 뿐이다.
     out.push(home.join(".claude"));
     // 계정을 나눠 쓸 때 홈 아래 `.claude-work` 같은 이름이 흔하다.
-    if let Ok(entries) = fs::read_dir(&home) {
-        for e in entries.flatten() {
-            let p = e.path();
-            let is_claude_dir = p
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with(".claude") && n != ".claude");
-            if is_claude_dir && p.is_dir() {
-                out.push(p);
-            }
-        }
-    }
-    if let Ok(entries) = fs::read_dir(home.join(".config")) {
-        for e in entries.flatten() {
-            let p = e.path();
-            let is_claude_dir = p
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.contains("claude"));
-            if is_claude_dir && p.is_dir() {
-                out.push(p);
-            }
-        }
-    }
+    collect_claude_dirs(&home, &mut out, |name| {
+        name.starts_with(".claude") && name != ".claude"
+    });
+    collect_claude_dirs(&home.join(".config"), &mut out, |name| {
+        name.contains("claude")
+    });
     out
+}
+
+fn collect_claude_dirs(root: &Path, out: &mut Vec<PathBuf>, name_matches: impl Fn(&str) -> bool) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let named = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(&name_matches);
+        if named && path.is_dir() && looks_like_config_dir(&path) {
+            out.push(path);
+        }
+    }
+}
+
+/// Claude가 실제로 쓰는 config dir로 보이는지.
+fn looks_like_config_dir(dir: &Path) -> bool {
+    dir.join("projects").is_dir() || profile_paths(dir).iter().any(|p| p.is_file())
 }
 
 fn read_profile(path: &Path) -> Option<Profile> {
@@ -407,12 +451,14 @@ mod tests {
             &creds("tok-a", "team"),
             Some(profile("org-a", "A")),
             Some("org-a"),
+            false,
         )
         .expect("계정이 나와야 한다");
         let other = from_credentials(
             &creds("tok-b", "team"),
             Some(profile("org-b", "B")),
             Some("org-a"),
+            false,
         )
         .expect("계정이 나와야 한다");
         assert!(mine.is_active);
@@ -420,9 +466,17 @@ mod tests {
     }
 
     #[test]
-    fn unknown_org_is_never_active() {
-        // 조직을 못 읽으면 로컬 샘플의 주인인지 확인할 방법이 없다.
-        let acc = from_credentials(&creds("tok", "team"), None, Some("org-a"))
+    fn default_dir_account_is_active_when_org_is_unknown() {
+        // 홈 config를 못 읽어도 기본 config dir 계정이 대표로 서야 카드가 안 빈다.
+        let acc =
+            from_credentials(&creds("tok", "team"), None, None, true).expect("계정이 나와야 한다");
+        assert!(acc.is_active);
+        assert!(acc.from_default_dir);
+    }
+
+    #[test]
+    fn other_dirs_stay_inactive_without_org() {
+        let acc = from_credentials(&creds("tok", "team"), None, Some("org-a"), false)
             .expect("계정이 나와야 한다");
         assert!(!acc.is_active);
         assert_eq!(acc.label, "Team");
@@ -432,15 +486,47 @@ mod tests {
 
     #[test]
     fn empty_token_is_rejected() {
-        assert!(from_credentials(&creds("", "team"), None, None).is_none());
+        assert!(from_credentials(&creds("", "team"), None, None, false).is_none());
     }
 
     #[test]
     fn debug_hides_the_token() {
-        let acc = from_credentials(&creds("secret-token", "team"), None, None)
+        let acc = from_credentials(&creds("secret-token", "team"), None, None, false)
             .expect("계정이 나와야 한다");
         let shown = format!("{acc:?}");
         assert!(!shown.contains("secret-token"));
         assert!(shown.contains("redacted"));
+    }
+
+    #[test]
+    fn read_profile_handles_both_schemas() {
+        // 홈 config는 oauthAccount로 감싸고 오르카 계정 파일은 프로필 자체를 담는다.
+        // 이 파싱이 깨지면 활성 계정을 아무도 못 가려 대표가 항상 비게 된다.
+        let dir = std::env::temp_dir().join(format!("tr-profile-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("임시 디렉토리");
+
+        let wrapped = dir.join("wrapped.json");
+        fs::write(
+            &wrapped,
+            r#"{"oauthAccount":{"organizationUuid":"org-a","organizationName":"A"},"numStartups":3}"#,
+        )
+        .expect("쓰기");
+        let flat = dir.join("flat.json");
+        fs::write(
+            &flat,
+            r#"{"organizationUuid":"org-b","organizationName":"B"}"#,
+        )
+        .expect("쓰기");
+
+        assert_eq!(
+            read_profile(&wrapped).and_then(|p| p.organization_uuid),
+            Some("org-a".to_string())
+        );
+        assert_eq!(
+            read_profile(&flat).and_then(|p| p.organization_uuid),
+            Some("org-b".to_string())
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
