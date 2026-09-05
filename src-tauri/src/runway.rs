@@ -217,9 +217,11 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
     // 계정을 다루는 provider는 위에서 받은 목록에서 대표를 파생한다. 그래야 헤더와
     // 계정 줄이 같은 스냅샷을 쓴다 — 따로 조회하면 그 사이 백그라운드 갱신이 끼어들어
     // 두 값이 어긋날 수 있다.
-    let official = crate::providers::representative(&accounts)
-        .and_then(|a| a.usage.clone())
-        .or_else(|| provider.official_usage());
+    let official = if accounts.is_empty() {
+        provider.official_usage()
+    } else {
+        crate::providers::representative(&accounts).and_then(|a| a.usage.clone())
+    };
 
     // 도구의 윈도우는 롤링이 아니라 리셋 시각 기준 고정 구간이다. 롤링 합계로
     // 한도를 역산하면 경계가 어긋난 만큼 분자가 부풀어 한도가 과대 추정되고
@@ -474,6 +476,8 @@ fn account_statuses(
                 resets_at: usage
                     .map(|u| u.five_hour_resets_at.clone())
                     .filter(|s| !s.is_empty()),
+                // 경보 판정에만 쓴다. 계정 줄에는 안 그린다 — 계정별 소진 속도를 못 재
+                // 페이스 추정뿐이라, 로컬 시계열로 낸 카드 ETA와 나란히 두면 헷갈린다.
                 eta_minutes: usage.and_then(|u| {
                     pace_eta_minutes(
                         u.five_hour_utilization,

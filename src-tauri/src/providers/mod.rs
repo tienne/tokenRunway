@@ -72,7 +72,11 @@ pub struct AccountUsage {
     pub id: String,
     /// 표시용 이름 (조직명 등).
     pub label: String,
-    /// 지금 도구가 실제로 쓰는 계정인지.
+    /// 로컬 시계열(JSONL)을 쌓는 계정인지.
+    ///
+    /// 기본 config dir 하나에서만 시계열을 읽으므로 그 디렉토리의 주인이라는 뜻이다.
+    /// `CLAUDE_CONFIG_DIR`로 홈이 아닌 자리에서 작업하면 그쪽이 아니라 기본 계정이
+    /// 활성으로 잡힌다 — CLAUDE.md의 알려진 제약이다.
     pub is_active: bool,
     /// 구독 플랜 배지.
     pub plan: Option<String>,
@@ -104,7 +108,7 @@ pub struct AccountStatus {
     pub id: String,
     pub label: String,
     pub plan: Option<String>,
-    /// 지금 도구가 쓰는 계정인지. UI에서 점으로 표시한다.
+    /// 로컬 시계열을 쌓는 계정인지. UI에서 점으로 표시한다.
     pub is_active: bool,
     /// 세션 윈도우 남은 비율 (%).
     pub percent_remaining: Option<f64>,
