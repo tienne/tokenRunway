@@ -2,6 +2,11 @@ mod activity;
 mod analytics;
 mod atomicfile;
 mod i18n;
+mod inbox;
+mod installer;
+mod ipc;
+mod landing;
+mod notify_os;
 mod pet;
 mod providers;
 mod rollup;
@@ -976,6 +981,132 @@ fn open_history_window(app: AppHandle) {
     open_history(&app);
 }
 
+// ─────────────────────────── 알림함 ───────────────────────────
+
+/// 배지·랜딩은 알림 클릭 스레드에서도 일어나므로 AppHandle을 전역에 둔다.
+static APP_HANDLE: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
+
+/// Dock 배지와 트레이 메뉴, 열려 있는 창을 읽지 않은 개수에 맞춘다.
+///
+/// 배지는 `NSApp.dockTile`에 그려서 Dock에 아이콘이 있어야 보인다. 그래서 이 앱은
+/// Accessory가 아니라 Regular로 뜬다 — 트레이 아이콘은 그대로 두고 Dock만 추가된 셈이다.
+pub fn refresh_inbox_badge() {
+    let Some(app) = APP_HANDLE.get() else { return };
+    let n = inbox::unread_count();
+    // 배지는 `NSApp.dockTile`을 건드리고 tao 구현이 메인 스레드를 가정한다
+    // (`MainThreadMarker::new_unchecked()`). 알림 클릭 스레드에서도 이 함수를
+    // 부르므로 메인 스레드로 위임한다.
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(win) = handle.get_webview_window("main") {
+            let _ = win.set_badge_count(if n == 0 { None } else { Some(n as i64) });
+        }
+    });
+    let _ = app.emit("inbox-changed", n);
+    refresh_localized_ui(app);
+}
+
+/// `trw`에서 알림 하나가 들어왔을 때 — 큐에 넣고 OS 알림을 띄운다.
+fn on_notify_request(req: inbox::NotifyRequest) {
+    if !settings::completion_alerts_enabled() {
+        return;
+    }
+    let item = inbox::add(req);
+    // 완료 알림은 방해금지와 성격이 다르다(밤에 돌려놓고 자는 경우 vs 밤에 작업 중).
+    // 그래서 별도 토글로 가리고, 가려도 알림함에는 남긴다.
+    if settings::notifications_enabled() && !completion_quiet_now() {
+        notify_os::show(&item);
+    }
+    refresh_inbox_badge();
+}
+
+/// 완료 알림에 방해금지를 적용할지. 기존 잔여율 경보와 달리 옵트인이다.
+fn completion_quiet_now() -> bool {
+    settings::completion_alerts_quiet() && is_quiet_now()
+}
+
+/// 알림함 창을 열거나 앞으로 가져온다.
+fn open_inbox(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("inbox") {
+        let _ = win.show();
+        let _ = win.set_focus();
+        // 숨겨뒀던 창은 다시 마운트되지 않으므로 갱신을 트리거한다.
+        let _ = win.emit("inbox-refresh", ());
+        return;
+    }
+    if let Ok(win) = WebviewWindowBuilder::new(app, "inbox", WebviewUrl::App("index.html".into()))
+        .title(i18n::current().inbox_title())
+        .inner_size(420.0, 560.0)
+        .min_inner_size(380.0, 400.0)
+        .resizable(true)
+        .title_bar_style(tauri::TitleBarStyle::Visible)
+        .build()
+    {
+        hide_on_close(&win);
+    }
+}
+
+#[tauri::command]
+fn open_inbox_window(app: AppHandle) {
+    open_inbox(&app);
+}
+
+#[tauri::command]
+fn get_inbox() -> Vec<inbox::InboxItem> {
+    inbox::all()
+}
+
+/// 항목을 눌렀을 때 — 읽음으로 바꾸고 원래 세션으로 보낸다.
+///
+/// `orca terminal list` 같은 외부 프로세스를 기다리므로 blocking 풀에서 돈다.
+/// 동기 command로 두면 그 사이 팝오버 폴링이 전부 매달린다.
+#[tauri::command]
+async fn inbox_land(id: String) -> Result<(), String> {
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        let item = inbox::get(&id).ok_or("해당 알림을 찾을 수 없습니다")?;
+        // 랜딩이 먼저다 — 읽음을 먼저 찍으면 이동에 실패했는데 배지에서는 사라져
+        // 확인하지 못한 알림이 조용히 묻힌다.
+        landing::land(&item.target)?;
+        inbox::mark_read(&id);
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    refresh_inbox_badge();
+    res
+}
+
+#[tauri::command]
+fn inbox_mark_all_read() {
+    inbox::mark_all_read();
+    refresh_inbox_badge();
+}
+
+#[tauri::command]
+fn inbox_remove(id: String) {
+    inbox::remove(&id);
+    refresh_inbox_badge();
+}
+
+#[tauri::command]
+fn inbox_clear() {
+    inbox::clear();
+    refresh_inbox_badge();
+}
+
+/// `trw` CLI와 스킬을 사용자 환경에 설치. 파일 복사·심링크라 blocking 풀에서 돈다.
+#[tauri::command]
+async fn install_trw(app: AppHandle) -> Result<installer::InstallStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || installer::install(&app))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn trw_status() -> installer::InstallStatus {
+    installer::status()
+}
+
 /// 프론트에서 익명 이벤트 전송 (opt-in일 때만 실제 전송됨).
 /// 주의: properties에 토큰 값·잔여율 등 내용은 절대 넣지 말 것 (행동 메타만).
 #[tauri::command]
@@ -987,6 +1118,16 @@ fn track_event(event: String, properties: Option<serde_json::Value>) {
 fn build_tray_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let lang = i18n::current();
     let show = MenuItem::with_id(app, "show", lang.menu_open(), true, None::<&str>)?;
+    // 읽지 않은 개수를 라벨에 넣는다 — 트레이 타이틀은 잔여율이 차지하고 있어
+    // 배지를 Dock에만 두면 메뉴바만 보는 동안에는 눈치채기 어렵다.
+    let unread = inbox::unread_count();
+    let inbox_item = MenuItem::with_id(
+        app,
+        "inbox",
+        lang.menu_inbox(unread),
+        true,
+        None::<&str>,
+    )?;
     let history_item = MenuItem::with_id(app, "history", lang.menu_history(), true, None::<&str>)?;
     let settings_item =
         MenuItem::with_id(app, "settings", lang.menu_settings(), true, None::<&str>)?;
@@ -1003,6 +1144,7 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wr
         app,
         &[
             &show,
+            &inbox_item,
             &history_item,
             &settings_item,
             &pet_toggle,
@@ -1024,6 +1166,10 @@ fn refresh_localized_ui(app: &AppHandle) {
         }
         if let Some(win) = app.get_webview_window("settings") {
             let _ = win.set_title(i18n::current().settings_title());
+        }
+        // 알림함도 숨겨두고 재사용하므로 언어를 바꾸면 제목이 예전 언어로 남는다.
+        if let Some(win) = app.get_webview_window("inbox") {
+            let _ = win.set_title(i18n::current().inbox_title());
         }
     });
 }
@@ -1488,7 +1634,15 @@ pub fn run() {
             import_pet_bundle,
             delete_pet_bundle,
             open_main_window,
-            show_pet_context_menu
+            show_pet_context_menu,
+            open_inbox_window,
+            get_inbox,
+            inbox_land,
+            inbox_mark_all_read,
+            inbox_remove,
+            inbox_clear,
+            install_trw,
+            trw_status
         ])
         // pet 우클릭 메뉴와 트레이 메뉴 둘 다 이 하나의 전역 핸들러로 들어온다 — Tauri는
         // TrayIconBuilder::on_menu_event와 Builder::on_menu_event를 같은
@@ -1559,9 +1713,17 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            // Dock 아이콘 없이 메뉴바 전용 앱으로 (macOS).
+            // Dock 배지(`NSApp.dockTile`)는 Dock에 아이콘이 있어야 보인다. 읽지 않은
+            // 완료 알림 개수를 거기 띄우려고 Regular로 뜬다 — 트레이 아이콘은 그대로다.
+            // Accessory ↔ Regular를 오가면 전환할 때마다 포커스가 흔들리므로 상주로 둔다.
             #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            app.set_activation_policy(tauri::ActivationPolicy::Regular);
+
+            let _ = APP_HANDLE.set(app.handle().clone());
+            notify_os::init(&app.config().identifier);
+            // `trw` 소켓과 스풀을 띄운다. 앱이 꺼진 사이 쌓인 알림도 여기서 걷어온다.
+            ipc::start(on_notify_request);
+            refresh_inbox_badge();
 
             // 우클릭 메뉴 (열기/설정/종료). 언어 변경 시 set_settings에서 재생성.
             let menu = build_tray_menu(&app.handle().clone())?;
@@ -1585,6 +1747,7 @@ pub fn run() {
                     "show" => toggle_popover(app, true),
                     "settings" => open_settings(app),
                     "history" => open_history(app),
+                    "inbox" => open_inbox(app),
                     "check_update" => {
                         let app = app.clone();
                         tauri::async_runtime::spawn(async move {
@@ -1638,10 +1801,12 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         // 트레이 "종료" 외의 경로(⌘Q·로그아웃·업데이트 재시작)로 끝날 때도 위치를 남긴다.
-        .run(|app, event| {
-            if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
-                save_pet_position(app);
-            }
+        .run(|app, event| match event {
+            tauri::RunEvent::ExitRequested { .. } => save_pet_position(app),
+            // Dock 아이콘 클릭. 팝오버는 트레이 좌표에 붙어 Dock에서 열면 위치가
+            // 어긋나므로, 배지를 보고 누른 흐름에 맞춰 알림함을 띄운다.
+            tauri::RunEvent::Reopen { .. } => open_inbox(app),
+            _ => {}
         });
 }
 

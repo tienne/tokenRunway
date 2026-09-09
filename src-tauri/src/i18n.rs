@@ -125,6 +125,22 @@ impl Lang {
             Lang::En => "Token Runway History",
         }
     }
+    pub fn inbox_title(self) -> &'static str {
+        match self {
+            Lang::Ko => "알림",
+            Lang::En => "Notifications",
+        }
+    }
+    /// 트레이 메뉴의 알림 항목 — 읽지 않은 게 있으면 개수를 붙인다.
+    pub fn menu_inbox(self, unread: usize) -> String {
+        match (self, unread) {
+            (Lang::Ko, 0) => "알림...".to_string(),
+            (Lang::Ko, n) => format!("알림 {n}건..."),
+            (Lang::En, 0) => "Notifications...".to_string(),
+            (Lang::En, 1) => "1 notification...".to_string(),
+            (Lang::En, n) => format!("{n} notifications..."),
+        }
+    }
     /// 소진/ETA 경보 제목 — 도구명을 앞세워 알림센터에서 구분되게.
     pub fn alert_title(self, tool: &str) -> String {
         match self {

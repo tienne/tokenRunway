@@ -1,0 +1,13 @@
+[package]
+name = "trw"
+version = "0.4.0"
+description = "Token Runway 알림 보내기 CLI"
+authors = ["tienne"]
+edition = "2021"
+
+# 앱 crate와 분리한 이유: 같은 패키지에 두면 `cargo build --bin trw`가 tauri-build
+# 빌드 스크립트를 함께 돌리고, 그 스크립트가 아직 만들어지지 않은 externalBin
+# 바이너리를 요구해 순환에 걸린다.
+[dependencies]
+serde_json = "1"
+dirs = "5"

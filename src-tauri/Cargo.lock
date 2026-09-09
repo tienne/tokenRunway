@@ -4319,6 +4319,7 @@ dependencies = [
  "chrono",
  "dirs 5.0.1",
  "image",
+ "mac-notification-sys",
  "serde",
  "serde_json",
  "sha2",
@@ -4587,6 +4588,14 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "trw"
+version = "0.4.0"
+dependencies = [
+ "dirs 5.0.1",
+ "serde_json",
 ]
 
 [[package]]

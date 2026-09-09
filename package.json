@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "build:trw": "bash scripts/build-trw.sh",
+    "build:trw:dev": "bash scripts/build-trw.sh --debug"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

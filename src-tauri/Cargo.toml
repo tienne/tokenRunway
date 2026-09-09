@@ -1,3 +1,6 @@
+[workspace]
+members = ["trw"]
+
 [package]
 name = "token-runway"
 version = "0.4.0"
@@ -21,6 +24,9 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["protocol-asset", "tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
+# 완료 알림의 클릭 응답용. tauri-plugin-notification은 데스크톱에서 클릭을 버린다.
+# notify-rust가 이미 의존으로 갖고 있어 crate가 늘지 않는다.
+mac-notification-sys = "0.6"
 tauri-plugin-positioner = { version = "2", features = ["tray-icon"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-dialog = "2"

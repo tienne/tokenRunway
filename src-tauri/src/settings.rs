@@ -23,6 +23,9 @@ fn default_reset_alert_minutes() -> f64 {
 fn default_notifications_enabled() -> bool {
     true
 }
+fn default_completion_alerts() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -48,6 +51,15 @@ pub struct Settings {
     /// 모든 OS 알림 마스터 스위치.
     #[serde(default = "default_notifications_enabled")]
     pub notifications_enabled: bool,
+    /// `trw`로 들어오는 작업 완료 알림 수신 여부.
+    #[serde(default = "default_completion_alerts")]
+    pub completion_alerts_enabled: bool,
+    /// 완료 알림에도 방해금지 시간대를 적용할지.
+    ///
+    /// 잔여율 경보와 달리 기본이 꺼짐이다 — 밤에 돌려놓고 자는 경우엔 막아야 맞지만
+    /// 밤에 직접 작업하는 경우엔 막으면 알림을 놓친다. 성격이 달라 따로 둔다.
+    #[serde(default)]
+    pub completion_alerts_quiet: bool,
     /// UI/알림 언어. None이면 시스템 로케일 자동 감지 ("ko" | "en").
     #[serde(default)]
     pub language: Option<String>,
@@ -138,6 +150,8 @@ impl Default for Settings {
             pet_last_x: None,
             pet_last_y: None,
             pet_scale: 1.0,
+            completion_alerts_enabled: default_completion_alerts(),
+            completion_alerts_quiet: false,
         }
     }
 }
@@ -199,6 +213,22 @@ pub fn set(new: Settings) {
     if let Ok(mut s) = SETTINGS.lock() {
         *s = new;
     }
+}
+
+/// `trw` 완료 알림 수신 여부.
+pub fn completion_alerts_enabled() -> bool {
+    SETTINGS
+        .lock()
+        .map(|s| s.completion_alerts_enabled)
+        .unwrap_or(true)
+}
+
+/// 완료 알림에 방해금지를 적용할지.
+pub fn completion_alerts_quiet() -> bool {
+    SETTINGS
+        .lock()
+        .map(|s| s.completion_alerts_quiet)
+        .unwrap_or(false)
 }
 
 /// 경보 임계치 (%).
