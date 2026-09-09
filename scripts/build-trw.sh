@@ -5,8 +5,9 @@
 # `Contents/MacOS/trw`로 넣는다. dev 실행에서도 이 파일이 있어야 해서
 # beforeDevCommand와 beforeBuildCommand 양쪽에 걸어둔다.
 #
-# 릴리스 CI는 `--target universal-apple-darwin`으로 빌드하는데, universal은 두
-# 아키텍처의 externalBin 파일을 모두 요구한다. 그래서 설치된 타깃을 모두 만든다 —
+# 릴리스 CI는 `--target universal-apple-darwin`으로 빌드하는데, 그때 요구하는 건
+# 아키텍처별 파일이 아니라 `lipo`로 합친 `trw-universal-apple-darwin` 하나다.
+# 그래서 설치된 타깃을 각각 빌드하고, 둘 다 있으면 universal도 만든다 —
 # 로컬처럼 한쪽만 설치된 환경에서는 그 하나만 만들고 넘어간다.
 #
 # 인자 없으면 release, `--debug`면 debug 빌드를 쓴다 — dev마다 release를
@@ -33,7 +34,7 @@ if [ "${1:-}" = "--debug" ]; then
 fi
 
 INSTALLED=$(rustup target list --installed 2>/dev/null || echo "$HOST_TRIPLE")
-MADE=0
+BUILT=()
 for TRIPLE in aarch64-apple-darwin x86_64-apple-darwin; do
   if ! echo "$INSTALLED" | grep -qx "$TRIPLE"; then
     continue
@@ -42,10 +43,16 @@ for TRIPLE in aarch64-apple-darwin x86_64-apple-darwin; do
   cp "target/${TRIPLE}/release/trw" "binaries/trw-${TRIPLE}"
   chmod +x "binaries/trw-${TRIPLE}"
   echo "binaries/trw-${TRIPLE} (release) 준비됨"
-  MADE=$((MADE + 1))
+  BUILT+=("target/${TRIPLE}/release/trw")
 done
 
-if [ "$MADE" -eq 0 ]; then
+if [ "${#BUILT[@]}" -eq 0 ]; then
   echo "설치된 apple-darwin 타깃이 없습니다 (rustup target list --installed)" >&2
   exit 1
+fi
+
+if [ "${#BUILT[@]}" -ge 2 ]; then
+  lipo -create -output "binaries/trw-universal-apple-darwin" "${BUILT[@]}"
+  chmod +x "binaries/trw-universal-apple-darwin"
+  echo "binaries/trw-universal-apple-darwin (lipo) 준비됨"
 fi
