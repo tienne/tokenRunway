@@ -936,6 +936,8 @@ interface Settings {
   disabledTools: string[];
   trayTool: string | null;
   notificationsEnabled: boolean;
+  completionAlertsEnabled: boolean;
+  completionAlertsQuiet: boolean;
   language: string | null;
   quietEnabled: boolean;
   quietStartHour: number;
@@ -950,6 +952,12 @@ interface Settings {
   petLastX: number | null;
   petLastY: number | null;
   petScale: number;
+}
+
+interface TrwStatus {
+  cliPath: string | null;
+  skills: string[];
+  agents: string[];
 }
 
 interface ToolInfo {
@@ -1263,6 +1271,8 @@ function Dashboard() {
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
   // 도구별 계정 목록 펼침 상태. 기본은 접어두고 지금 쓰는 계정만 카드에 세운다.
   const [openAccounts, setOpenAccounts] = useState<Record<string, boolean>>({});
+  // 읽지 않은 완료 알림 수 — 벨 배지용. Rust가 바뀔 때마다 밀어준다.
+  const [unread, setUnread] = useState(0);
 
   async function refresh() {
     try {
@@ -1300,6 +1310,18 @@ function Dashboard() {
     });
     return () => {
       unlisten.then((f) => f());
+    };
+  }, []);
+
+  // 벨 배지 — Rust가 알림함이 바뀔 때마다 개수를 밀어준다. 창을 처음 열 때만
+  // 직접 세고, 그다음은 이벤트로 따라간다.
+  useEffect(() => {
+    invoke<InboxItem[]>("get_inbox")
+      .then((items) => setUnread(items.filter((i) => !i.read).length))
+      .catch(() => {});
+    const un = listen<number>("inbox-changed", (e) => setUnread(e.payload));
+    return () => {
+      un.then((f) => f()).catch(() => {});
     };
   }, []);
 
@@ -1344,6 +1366,14 @@ function Dashboard() {
         <div className="header-actions">
           <button onClick={refresh} className="refresh">
             {t(lang, "refresh")}
+          </button>
+          <button
+            onClick={() => invoke("open_inbox_window")}
+            className="icon-btn bell"
+            title={t(lang, "inbox")}
+          >
+            🔔
+            {unread > 0 && <span className="bell-badge">{unread}</span>}
           </button>
           <button
             onClick={() => invoke("open_history_window")}
@@ -1578,6 +1608,8 @@ function SettingsView() {
     disabledTools: [],
     trayTool: null,
     notificationsEnabled: true,
+    completionAlertsEnabled: true,
+    completionAlertsQuiet: false,
     language: null,
     quietEnabled: false,
     quietStartHour: 22,
@@ -1594,6 +1626,9 @@ function SettingsView() {
     petScale: 1,
   });
   const [petError, setPetError] = useState<string | null>(null);
+  const [trwStatus, setTrwStatus] = useState<TrwStatus | null>(null);
+  const [trwBusy, setTrwBusy] = useState(false);
+  const [trwError, setTrwError] = useState<string | null>(null);
   const [tools, setTools] = useState<ToolInfo[]>([]);
   const [permGranted, setPermGranted] = useState<boolean | null>(null);
   const [autostart, setAutostart] = useState(false);
@@ -1606,6 +1641,7 @@ function SettingsView() {
     invoke<ToolInfo[]>("get_available_tools").then(setTools).catch(() => {});
     isPermissionGranted().then(setPermGranted).catch(() => {});
     isEnabled().then(setAutostart).catch(() => {});
+    invoke<TrwStatus>("trw_status").then(setTrwStatus).catch(() => {});
     invoke("track_event", { event: "settings_opened" }).catch(() => {});
     // pet 우클릭 메뉴·트레이에서 바꾼 값(활성 스킨, 표시 여부)을 화면에 반영한다 —
     // 안 들으면 여기 state가 낡은 채로 남아 다음 저장에서 그 변경을 덮어쓴다.
@@ -1696,6 +1732,18 @@ function SettingsView() {
     setPermGranted(result === "granted");
   }
 
+  async function installTrw() {
+    setTrwBusy(true);
+    setTrwError(null);
+    try {
+      setTrwStatus(await invoke<TrwStatus>("install_trw"));
+    } catch (e) {
+      setTrwError(tr("trwInstallFailed", { e: String(e) }));
+    } finally {
+      setTrwBusy(false);
+    }
+  }
+
   async function setNotifications(enabled: boolean) {
     update({ notificationsEnabled: enabled });
     if (enabled) {
@@ -1743,6 +1791,47 @@ function SettingsView() {
         )}
 
         <label className="setting-row toggle-row">
+          <span>{tr("completionAlerts")}</span>
+          <input
+            type="checkbox"
+            checked={settings.completionAlertsEnabled}
+            onChange={(e) =>
+              update({ completionAlertsEnabled: e.target.checked })
+            }
+          />
+        </label>
+        {settings.completionAlertsEnabled && (
+          <p className="setting-hint">{tr("completionAlertsHint")}</p>
+        )}
+        {settings.completionAlertsEnabled && (
+          <div className="trw-install">
+            <div className="trw-row">
+              <span>{tr("trwInstall")}</span>
+              <button className="link-btn" onClick={installTrw} disabled={trwBusy}>
+                {trwBusy
+                  ? tr("trwInstalling")
+                  : trwStatus?.cliPath
+                    ? tr("trwReinstallBtn")
+                    : tr("trwInstallBtn")}
+              </button>
+            </div>
+            <p className="setting-hint">
+              {trwStatus?.cliPath
+                ? tr("trwInstalled", {
+                    agents: trwStatus.agents.length
+                      ? trwStatus.agents.join(", ")
+                      : "-",
+                  })
+                : tr("trwNotInstalled")}
+            </p>
+            {trwStatus?.cliPath && (
+              <p className="setting-hint trw-path">{trwStatus.cliPath}</p>
+            )}
+            {trwError && <p className="perm-warn">⚠️ {trwError}</p>}
+          </div>
+        )}
+
+        <label className="setting-row toggle-row">
           <span>{tr("quietHours")}</span>
           <input
             type="checkbox"
@@ -1783,6 +1872,18 @@ function SettingsView() {
               </select>
             </label>
           </div>
+        )}
+        {settings.quietEnabled && (
+          <label className="setting-row toggle-row sub-row">
+            <span>{tr("completionAlertsQuiet")}</span>
+            <input
+              type="checkbox"
+              checked={settings.completionAlertsQuiet}
+              onChange={(e) =>
+                update({ completionAlertsQuiet: e.target.checked })
+              }
+            />
+          </label>
         )}
 
         <hr className="setting-divider" />
@@ -2477,6 +2578,165 @@ function StatsCard({ s, lang }: { s: ToolStats; lang: Lang }) {
 }
 
 /** 통계 전용 창 — 기간 토글 + 도구별 요약·추세 */
+type InboxLevel = "done" | "blocked" | "failed";
+
+type InboxTarget =
+  | { kind: "orca"; worktreeId: string; worktreePath: string | null; tabId: string | null }
+  | { kind: "paseo"; agentId: string; cwd: string | null }
+  | { kind: "path"; path: string }
+  | { kind: "none" };
+
+interface InboxItem {
+  id: string;
+  title: string;
+  body: string | null;
+  level: InboxLevel;
+  context: string | null;
+  target: InboxTarget;
+  createdMs: number;
+  read: boolean;
+}
+
+const LEVEL_ICON: Record<InboxLevel, string> = {
+  done: "✅",
+  blocked: "⏸",
+  failed: "⚠️",
+};
+
+const TARGET_LABEL: Record<InboxTarget["kind"], string> = {
+  orca: "Orca",
+  paseo: "Paseo",
+  path: "",
+  none: "",
+};
+
+function formatAge(ms: number, lang: Lang): string {
+  const sec = Math.round((Date.now() - ms) / 1000);
+  if (sec < 60) return t(lang, "inboxJustNow");
+  const m = Math.floor(sec / 60);
+  if (m < 60) return t(lang, "inboxAgo", { t: `${m}m` });
+  const h = Math.floor(m / 60);
+  if (h < 24) return t(lang, "inboxAgo", { t: `${h}h` });
+  return t(lang, "inboxAgo", { t: `${Math.floor(h / 24)}d` });
+}
+
+/** 알림함 — trw로 들어온 작업 완료 알림. 항목을 누르면 그 세션으로 돌아간다 */
+function InboxView() {
+  const [items, setItems] = useState<InboxItem[]>([]);
+  const [lang, setLang] = useState<Lang>(resolveLang(null));
+  const [error, setError] = useState<string | null>(null);
+  // "3분 전" 표시를 살아 있게 하려고 주기적으로 다시 그린다.
+  const [, setTick] = useState(0);
+
+  const load = useCallback(async () => {
+    try {
+      setItems(await invoke<InboxItem[]>("get_inbox"));
+    } catch {
+      /* noop */
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+    invoke<Settings>("get_settings")
+      .then((s) => setLang(resolveLang(s.language)))
+      .catch(() => {});
+    const unlisten = [
+      listen("inbox-changed", () => load()),
+      listen("inbox-refresh", () => load()),
+    ];
+    const id = setInterval(() => setTick((n) => n + 1), 30000);
+    return () => {
+      unlisten.forEach((p) => p.then((f) => f()).catch(() => {}));
+      clearInterval(id);
+    };
+  }, [load]);
+
+  async function land(item: InboxItem) {
+    if (item.target.kind === "none") {
+      setError(t(lang, "inboxNoTarget"));
+      return;
+    }
+    setError(null);
+    try {
+      await invoke("inbox_land", { id: item.id });
+    } catch (e) {
+      setError(t(lang, "inboxLandFailed", { e: String(e) }));
+    }
+    load();
+  }
+
+  const unread = items.filter((i) => !i.read).length;
+
+  return (
+    <main className="container inbox">
+      <header>
+        <h1>
+          🔔 {t(lang, "inbox")}
+          {unread > 0 && <span className="inbox-count">{unread}</span>}
+        </h1>
+        <div className="header-actions">
+          {unread > 0 && (
+            <button
+              className="refresh"
+              onClick={() => invoke("inbox_mark_all_read").then(load)}
+            >
+              {t(lang, "inboxMarkAll")}
+            </button>
+          )}
+          {items.length > 0 && (
+            <button
+              className="icon-btn"
+              title={t(lang, "inboxClear")}
+              onClick={() => invoke("inbox_clear").then(load)}
+            >
+              🗑
+            </button>
+          )}
+        </div>
+      </header>
+
+      {error && <p className="inbox-error">{error}</p>}
+
+      {items.length === 0 && <p className="muted">{t(lang, "inboxEmpty")}</p>}
+      {items.length > 0 && <p className="inbox-hint">{t(lang, "inboxHint")}</p>}
+
+      <ul className="inbox-list">
+        {items.map((it) => {
+          const src = TARGET_LABEL[it.target.kind];
+          return (
+            <li key={it.id} className={it.read ? "inbox-item read" : "inbox-item"}>
+              <button className="inbox-main" onClick={() => land(it)}>
+                <span className="inbox-row1">
+                  <span className="inbox-dot">{it.read ? "" : "●"}</span>
+                  <span className="inbox-level" title={t(lang, `inboxLevel.${it.level}`)}>
+                    {LEVEL_ICON[it.level]}
+                  </span>
+                  <span className="inbox-src">
+                    {src && <b>{src}</b>}
+                    {src && it.context && " · "}
+                    {it.context}
+                  </span>
+                  <span className="inbox-age">{formatAge(it.createdMs, lang)}</span>
+                </span>
+                <span className="inbox-title">{it.title}</span>
+                {it.body && <span className="inbox-body">{it.body}</span>}
+              </button>
+              <button
+                className="inbox-x"
+                title={t(lang, "inboxRemove")}
+                onClick={() => invoke("inbox_remove", { id: it.id }).then(load)}
+              >
+                ×
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </main>
+  );
+}
+
 function HistoryView() {
   const [stats, setStats] = useState<ToolStats[]>([]);
   const [lang, setLang] = useState<Lang>(resolveLang(null));
@@ -2557,6 +2817,7 @@ function App() {
   const label = getCurrentWindow().label;
   if (label === "settings") return <SettingsView />;
   if (label === "history") return <HistoryView />;
+  if (label === "inbox") return <InboxView />;
   if (label === "pet") return <PetOverlay />;
   return <Dashboard />;
 }

@@ -1273,3 +1273,211 @@ h1 {
   gap: 12px;
   margin-top: 4px;
 }
+
+/* ─────────────────────────── 알림함 ─────────────────────────── */
+
+/* 팝오버 헤더의 벨 — 읽지 않은 개수를 아이콘 위에 겹친다 */
+.icon-btn.bell {
+  position: relative;
+}
+
+.bell-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: #ff3b30;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+}
+
+.inbox-count {
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: #ff3b30;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+.inbox-hint,
+.inbox-error {
+  margin: 0 0 10px;
+  font-size: 11px;
+}
+
+.inbox-hint {
+  color: #8e8e93;
+}
+
+.inbox-error {
+  color: #ff3b30;
+}
+
+.inbox-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.inbox-item {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+}
+
+/* 읽은 항목은 남겨두되 눈에서 물러나게 — 안 읽은 게 먼저 보여야 한다 */
+.inbox-item.read {
+  opacity: 0.55;
+}
+
+.inbox-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 10px;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.inbox-main:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.inbox-row1 {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: #8e8e93;
+}
+
+.inbox-dot {
+  width: 7px;
+  color: #ff3b30;
+  font-size: 9px;
+}
+
+.inbox-src {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inbox-src b {
+  font-weight: 600;
+  color: #636366;
+}
+
+.inbox-age {
+  flex-shrink: 0;
+}
+
+.inbox-title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.inbox-body {
+  font-size: 11.5px;
+  color: #636366;
+  line-height: 1.4;
+  /* 길게 쓴 본문이 리스트를 다 밀어내지 않게 두 줄로 자른다 */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.inbox-x {
+  flex-shrink: 0;
+  width: 26px;
+  border: none;
+  background: none;
+  color: #c7c7cc;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.inbox-x:hover {
+  color: #ff3b30;
+  background: rgba(0, 0, 0, 0.04);
+}
+
+/* 방해금지 하위 항목 — 상위 토글에 딸린 것임을 들여쓰기로 보인다 */
+.sub-row {
+  padding-left: 14px;
+  font-size: 12px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .inbox-item {
+    background: #2c2c2e;
+  }
+  .inbox-main:hover,
+  .inbox-x:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+  .inbox-src b {
+    color: #aeaeb2;
+  }
+  .inbox-body {
+    color: #aeaeb2;
+  }
+  .inbox-x {
+    color: #636366;
+  }
+}
+
+/* trw 설치 블록 — 설정 안에서 한 덩어리로 묶어 보인다 */
+.trw-install {
+  margin: 2px 0 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.trw-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.trw-install .setting-hint {
+  margin: 4px 0 0;
+}
+
+.trw-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  word-break: break-all;
+}
+
+@media (prefers-color-scheme: dark) {
+  .trw-install {
+    background: rgba(255, 255, 255, 0.05);
+  }
+}
