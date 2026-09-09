@@ -15,6 +15,11 @@ src-tauri/src/
 ├ activity.rs       에이전트 활동 감지(도는 중/막 끝남/쉬는 중) — pet 반응용
 ├ rollup.rs         일별 사용량·사용률 롤업 영속화(rollup.json) — 30일+ 히스토리용
 ├ atomicfile.rs     영속 파일 원자적 쓰기(tmp→rename) + 손상 파일 보존
+├ inbox.rs          알림함 — trw로 들어온 완료 알림 큐·영속(inbox.json)
+├ ipc.rs            trw 소켓 리스너(trw.sock) + 앱 꺼진 사이 스풀(pending/) 소비
+├ landing.rs        알림 클릭 시 원래 세션으로 되돌리는 어댑터(Orca/Paseo/경로)
+├ notify_os.rs      완료 알림의 OS 알림 발송 + 클릭 응답 수신
+├ installer.rs      trw CLI·스킬을 사용자 환경에 설치(심링크·복사)
 └ providers/
    ├ mod.rs         UsageProvider trait + 공용 타입 + find_recent_jsonl 헬퍼
    ├ claude_code.rs Keychain OAuth + ~/.claude JSONL
@@ -22,6 +27,8 @@ src-tauri/src/
    ├ codex.rs       ~/.codex JSONL (token_count + rate_limits)
    ├ gemini.rs      ~/.gemini 로그 요청 수
    └ antigravity.rs ~/.gemini/antigravity-cli 전송 로그
+src-tauri/trw/      `trw` CLI (별도 crate — 이유는 주의사항)
+src-tauri/skills/   번들로 배포하는 에이전트 스킬(trw-notify)
 src/                React UI (App.tsx 대시보드)
 design/             아이콘 SVG 소스
 ```
@@ -240,6 +247,24 @@ trait UsageProvider {
   - **한가할 때가 일할 때보다 더 돌아다니면 신호가 거꾸로 간다** — 배회는 한 번 걸을 때
     10초쯤 걸리므로 `REST_MS`를 짧게 두면 idle 쪽 걷는 비중이 작업 중보다 커진다.
     그래서 휴식을 10~25초로 길게 잡아 "쉴 때는 늘어져 있다"에 맞춘다
+- **작업 완료 알림** (`trw` → `ipc.rs` → `inbox.rs` → `notify_os.rs` → `landing.rs`):
+  다른 앱·세션에서 "작업 끝났다"를 받아 알리고, 누르면 그 세션으로 되돌려보낸다.
+  - **감지는 세션이 한다** — 앱이 상태 파일을 폴링하지 않는다. 오르카는
+    `agent-hooks/last-status.json`에 `state: done`을 다 모아두지만 그건 턴이 끝날
+    때마다 찍혀서, 모니터링 루프의 중간 턴과 진짜 완료를 가르지 못한다. 알릴 만한
+    시점인지는 에이전트가 판단하고 `trw notify`를 부른다(판단 기준은 `skills/trw-notify`)
+  - **랜딩 정보는 `trw`가 자동으로 붙인다** — 오르카는 `ORCA_WORKTREE_ID`·`ORCA_TAB_ID`,
+    Paseo는 `PASEO_AGENT_ID`(없으면 cwd로 `~/.paseo/agents/` 역매칭), 그 밖은 cwd.
+    `trw where`로 지금 세션이 어떻게 인식되는지 확인한다
+  - **터미널 handle은 클릭할 때 다시 찾는다** — 발송 시점 값을 굳히면 터미널이
+    재생성됐을 때 어긋난다. 그 탭이 없으면 같은 워크트리의 다른 터미널로, 그것도
+    없으면 `orca file open`으로 워크트리까지는 데려간다(터미널을 새로 만들지는 않는다)
+  - **읽음은 "눌러서 랜딩했다"는 뜻** — 리스트를 열어보는 것만으로는 안 읽은 게
+    남는다. 배지가 "아직 확인 안 한 완료 건수"여야 하기 때문이다. 읽은 항목은 7일
+    보관하고, 안 읽은 건 나이와 무관하게 남긴다(놓친 알림이 조용히 사라지지 않게)
+  - **완료 알림의 방해금지는 별도 토글**(`completion_alerts_quiet`, 기본 꺼짐) —
+    잔여율 경보와 성격이 다르다. 밤에 돌려놓고 자면 막아야 맞지만 밤에 직접 작업
+    중이면 막으면 알림을 놓친다
 - **AlertManager** (`lib.rs`): 세 가지 경보, 각 도구별 1회 발사 + 회복 시 재무장.
   - 소진 경보 — 잔여율 ≤ 임계치
   - 예상 소진 경보 — ETA ≤ `eta_alert_minutes` **이고** verdict가 `danger`
@@ -255,6 +280,7 @@ trait UsageProvider {
 pnpm exec tsc --noEmit          # TS 타입 체크
 cd src-tauri && cargo check     # Rust 컴파일
 pnpm tauri dev                  # 실제 실행 (메뉴바 + 알림 권한 다이얼로그)
+bash scripts/build-trw.sh       # trw를 externalBin 자리에 놓기 (--debug로 debug 빌드)
 ```
 
 ## Analytics (PostHog, opt-in)
@@ -321,6 +347,36 @@ pnpm tauri dev                  # 실제 실행 (메뉴바 + 알림 권한 다�
 - **계정 중복 제거는 조직 UUID와 토큰 지문을 함께 본다** — 소스마다 프로필 유무가 달라
   한쪽은 조직 UUID를, 다른 쪽은 토큰 지문을 id로 받는다. 하나만 보면 같은 계정이 두 줄로
   남아 계정이 하나인 사용자에게 배지와 계정 줄이 뜬다
+- **완료 알림 클릭은 `tauri-plugin-notification`으로 못 받는다** — 데스크톱 구현이
+  title/body/icon/sound만 넘기고 `action_type_id`를 버린다(`desktop.rs`의 `show()`).
+  그래서 그 밑에 깔린 `mac-notification-sys`를 직접 쓴다(notify-rust 의존이라 crate가
+  늘지 않는다). `wait_for_click(true)`면 버튼 없이도 클릭이 잡히는데 **응답까지
+  블로킹**이라 알림마다 스레드가 묶인다. 사용자가 무시한 알림은 응답이 안 올 수
+  있어 `MAX_WAITING`으로 동시 대기 수를 막고, 넘치면 클릭 대기 없이 띄운다
+  (알림은 뜨고 랜딩은 알림함에서 하면 된다)
+- **Dock 배지를 쓰려면 Accessory로 뜰 수 없다** — 배지는 `NSApp.dockTile`에 그려서
+  (`tao/…/macos/badge.rs`) Dock에 아이콘이 없으면 호출은 성공하고 아무것도 안 보인다.
+  그래서 `ActivationPolicy::Regular`로 상주한다. Accessory ↔ Regular를 오가는 방식은
+  전환할 때마다 포커스가 흔들려서 쓰지 않는다. Dock 아이콘 클릭은 `RunEvent::Reopen`
+  으로 받아 알림함을 연다 — 팝오버는 트레이 좌표에 붙어 Dock에서 열면 위치가 어긋난다
+- **`trw`는 별도 crate여야 한다** — 앱과 같은 패키지에 두면 `cargo build --bin trw`가
+  tauri-build 빌드 스크립트를 함께 돌리고, 그 스크립트가 아직 만들어지지 않은
+  externalBin 바이너리(`binaries/trw-<트리플>`)를 요구해 순환에 걸린다.
+  `scripts/build-trw.sh`가 그 파일을 만들고 `beforeDevCommand`·`beforeBuildCommand`
+  양쪽에 걸려 있다 — dev 실행에서도 externalBin 파일이 있어야 한다
+- **enum의 `serde(rename_all)`은 필드에 안 먹는다** — variant 이름만 바꾼다.
+  `Target`처럼 tag가 붙은 enum을 camelCase로 주고받으려면 `rename_all_fields`를
+  따로 붙여야 한다. 없으면 `worktreeId`가 조용히 파싱되지 않아 알림함이 빈다
+- **스킬은 `~/.agents/skills/<이름>`에 실물을 두고 에이전트마다 상대 심링크를 건다**
+  (`installer.rs`) — 커뮤니티 skills CLI 규약이다. 심링크의 상대 경로는 링크가 놓인
+  디렉토리 기준이라 `~/.claude/skills/`에서 `../../.agents/skills/<이름>`이 맞다.
+  홈에 설정 디렉토리가 있는 에이전트만 대상으로 삼는다 — 없는 에이전트까지 만들면
+  쓰지도 않는 설정 디렉토리를 흩뿌린다. 자리에 심링크가 아닌 파일이 있으면 건드리지 않는다
+- **`trw`는 절대 실패로 종료하지 않는다** — 에이전트 훅이나 스크립트 안에서 돈다.
+  앱이 꺼져 있으면 `pending/`에 남기고 0으로 빠지며, 전달 실패를 알아야 할 때만
+  `--strict`를 쓴다. 알림 payload에 셸 명령을 담지 않는 것도 같은 이유다 — 훅
+  스크립트가 오염되면 그대로 실행기가 된다. `kind` 화이트리스트만 받고 명령은
+  `landing.rs`가 조립한다
 - 토큰 등 시크릿은 로그/커밋에 절대 노출 금지 (Keychain 직접 읽기)
 - `official_usage` 우선 — 로컬 토큰 합산보다 공식 사용률이 정확
 - 새 provider의 `window_secs`/`unit`이 다르면 UI는 자동 대응 (라벨 동적)
@@ -377,6 +433,10 @@ pnpm tauri dev                  # 실제 실행 (메뉴바 + 알림 권한 다�
   안에서 펼쳐 본다(`claude_accounts.rs`, `RunwayStatus.accounts`). 카드 헤더와 트레이는
   지금 쓰는 계정, 펼치면 계정별 줄. 소진 경보와 리셋 경보 둘 다 계정마다 따로 울고
   제목에 계정 이름이 붙는다
+- [x] 작업 완료 알림 — `trw notify`로 다른 앱·세션에서 완료를 받아 OS 알림 + 알림함에
+  쌓고, 누르면 그 오르카 워크트리 탭이나 Paseo 에이전트로 되돌아간다. Dock 배지에
+  읽지 않은 건수, 트레이 메뉴·팝오버 벨에도 개수. `trw`와 스킬은 앱 번들에 담아
+  설정에서 설치한다(`installer.rs`)
 - [ ] 플랜 배지 대비 — `.plan-badge`와 `.acct-plan`이 같은 파란 배경에 흰 글자라
   대비가 3.6:1이다. WCAG AA-large는 넘지만 normal(4.5:1)에는 못 미친다. 한쪽만
   어둡게 하면 두 배지가 달라 보여 함께 손봐야 한다
