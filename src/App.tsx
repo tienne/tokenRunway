@@ -991,24 +991,44 @@ function windowTitle(hours: number, lang: Lang): string {
   return `${t(lang, "session")} (${windowLabel(hours)})`;
 }
 
+/** 일·시간·분을 언어에 맞춰 잇는다. 0인 단위는 뺀다 — "3일 0시간 5분"보다 "3일 5분"이 읽기 쉽다. */
+function joinUnits(lang: Lang, d: number, h: number, m: number): string {
+  const parts: string[] = [];
+  if (d > 0) parts.push(t(lang, "unit.d", { n: d }));
+  if (h > 0) parts.push(t(lang, "unit.h", { n: h }));
+  if (m > 0) parts.push(t(lang, "unit.m", { n: m }));
+  return parts.join(" ");
+}
+
 function formatEta(min: number | null, lang: Lang): string {
   if (min == null) return "—";
   if (min < 1) return t(lang, "lessThanMin");
-  const h = Math.floor(min / 60);
-  const m = Math.round(min % 60);
-  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  const total = Math.round(min);
+  return joinUnits(lang, 0, Math.floor(total / 60), total % 60);
 }
 
-/** 하루가 넘는 기간용 — "3d 4h". 주간 한도·리셋처럼 긴 시간에 쓴다. */
+/** 하루가 넘는 기간용 — "3일 4시간". 소진 예측처럼 분까지는 의미 없는 추정치에 쓴다. */
 function formatDuration(min: number | null, lang: Lang): string {
   if (min == null) return "—";
   if (min < 1) return t(lang, "lessThanMin");
-  const d = Math.floor(min / 1440);
-  if (d >= 1) {
-    const h = Math.round((min % 1440) / 60);
-    return h > 0 ? `${d}d ${h}h` : `${d}d`;
+  if (min >= 1440) {
+    const totalH = Math.round(min / 60);
+    return joinUnits(lang, Math.floor(totalH / 24), totalH % 24, 0);
   }
   return formatEta(min, lang);
+}
+
+/** 리셋까지 남은 시간 — "5일 3시간 12분". 리셋 시각은 서버가 준 확정값이라 분까지 보여준다. */
+function formatCountdown(min: number | null, lang: Lang): string {
+  if (min == null) return "—";
+  if (min < 1) return t(lang, "lessThanMin");
+  const total = Math.round(min);
+  return joinUnits(
+    lang,
+    Math.floor(total / 1440),
+    Math.floor((total % 1440) / 60),
+    total % 60
+  );
 }
 
 /** 요일 라벨 — 0=월 ~ 6=일 */
@@ -1139,7 +1159,7 @@ function VerdictLine({ v, lang }: { v: Verdict; lang: Lang }) {
     <p className={`verdict verdict-${v.level}`}>
       {t(lang, v.key, {
         eta: formatDuration(v.etaMinutes, lang),
-        reset: formatDuration(v.resetMinutes, lang),
+        reset: formatCountdown(v.resetMinutes, lang),
       })}
     </p>
   );
@@ -1171,10 +1191,7 @@ function formatResetsAt(iso: string | null, lang: Lang): string | null {
   if (isNaN(d.getTime())) return null;
   const diffMin = Math.round((d.getTime() - Date.now()) / 60000);
   if (diffMin <= 0) return t(lang, "resetSoon");
-  const h = Math.floor(diffMin / 60);
-  const m = diffMin % 60;
-  const time = h > 0 ? `${h}h ${m}m` : `${m}m`;
-  return t(lang, "afterReset", { t: time });
+  return t(lang, "afterReset", { t: formatCountdown(diffMin, lang) });
 }
 
 /** 잔여율 구간별 색 — 계정 줄의 미니 바에 쓴다 */

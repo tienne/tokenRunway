@@ -1497,9 +1497,18 @@ fn spawn_tray_animator(app: AppHandle) {
     });
 }
 
-/// 트레이용 짧은 시간 표기 (예: 150분 → "2.5h", 120분 → "2h", 45분 → "45m").
+/// 트레이용 짧은 시간 표기 (예: 150분 → "2.5h", 120분 → "2h", 45분 → "45m", 7,800분 → "5d 10h").
+/// 주간 윈도우가 대표면 시간만으로는 "130.5h"가 돼 며칠 남았는지 읽히지 않는다.
 fn fmt_tray_duration(mins: f64) -> String {
-    if mins >= 60.0 {
+    if mins >= 1440.0 {
+        let total_h = (mins / 60.0).round() as i64;
+        let (d, h) = (total_h / 24, total_h % 24);
+        if h > 0 {
+            format!("{d}d {h}h")
+        } else {
+            format!("{d}d")
+        }
+    } else if mins >= 60.0 {
         let h = mins / 60.0;
         if h.fract().abs() < 0.05 {
             format!("{h:.0}h")
@@ -1887,6 +1896,14 @@ fn toggle_popover(app: &AppHandle, force_show: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tray_duration_switches_to_days_past_a_day() {
+        assert_eq!(fmt_tray_duration(45.0), "45m");
+        assert_eq!(fmt_tray_duration(150.0), "2.5h");
+        assert_eq!(fmt_tray_duration(7800.0), "5d 10h");
+        assert_eq!(fmt_tray_duration(2880.0), "2d");
+    }
 
     fn target(tool: &str, key: &str) -> AlertTarget {
         AlertTarget {
