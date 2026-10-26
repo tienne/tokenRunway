@@ -12,6 +12,9 @@
 //!    밀려난 원래 로그인
 //! 3. 오르카 `claude-accounts/<uuid>/` + Keychain `Orca Claude Code Managed Credentials`
 //!
+//! 오르카 프로필(`claude-profiles/<uuid>/home`)은 1번의 config dir 후보로 들어간다.
+//! 2번과 3번에 남은 토큰은 갱신이 멈춘 사본이라, 같은 계정이면 1번이 먼저 이긴다.
+//!
 //! 2번과 3번은 오르카 내부 구조라 포맷이 바뀌면 못 읽는다. 실패하면 조용히 건너뛰고
 //! 나머지 계정만 쓴다 — 계정 하나라도 보이는 게 아무것도 안 보이는 것보다 낫다.
 
@@ -346,7 +349,27 @@ fn config_dir_candidates() -> Vec<PathBuf> {
     collect_claude_dirs(&home.join(".config"), &mut out, |name| {
         name.contains("claude")
     });
+    if let Some(orca) = orca_dir() {
+        collect_orca_profile_homes(&orca.join("claude-profiles"), &mut out);
+    }
     out
+}
+
+/// 오르카 프로필의 config dir — `claude-profiles/<uuid>/home`.
+///
+/// 오르카는 터미널마다 `CLAUDE_CONFIG_DIR`을 이 자리로 잡아 계정을 나눈다. 살아 있는
+/// 토큰은 여기 해시가 붙은 Keychain 항목에만 있고, `claude-accounts`나
+/// `system-default-auth.json`에 남은 사본은 갱신되지 않아 며칠 지나면 만료된다.
+fn collect_orca_profile_homes(root: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let home = entry.path().join("home");
+        if home.is_dir() && looks_like_config_dir(&home) {
+            out.push(home);
+        }
+    }
 }
 
 fn collect_claude_dirs(root: &Path, out: &mut Vec<PathBuf>, name_matches: impl Fn(&str) -> bool) {
@@ -549,6 +572,22 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn orca_profile_homes_become_candidates() {
+        // 이 자리를 못 보면 오르카로 나눈 계정이 만료된 사본으로만 잡혀 잔여율이 안 뜬다.
+        let root = std::env::temp_dir().join(format!("tr-orca-{}", std::process::id()));
+        let _cleanup = TempDir(root.clone());
+        let live = root.join("acct-a").join("home");
+        fs::create_dir_all(&live).expect("임시 디렉토리");
+        fs::write(live.join(".claude.json"), "{}").expect("쓰기");
+        // 프로필 파일이 없는 home은 Claude가 안 쓰는 자리라 걸러야 한다.
+        fs::create_dir_all(root.join("acct-b").join("home")).expect("임시 디렉토리");
+
+        let mut out = Vec::new();
+        collect_orca_profile_homes(&root, &mut out);
+        assert_eq!(out, vec![live]);
     }
 
     #[test]

@@ -101,6 +101,11 @@ trait UsageProvider {
     `Orca Claude Code Managed Credentials`(토큰, account=`<uuid>`)
   - **오르카는 `CLAUDE_CONFIG_DIR`이 아니라 Keychain 항목을 통째로 바꿔치기**해서
     계정을 전환한다. 활성 계정만 읽으면 나머지 계정이 통째로 안 보인다
+  - **최신 오르카는 프로필마다 `CLAUDE_CONFIG_DIR`을 `claude-profiles/<uuid>/home`으로
+    잡는다** — 살아 있는 토큰은 그 경로 해시가 붙은 Keychain 항목에만 있다. 위
+    `claude-accounts`나 `system-default-auth.json`의 토큰은 갱신이 멈춘 사본이라 며칠
+    지나면 만료돼 401이 난다(2026-10 확인: 둘 다 열흘쯤 전에 만료). 그래서 이 home을
+    config dir 후보에 넣어 Keychain 소스가 먼저 이기게 한다
   - 계정 구분은 조직 UUID로 한다 — 같은 이메일로 조직 두 곳(Team/Enterprise)에
     속하면 쿼터가 따로 돌기 때문에 이메일로는 못 가른다. 조직을 못 읽으면 토큰 지문
   - **활성 계정은 `~/.claude.json`의 `organizationUuid`와 맞는 하나뿐이다.** Keychain에
