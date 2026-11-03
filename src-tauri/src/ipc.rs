@@ -23,6 +23,12 @@ pub fn socket_path() -> Option<PathBuf> {
     crate::settings::app_dir().map(|d| d.join("trw.sock"))
 }
 
+/// 다른 인스턴스가 이미 소켓을 잡고 있는지. 아직 bind하기 전에 부르므로 붙는 상대는
+/// 우리 자신일 수 없다.
+pub fn another_instance_alive() -> bool {
+    socket_path().is_some_and(|p| UnixStream::connect(p).is_ok())
+}
+
 pub fn spool_dir() -> Option<PathBuf> {
     crate::settings::app_dir().map(|d| d.join("pending"))
 }
@@ -106,9 +112,8 @@ where
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    // 이전 실행이 남긴 소켓 파일은 bind를 막는다. 살아 있는 리스너가 있는지
-    // 확인할 방법이 마땅치 않아(연결해봐도 우리 자신일 수 있다) 그냥 치운다 —
-    // 앱은 한 번에 하나만 뜨는 트레이 앱이다.
+    // 이전 실행이 남긴 소켓 파일은 bind를 막아서 치운다. 살아 있는 인스턴스가 있으면
+    // `run()`이 이미 여기까지 오지 않고 빠졌다.
     let _ = fs::remove_file(&path);
     let listener = match UnixListener::bind(&path) {
         Ok(l) => l,

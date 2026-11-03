@@ -1622,6 +1622,13 @@ fn spawn_alert_loop(app: AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 두 번째 인스턴스가 뜨면 소켓 파일을 지우고 다시 잡아서 먼저 뜬 쪽은 알림을 더는 못
+    // 받고, pet도 두 마리가 된다. `trw`가 소켓 연결에 한 번 실패해 앱을 깨운 경우에도
+    // 같은 일이 생긴다. dev 빌드와 설치본도 서로를 막는다.
+    if ipc::another_instance_alive() {
+        eprintln!("Token Runway가 이미 실행 중이라 종료합니다");
+        return;
+    }
     // SETTINGS/ROLLUP static이 처음 건드려지기 전에 옛 데이터 위치를 새 위치로 옮긴다.
     settings::migrate_data_dir();
 
