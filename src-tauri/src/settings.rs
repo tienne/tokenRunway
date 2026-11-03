@@ -60,6 +60,10 @@ pub struct Settings {
     /// 밤에 직접 작업하는 경우엔 막으면 알림을 놓친다. 성격이 달라 따로 둔다.
     #[serde(default)]
     pub completion_alerts_quiet: bool,
+    /// 앱이 꺼져 있을 때 `trw`가 알림을 보내면 앱을 띄울지. 이 값은 앱이 아니라 `trw`가
+    /// settings.json을 직접 읽어서 쓴다 — 앱이 꺼져 있을 때 필요한 값이라서.
+    #[serde(default = "default_completion_alerts")]
+    pub wake_on_notify: bool,
     /// UI/알림 언어. None이면 시스템 로케일 자동 감지 ("ko" | "en").
     #[serde(default)]
     pub language: Option<String>,
@@ -152,6 +156,7 @@ impl Default for Settings {
             pet_scale: 1.0,
             completion_alerts_enabled: default_completion_alerts(),
             completion_alerts_quiet: false,
+            wake_on_notify: default_completion_alerts(),
         }
     }
 }

@@ -6,10 +6,11 @@
 //! 앱 코드(`token_runway_lib`)를 참조하지 않는다 — 참조하면 tauri 전체가 이 작은
 //! 바이너리에 딸려 들어온다. 주고받는 건 JSON 한 줄이라 타입을 공유할 필요가 없다.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command, ExitCode, Stdio};
+use std::time::{Duration, Instant};
 
 const USAGE: &str = "\
 trw — Token Runway 알림 보내기
@@ -18,6 +19,7 @@ trw — Token Runway 알림 보내기
   trw notify <제목> [옵션]
   trw ls [--json]
   trw where
+  trw hook stop        Claude Code Stop 훅용 — stdin의 훅 입력을 읽어 알림함에 조용히 남긴다
 
 옵션 (notify):
   --body <문구>        알림 본문
@@ -41,19 +43,12 @@ fn app_dir() -> Option<PathBuf> {
 /// `PASEO_AGENT_ID`가 없을 수도 있어서 cwd로 역매칭까지 시도한다.
 fn detect_target() -> (serde_json::Value, Option<String>) {
     if let Ok(worktree_id) = std::env::var("ORCA_WORKTREE_ID") {
-        // `<repo-uuid>::<절대경로>` 꼴이라 뒤쪽이 워크트리 경로다.
-        let path = worktree_id.split("::").nth(1).map(|s| s.to_string());
-        let label = path.as_deref().and_then(last_segment);
-        let tab_id = std::env::var("ORCA_TAB_ID").ok();
-        return (
-            serde_json::json!({
-                "kind": "orca",
-                "worktreeId": worktree_id,
-                "worktreePath": path,
-                "tabId": tab_id,
-            }),
-            label,
-        );
+        return orca_target(worktree_id, std::env::var("ORCA_TAB_ID").ok());
+    }
+    if std::env::var_os("ORCA_AGENT_SESSION_ID").is_some() {
+        if let Some(worktree_id) = orca_current_worktree() {
+            return orca_target(worktree_id, None);
+        }
     }
 
     let cwd = std::env::current_dir().ok();
@@ -89,6 +84,57 @@ fn detect_target() -> (serde_json::Value, Option<String>) {
     }
 
     (serde_json::json!({ "kind": "none" }), None)
+}
+
+fn orca_target(worktree_id: String, tab_id: Option<String>) -> (serde_json::Value, Option<String>) {
+    // `<repo-uuid>::<절대경로>` 꼴이라 뒤쪽이 워크트리 경로다.
+    let path = worktree_id.split("::").nth(1).map(|s| s.to_string());
+    let label = path.as_deref().and_then(last_segment);
+    (
+        serde_json::json!({
+            "kind": "orca",
+            "worktreeId": worktree_id,
+            "worktreePath": path,
+            "tabId": tab_id,
+        }),
+        label,
+    )
+}
+
+/// 오르카 채팅 세션에는 `ORCA_WORKTREE_ID`가 안 들어와서 CLI로 cwd의 워크트리를 묻는다.
+/// 채팅 세션 하나를 앞으로 띄우는 CLI 명령이나 딥링크는 없어(오르카 1.4.243 확인) 워크트리까지만 데려간다.
+/// 훅 안에서 도는 trw가 런타임 응답을 기다리다 매달리면 안 돼서 시간을 끊는다.
+fn orca_current_worktree() -> Option<String> {
+    const TIMEOUT: Duration = Duration::from_secs(3);
+    let bin = std::env::var_os("ORCA_CLI_COMMAND")?;
+    let mut child = Command::new(bin)
+        .args(["worktree", "current", "--json"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait().ok()? {
+            Some(status) if status.success() => break,
+            Some(_) => return None,
+            None if started.elapsed() > TIMEOUT => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            None => std::thread::sleep(Duration::from_millis(50)),
+        }
+    }
+    let mut out = String::new();
+    child.stdout.take()?.read_to_string(&mut out).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&out).ok()?;
+    v.get("result")?
+        .get("worktree")?
+        .get("id")?
+        .as_str()
+        .map(|s| s.to_string())
 }
 
 fn last_segment(path: &str) -> Option<String> {
@@ -137,40 +183,96 @@ fn paseo_agent_for_cwd(cwd: &Path) -> Option<(String, Option<String>)> {
     best.map(|(id, title, _)| (id, title))
 }
 
-/// 소켓으로 보낸다. 앱이 안 떠 있으면 Err.
-fn send_socket(payload: &serde_json::Value) -> Result<(), String> {
-    let path = app_dir().ok_or("홈 디렉토리를 찾을 수 없습니다")?.join("trw.sock");
-    let mut stream = UnixStream::connect(&path).map_err(|e| e.to_string())?;
+enum SendError {
+    /// 소켓에 붙지도 못했다 — 앱이 꺼져 있다.
+    NotRunning(String),
+    /// 붙어서 보냈지만 응답이 늦거나 이상했다. 앱은 떠 있다.
+    AfterConnect(String),
+}
+
+/// 소켓으로 보낸다.
+fn send_socket(payload: &serde_json::Value) -> Result<(), SendError> {
+    let path = app_dir()
+        .ok_or_else(|| SendError::NotRunning("홈 디렉토리를 찾을 수 없습니다".into()))?
+        .join("trw.sock");
+    let mut stream = UnixStream::connect(&path).map_err(|e| SendError::NotRunning(e.to_string()))?;
+    let after = |e: String| SendError::AfterConnect(e);
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
     stream
         .write_all(format!("{payload}\n").as_bytes())
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| after(e.to_string()))?;
     let mut line = String::new();
     BufReader::new(&stream)
         .read_line(&mut line)
-        .map_err(|e| e.to_string())?;
-    let resp: serde_json::Value = serde_json::from_str(line.trim()).map_err(|e| e.to_string())?;
+        .map_err(|e| after(e.to_string()))?;
+    let resp: serde_json::Value = serde_json::from_str(line.trim()).map_err(|e| after(e.to_string()))?;
     if resp.get("ok").and_then(|b| b.as_bool()) == Some(true) {
         Ok(())
     } else {
-        Err(resp
-            .get("error")
-            .and_then(|s| s.as_str())
-            .unwrap_or("알 수 없는 오류")
-            .to_string())
+        Err(after(
+            resp.get("error")
+                .and_then(|s| s.as_str())
+                .unwrap_or("알 수 없는 오류")
+                .to_string(),
+        ))
     }
 }
 
-/// 앱이 꺼져 있을 때 — 파일로 남긴다. 파일명이 도착 순서를 담는다.
+/// 앱이 꺼져 있을 때 — 파일로 남긴다.
+///
+/// Stop 훅 줄은 세션마다 파일 하나를 덮어쓴다. 앱을 며칠 꺼두면 턴마다 파일이 쌓이는데
+/// 알림함은 어차피 세션당 마지막 한 줄만 남긴다. 명시 알림은 하나하나 남긴다.
 fn spool(payload: &serde_json::Value) -> Result<(), String> {
     let dir = app_dir().ok_or("홈 디렉토리를 찾을 수 없습니다")?.join("pending");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let ms = std::time::SystemTime::now()
+    let quiet_key = payload
+        .get("quiet")
+        .and_then(|q| q.as_bool())
+        .unwrap_or(false)
+        .then(|| payload.get("key").and_then(|k| k.as_str()))
+        .flatten();
+    let name = match quiet_key {
+        Some(key) => {
+            let safe: String = key
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' })
+                .collect();
+            format!("quiet-{safe}.json")
+        }
+        None => format!("{:013}-{}.json", now_ms(), std::process::id()),
+    };
+    // 앱이 쓰는 중인 파일을 읽어 파싱에 실패하면 지워버리므로 다 쓴 뒤 이름을 바꾼다.
+    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, payload.to_string()).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, dir.join(name)).map_err(|e| e.to_string())
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    let name = format!("{ms:013}-{}.json", std::process::id());
-    std::fs::write(dir.join(name), payload.to_string()).map_err(|e| e.to_string())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+const APP_BUNDLE_ID: &str = "co.tienne.token-runway";
+
+/// 앱을 백그라운드로 띄운다. 앱은 뜨자마자 스풀을 읽어 배너와 진동까지 평소처럼 낸다.
+/// 끝나길 기다리지 않는다 — 훅 안에서 돌고 있어서 세션을 붙잡으면 안 된다.
+fn wake_app() {
+    let enabled = app_dir()
+        .and_then(|d| std::fs::read_to_string(d.join("settings.json")).ok())
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|v| v.get("wakeOnNotify").and_then(|b| b.as_bool()))
+        .unwrap_or(true);
+    if !enabled {
+        return;
+    }
+    let _ = Command::new("/usr/bin/open")
+        .args(["-g", "-b", APP_BUNDLE_ID])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
 }
 
 fn cmd_notify(args: &[String]) -> ExitCode {
@@ -236,12 +338,28 @@ fn cmd_notify(args: &[String]) -> ExitCode {
         "level": level,
         "context": context.or(auto_label),
         "target": target,
+        "key": session_key(None),
+        "sentMs": now_ms(),
     });
+    deliver(&payload, strict)
+}
 
-    match send_socket(&payload) {
+fn deliver(payload: &serde_json::Value, strict: bool) -> ExitCode {
+    match send_socket(payload) {
         Ok(()) => ExitCode::SUCCESS,
-        Err(sock_err) => match spool(&payload) {
+        // 앱은 떠 있는데 응답만 늦은 경우 — 이미 받았을 수 있어서 스풀에 또 남기면 두 번
+        // 쌓이고, 깨우면 앱이 하나 더 뜬다.
+        Err(SendError::AfterConnect(e)) => {
+            if strict {
+                eprintln!("앱이 응답하지 않았습니다: {e}");
+                ExitCode::from(1)
+            } else {
+                ExitCode::SUCCESS
+            }
+        }
+        Err(SendError::NotRunning(sock_err)) => match spool(payload) {
             Ok(()) => {
+                wake_app();
                 // 앱이 꺼져 있는 건 정상 상황이다. 훅을 깨지 않게 조용히 넘긴다.
                 if strict {
                     eprintln!("앱에 바로 못 보내 스풀에 남겼습니다: {sock_err}");
@@ -254,6 +372,95 @@ fn cmd_notify(args: &[String]) -> ExitCode {
             }
         },
     }
+}
+
+/// 같은 세션에서 온 알림을 앱이 한 줄로 묶게 하는 키. 스킬이 부른 `trw notify`와
+/// Stop 훅이 같은 키를 내야 둘이 겹쳐 두 줄로 쌓이지 않는다.
+fn session_key(from_hook: Option<&str>) -> Option<String> {
+    from_hook
+        .map(|s| s.to_string())
+        .or_else(|| std::env::var("CLAUDE_CODE_SESSION_ID").ok())
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("claude:{s}"))
+}
+
+/// Claude Code Stop 훅 — 턴이 끝날 때마다 그 세션을 알림함에 한 줄로 남긴다.
+///
+/// 에이전트가 `trw notify`를 부를지 판단하게 두면 평범한 턴은 전부 빠진다. 그래서 훅이
+/// 턴마다 남기되 OS 알림과 진동은 없이(`quiet`) 세션당 한 줄로 덮어쓴다.
+fn cmd_hook_stop() -> ExitCode {
+    let mut raw = String::new();
+    let _ = std::io::stdin().take(1 << 20).read_to_string(&mut raw);
+    let input: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+    let field = |k: &str| input.get(k).and_then(|v| v.as_str());
+
+    // 훅은 세션 cwd에서 돌지만 보장된 건 아니라 입력의 cwd로 맞춘다 — 랜딩이 cwd를 본다.
+    if let Some(cwd) = field("cwd") {
+        let _ = std::env::set_current_dir(cwd);
+    }
+    let text = field("last_assistant_message")
+        .map(|s| s.to_string())
+        .or_else(|| field("transcript_path").and_then(|p| last_assistant_text(Path::new(p))));
+    let title = text
+        .as_deref()
+        .and_then(headline)
+        .unwrap_or_else(|| "턴 종료".to_string());
+    let (target, label) = detect_target();
+    let payload = serde_json::json!({
+        "title": title,
+        "level": "done",
+        "context": label,
+        "target": target,
+        "key": session_key(field("session_id")),
+        "quiet": true,
+        "sentMs": now_ms(),
+    });
+    deliver(&payload, false);
+    ExitCode::SUCCESS
+}
+
+/// 트랜스크립트 꼬리에서 마지막 assistant 응답의 텍스트를 꺼낸다. 세션이 길면 파일이
+/// 수백 MB라 끝 2MB만 읽는다.
+fn last_assistant_text(path: &Path) -> Option<String> {
+    use std::io::{Seek, SeekFrom};
+    const TAIL: u64 = 2 * 1024 * 1024;
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    f.seek(SeekFrom::Start(len.saturating_sub(TAIL))).ok()?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    let tail = String::from_utf8_lossy(&buf);
+    tail.lines().rev().find_map(|line| {
+        let v: serde_json::Value = serde_json::from_str(line).ok()?;
+        if v.get("type")?.as_str()? != "assistant" {
+            return None;
+        }
+        let text: Vec<&str> = v
+            .get("message")?
+            .get("content")?
+            .as_array()?
+            .iter()
+            .filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("text"))
+            .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+            .collect();
+        let joined = text.join("\n");
+        (!joined.trim().is_empty()).then_some(joined)
+    })
+}
+
+/// 응답 첫 줄을 알림 제목으로 다듬는다. 마크다운 머리 기호와 굵게 표시는 뗀다.
+fn headline(text: &str) -> Option<String> {
+    const MAX_CHARS: usize = 80;
+    let line = text
+        .lines()
+        .map(|l| l.trim_start_matches(['#', '>', '-', '*', ' ', '\t']).replace("**", ""))
+        .map(|l| l.trim().to_string())
+        .find(|l| !l.is_empty())?;
+    if line.chars().count() <= MAX_CHARS {
+        return Some(line);
+    }
+    let cut: String = line.chars().take(MAX_CHARS - 1).collect();
+    Some(format!("{cut}…"))
 }
 
 fn cmd_ls(args: &[String]) -> ExitCode {
@@ -307,6 +514,7 @@ fn main() -> ExitCode {
         Some("notify") => cmd_notify(&args[1..]),
         Some("ls") => cmd_ls(&args[1..]),
         Some("where") => cmd_where(),
+        Some("hook") if args.get(1).map(|s| s.as_str()) == Some("stop") => cmd_hook_stop(),
         Some("--help") | Some("-h") | None => {
             println!("{USAGE}");
             ExitCode::SUCCESS

@@ -81,6 +81,12 @@ pub struct InboxItem {
     pub created_ms: i64,
     #[serde(default)]
     pub read: bool,
+    /// 같은 에이전트 세션에서 온 알림을 한 줄로 묶는 키(`claude:<session_id>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// Stop 훅이 턴마다 남긴 줄 — OS 알림과 진동 없이 알림함에만 쌓인다.
+    #[serde(default)]
+    pub quiet: bool,
 }
 
 /// `trw`가 소켓으로 보내는 요청 본문. `InboxItem`과 달리 id·시각·읽음은 앱이 채운다.
@@ -96,7 +102,18 @@ pub struct NotifyRequest {
     pub context: Option<String>,
     #[serde(default = "target_none")]
     pub target: Target,
+    #[serde(default)]
+    pub key: Option<String>,
+    #[serde(default)]
+    pub quiet: bool,
+    /// `trw`가 보낸 시각. 스풀에서 늦게 꺼낸 알림도 실제로 끝난 시각으로 남기려고 받는다.
+    #[serde(default)]
+    pub sent_ms: Option<i64>,
 }
+
+/// 에이전트가 `trw notify`로 직접 알린 직후엔 Stop 훅 줄이 그걸 덮지 않는다 — 에이전트가 쓴
+/// 제목이 훅이 응답 첫 줄에서 뽑은 제목보다 낫다.
+const KEEP_EXPLICIT_MS: i64 = 2 * 60 * 1000;
 
 fn target_none() -> Target {
     Target::None
@@ -165,8 +182,10 @@ fn new_id(now_ms: i64) -> String {
     format!("{now_ms:x}-{n:x}")
 }
 
-/// 알림을 큐에 넣고 만들어진 항목을 돌려준다.
-pub fn add(req: NotifyRequest) -> InboxItem {
+/// 알림을 큐에 넣고 만들어진 항목을 돌려준다. Stop 훅 줄이 직전 명시 알림에 밀려 버려지면 None.
+///
+/// 키가 같은 항목은 세션당 한 줄만 남긴다 — 턴마다 쌓이면 모니터링 루프 하나가 목록을 다 채운다.
+pub fn add(req: NotifyRequest) -> Option<InboxItem> {
     let now_ms = chrono::Utc::now().timestamp_millis();
     let item = InboxItem {
         id: new_id(now_ms),
@@ -175,15 +194,36 @@ pub fn add(req: NotifyRequest) -> InboxItem {
         level: req.level,
         context: req.context,
         target: req.target,
-        created_ms: now_ms,
+        created_ms: req.sent_ms.filter(|&t| t > 0 && t <= now_ms).unwrap_or(now_ms),
         read: false,
+        key: req.key,
+        quiet: req.quiet,
     };
-    if let Ok(mut f) = INBOX.lock() {
-        f.items.push(item.clone());
-        prune(&mut f.items, now_ms);
-        save(&f);
+    let mut f = INBOX.lock().ok()?;
+    if !merge_by_key(&mut f.items, &item) {
+        return None;
     }
-    item
+    f.items.push(item.clone());
+    prune(&mut f.items, now_ms);
+    save(&f);
+    Some(item)
+}
+
+/// 같은 키의 이전 줄을 지운다. 새 줄을 넣지 말아야 하면 false.
+fn merge_by_key(items: &mut Vec<InboxItem>, new: &InboxItem) -> bool {
+    let Some(key) = new.key.as_deref() else {
+        return true;
+    };
+    let same = |i: &InboxItem| i.key.as_deref() == Some(key);
+    if new.quiet
+        && items
+            .iter()
+            .any(|i| same(i) && !i.quiet && !i.read && new.created_ms - i.created_ms < KEEP_EXPLICIT_MS)
+    {
+        return false;
+    }
+    items.retain(|i| !same(i));
+    true
 }
 
 /// 최신순 전체 목록.
@@ -244,5 +284,42 @@ pub fn clear() {
     if let Ok(mut f) = INBOX.lock() {
         f.items.clear();
         save(&f);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item(key: &str, quiet: bool, created_ms: i64) -> InboxItem {
+        InboxItem {
+            id: format!("{created_ms}"),
+            title: String::new(),
+            body: None,
+            level: Level::default(),
+            context: None,
+            target: Target::None,
+            created_ms,
+            read: false,
+            key: Some(key.to_string()),
+            quiet,
+        }
+    }
+
+    #[test]
+    fn hook_line_replaces_previous_hook_line_of_same_session() {
+        let mut items = vec![item("claude:a", true, 0), item("claude:b", true, 0)];
+        assert!(merge_by_key(&mut items, &item("claude:a", true, 10_000)));
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].key.as_deref(), Some("claude:b"));
+    }
+
+    #[test]
+    fn hook_line_does_not_override_fresh_explicit_notify() {
+        let mut items = vec![item("claude:a", false, 0)];
+        assert!(!merge_by_key(&mut items, &item("claude:a", true, 5_000)));
+        assert_eq!(items.len(), 1);
+        assert!(merge_by_key(&mut items, &item("claude:a", true, KEEP_EXPLICIT_MS)));
+        assert!(items.is_empty());
     }
 }

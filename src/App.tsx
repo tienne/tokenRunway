@@ -938,6 +938,7 @@ interface Settings {
   notificationsEnabled: boolean;
   completionAlertsEnabled: boolean;
   completionAlertsQuiet: boolean;
+  wakeOnNotify: boolean;
   language: string | null;
   quietEnabled: boolean;
   quietStartHour: number;
@@ -1627,6 +1628,7 @@ function SettingsView() {
     notificationsEnabled: true,
     completionAlertsEnabled: true,
     completionAlertsQuiet: false,
+    wakeOnNotify: true,
     language: null,
     quietEnabled: false,
     quietStartHour: 22,
@@ -1819,6 +1821,16 @@ function SettingsView() {
         </label>
         {settings.completionAlertsEnabled && (
           <p className="setting-hint">{tr("completionAlertsHint")}</p>
+        )}
+        {settings.completionAlertsEnabled && (
+          <label className="setting-row toggle-row sub-row">
+            <span>{tr("wakeOnNotify")}</span>
+            <input
+              type="checkbox"
+              checked={settings.wakeOnNotify}
+              onChange={(e) => update({ wakeOnNotify: e.target.checked })}
+            />
+          </label>
         )}
         {settings.completionAlertsEnabled && (
           <div className="trw-install">

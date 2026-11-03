@@ -1007,14 +1007,21 @@ pub fn refresh_inbox_badge() {
 }
 
 /// `trw`에서 알림 하나가 들어왔을 때 — 큐에 넣고 OS 알림을 띄운다.
+/// 이보다 오래된 완료 알림은 배너 없이 알림함에만 넣는다. 앱이 꺼진 사이 스풀에 쌓인 게
+/// 앱이 뜰 때 한꺼번에 배너로 쏟아지면 몇 시간 전 일을 지금 끝난 것처럼 보여준다.
+const STALE_BANNER_MS: i64 = 10 * 60 * 1000;
+
 fn on_notify_request(req: inbox::NotifyRequest) {
     if !settings::completion_alerts_enabled() {
         return;
     }
-    let item = inbox::add(req);
+    let Some(item) = inbox::add(req) else {
+        return;
+    };
     // 완료 알림은 방해금지와 성격이 다르다(밤에 돌려놓고 자는 경우 vs 밤에 작업 중).
     // 그래서 별도 토글로 가리고, 가려도 알림함에는 남긴다.
-    if settings::notifications_enabled() && !completion_quiet_now() {
+    let fresh = chrono::Utc::now().timestamp_millis() - item.created_ms < STALE_BANNER_MS;
+    if fresh && !item.quiet && settings::notifications_enabled() && !completion_quiet_now() {
         notify_os::show(&item);
     }
     refresh_inbox_badge();
