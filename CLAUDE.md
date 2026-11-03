@@ -132,14 +132,35 @@ trait UsageProvider {
 ### Codex (`codex.rs`) — 정확, 더 쉬움
 - **시계열**: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, `event_msg`/`token_count`의
   `info.last_token_usage.total_tokens`
-- **공식 잔여율**: 같은 JSONL의 `payload.rate_limits` (네트워크 불필요!)
+- **공식 잔여율**: 사용량 API(아래 계정 항목) 우선, 폴백은 같은 JSONL의 `payload.rate_limits`
   - `primary`(5h, used_percent/resets_at), `secondary`(주간), `plan_type`("plus")
   - `resets_at`은 epoch seconds → RFC3339 변환
-  - 최근 24h 파일에서 가장 신선한 rate_limits 선택
+  - 계정마다 사용량 API 우선, 실패하면 최근 30일 파일의 가장 신선한 rate_limits (아래 계정 항목)
 - **오르카에서 띄운 Codex는 `~/.codex`에 안 쌓인다** — 오르카가 계정마다 `CODEX_HOME`을
   `orca/codex-accounts/<uuid>/home`으로 잡는다. `codex::session_roots`가 `$CODEX_HOME`,
   `~/.codex`, 오르카 계정 홈, `codex-runtime-home`을 모두 훑고 활동 감지도 같은 목록을 쓴다
   (2026-11 확인: `~/.codex/sessions`는 9월 이후 비어 있었다)
+- **계정이 여럿이면 홈마다 계정이 다르다** — 홈의 `auth.json`(id_token 본문의 이메일·플랜,
+  `tokens.account_id`)로 계정을 찾고, rollout 첫 줄 `session_meta.creator_account_id`로
+  파일 주인을 가른다. auth.json은 계정을 바꾸면 덮어써져서 파일에 적힌 값을 먼저 믿는다
+  (0.16x 이전 CLI는 이 필드가 없어 홈 계정으로 간다)
+  - 활성 계정은 가장 최근에 rate_limits를 남긴 계정이다. Claude와 달리 시계열도 계정별로
+    가를 수 있어 카드 계산은 `collect_active_samples`(활성 계정 파일만)를 쓰고, 히스토리
+    롤업은 `collect_samples`(전체)를 쓴다
+  - 계정마다 윈도우가 달라(5시간/주간) `AccountUsage.window_secs`로 따로 들고 간다
+  - **잔여율은 서버 값이 먼저다** — `GET https://chatgpt.com/backend-api/wham/usage`
+    (Codex CLI `/status`와 같은 경로, 0.166.0 바이너리 문자열로 확인). 헤더는
+    `Authorization: Bearer <auth.json access_token>`, `ChatGPT-Account-Id`,
+    `User-Agent: codex_cli_rs/<ver>`. 응답 `rate_limit.primary_window`·`secondary_window`
+    (`used_percent`, `limit_window_seconds`, `reset_at`)를 rollout의 `RateLimits` 모양으로
+    옮겨 같은 변환을 탄다. 다른 기기·웹 사용분과 오래 안 쓴 계정의 현재 값이 여기서만 나온다
+  - 180초 계정별 캐시, 10초 타임아웃, `FETCH_GUARD`는 Claude provider와 같은 규칙.
+    같은 계정이 여러 홈에 있으면 `last_refresh`가 가장 늦은 홈의 토큰을 쓴다
+  - **토큰을 우리가 갱신하지 않는다** — Codex refresh token은 한 번 쓰면 바뀌어서, 갱신하면
+    CLI가 들고 있는 토큰이 죽어 그 계정이 로그아웃된다. 401이면 `error.stale_token`
+    (2026-11 확인: 8월 이후 안 쓴 홈의 토큰이 `invalid_jwt`로 401)
+  - API가 실패하면 로컬 rollout의 마지막 기록으로 버틴다. 리셋 시각이 지난 기록은
+    사용률 0으로 보고, 30일 안에 기록도 없으면 실패 사유를 띄운다
 
 ### Gemini (`gemini.rs`) — 추정
 - **시계열**: `~/.gemini/tmp/<프로젝트>/logs.json`(JSON 배열), `type=="user"` 메시지 카운트

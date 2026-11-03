@@ -237,6 +237,7 @@ fn accounts_usage() -> Vec<AccountUsage> {
                 plan: acc.plan.clone(),
                 usage,
                 note: note.map(|s| s.to_string()),
+                window_secs: None,
             }
         })
         .collect()
@@ -568,6 +569,7 @@ mod tests {
                 is_estimate: false,
             }),
             note: None,
+            window_secs: None,
         }
     }
 

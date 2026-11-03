@@ -234,7 +234,7 @@ pub fn compute(provider: &dyn UsageProvider, now_ms: i64, limit: Option<u64>) ->
         .unwrap_or(rolling_start);
 
     // 윈도우 시작과 오늘 자정 중 더 이른 시점부터 한 번에 수집 후 구간별 집계.
-    let samples = provider.collect_samples(win_start.min(day_start).min(rolling_start));
+    let samples = provider.collect_active_samples(win_start.min(day_start).min(rolling_start));
     let in_window = || samples.iter().filter(|s| s.timestamp_ms >= win_start);
 
     let window_usage: u64 = in_window().map(|s| s.amount).sum();
@@ -466,7 +466,12 @@ fn account_statuses(
         .iter()
         .map(|a| {
             let usage = a.usage.as_ref();
-            let has_weekly = |u: &&OfficialUsage| !u.seven_day_resets_at.is_empty();
+            let window_secs = a.window_secs.unwrap_or(window_secs);
+            // 주간 하나뿐인 계정은 5시간 슬롯과 주간 슬롯에 같은 값이 들어 있다.
+            // 둘 다 그리면 같은 숫자가 한 줄에 두 번 나온다.
+            let has_weekly = |u: &&OfficialUsage| {
+                !u.seven_day_resets_at.is_empty() && window_secs < WEEK_SECS
+            };
             AccountStatus {
                 id: a.id.clone(),
                 label: a.label.clone(),
@@ -492,7 +497,7 @@ fn account_statuses(
                 seven_day_resets_at: usage
                     .filter(has_weekly)
                     .map(|u| u.seven_day_resets_at.clone()),
-                seven_day_eta_minutes: usage.and_then(|u| {
+                seven_day_eta_minutes: usage.filter(has_weekly).and_then(|u| {
                     pace_eta_minutes(
                         u.seven_day_utilization,
                         &u.seven_day_resets_at,

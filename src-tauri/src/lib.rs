@@ -426,7 +426,7 @@ fn estimate_5h_limit(
         .map(|d| d.timestamp_millis() - window_secs * 1000)
         .filter(|start| *start <= now_ms)
         .unwrap_or(now_ms - window_secs * 1000);
-    let samples = provider.collect_samples(window_start);
+    let samples = provider.collect_active_samples(window_start);
     let mut used_tokens = 0u64;
     let mut messages = 0u64;
     for s in samples.iter().filter(|s| s.timestamp_ms >= window_start) {

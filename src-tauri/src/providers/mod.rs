@@ -84,6 +84,11 @@ pub struct AccountUsage {
     pub usage: Option<OfficialUsage>,
     /// 실패 사유 (i18n 키).
     pub note: Option<String>,
+    /// 이 계정의 윈도우 길이(초). None이면 도구의 `window_secs`를 따른다.
+    ///
+    /// Codex는 계정마다 윈도우가 다르다(5시간 계정, 주간 하나뿐인 계정). 도구 윈도우로
+    /// 페이스를 재면 다른 계정의 ETA가 엉뚱한 구간 기준으로 나온다.
+    pub window_secs: Option<i64>,
 }
 
 /// 카드 대표로 세울 계정 — 지금 쓰는 계정.
@@ -286,6 +291,15 @@ pub trait UsageProvider: Send + Sync {
     /// 비어 있으면 `official_usage`의 단일 계정 경로를 그대로 쓴다.
     fn accounts(&self) -> Vec<AccountUsage> {
         Vec::new()
+    }
+
+    /// 카드 계산(소진 속도, ETA, 한도 역산)에 쓸 시계열 — 활성 계정 것만.
+    ///
+    /// 계정이 섞인 합계를 활성 계정의 공식 사용률로 나누면 한도가 부풀어 ETA가
+    /// 낙관적으로 나온다. 시계열을 계정별로 가를 수 있는 도구만 오버라이드한다.
+    /// 히스토리 롤업은 도구 전체 사용량이라 `collect_samples`를 그대로 쓴다.
+    fn collect_active_samples(&self, since_ms: i64) -> Vec<UsageSample> {
+        self.collect_samples(since_ms)
     }
 
     /// 공식 사용률을 못 받은 이유 (i18n 키). 정상이거나 해당 없으면 None.
