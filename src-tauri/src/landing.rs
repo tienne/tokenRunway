@@ -76,22 +76,35 @@ fn orca_find_handle(bin: &Path, worktree_id: &str, tab_id: Option<&str>) -> Opti
 /// 워크트리에 살아있는 터미널이 하나도 없을 때 — 파일을 하나 열어 워크트리로 데려간다.
 ///
 /// 여기서 터미널을 새로 만들지는 않는다. 알림 하나 눌렀다고 세션이 생기는 건 과하다.
-fn orca_open_worktree(bin: &Path, worktree_id: &str, worktree_path: Option<&str>) {
+fn orca_open_worktree(bin: &Path, worktree_id: &str, worktree_path: Option<&str>) -> Result<(), String> {
     // 경로가 안 담겨 온 알림도 있을 수 있다. worktreeId가 `<repo-uuid>::<절대경로>`
     // 꼴이라 거기서 뽑아 쓴다.
     let fallback = worktree_id.split("::").nth(1);
-    let Some(root) = worktree_path.or(fallback) else {
-        return;
-    };
+    let root = worktree_path.or(fallback).ok_or("워크트리 경로를 알 수 없습니다")?;
+    if !Path::new(root).is_dir() {
+        return Err(format!("워크트리가 삭제됐습니다: {root}"));
+    }
     let candidates = ["README.md", "README", "package.json", "Cargo.toml", ".gitignore"];
-    let file = candidates
+    let f = candidates
         .iter()
         .find(|f| Path::new(root).join(f).is_file())
-        .copied();
-    if let Some(f) = file {
-        let _ = Command::new(bin)
-            .args(["file", "open", f, "--worktree", &format!("id:{worktree_id}")])
-            .status();
+        .ok_or("워크트리에 열 수 있는 터미널이나 파일이 없습니다")?;
+    // 오르카 1.4.24x부터 `file open`은 탭만 만들고 화면은 그대로 둔다. `--focus`가
+    // 있어야 그 워크트리로 넘어간다.
+    run_ok(
+        Command::new(bin).args(["file", "open", f, "--worktree", &format!("id:{worktree_id}"), "--focus"]),
+        "오르카가 워크트리를 열지 못했습니다",
+    )
+}
+
+/// CLI가 실패 코드로 끝나도 `status()`는 Ok라서 따로 확인한다. 이걸 놓치면 이동에
+/// 실패한 알림이 읽음으로 바뀌어 배지에서 사라진다.
+fn run_ok(cmd: &mut Command, what: &str) -> Result<(), String> {
+    let status = cmd.status().map_err(|e| e.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(what.to_string())
     }
 }
 
@@ -102,37 +115,23 @@ fn land_orca(worktree_id: &str, worktree_path: Option<&str>, tab_id: Option<&str
     // (이미 떠 있으면 바로 리턴한다).
     let _ = Command::new(&bin).arg("open").status();
     activate_app("Orca");
-    match orca_find_handle(&bin, worktree_id, tab_id) {
-        Some(handle) => {
-            Command::new(&bin)
-                .args(["terminal", "switch", "--terminal", &handle])
-                .status()
-                .map_err(|e| e.to_string())?;
-            Ok(())
-        }
-        None => {
-            orca_open_worktree(&bin, worktree_id, worktree_path);
-            Ok(())
+    if let Some(handle) = orca_find_handle(&bin, worktree_id, tab_id) {
+        // list와 switch 사이에 터미널이 닫힐 수 있다. 그때는 워크트리 열기로 넘어간다.
+        if run_ok(Command::new(&bin).args(["terminal", "switch", "--terminal", &handle]), "").is_ok() {
+            return Ok(());
         }
     }
+    orca_open_worktree(&bin, worktree_id, worktree_path)
 }
 
 fn land_paseo(agent_id: &str) -> Result<(), String> {
     let bin = paseo_bin().ok_or("paseo CLI를 찾을 수 없습니다")?;
     activate_app("Paseo");
-    Command::new(&bin)
-        .args(["agent", "open", agent_id])
-        .status()
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    run_ok(Command::new(&bin).args(["agent", "open", agent_id]), "Paseo가 에이전트를 열지 못했습니다")
 }
 
 fn land_path(path: &str) -> Result<(), String> {
-    Command::new(OPEN_BIN)
-        .arg(path)
-        .status()
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    run_ok(Command::new(OPEN_BIN).arg(path), "경로를 열지 못했습니다")
 }
 
 /// 알림 하나의 랜딩을 수행. 외부 프로세스를 기다리므로 UI 스레드에서 부르지 않는다.

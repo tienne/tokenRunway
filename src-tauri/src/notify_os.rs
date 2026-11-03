@@ -76,9 +76,12 @@ pub fn show(item: &InboxItem) {
         match result {
             // 알림을 직접 누른 것만 랜딩으로 본다. 닫기나 무시는 알림함에 남겨둔다.
             Ok(NotificationResponse::Click) | Ok(NotificationResponse::ActionButton(_)) => {
-                crate::inbox::mark_read(&id);
-                if let Err(e) = crate::landing::land(&target) {
-                    eprintln!("알림 랜딩 실패: {e}");
+                // 이동에 실패하면 안 읽은 채로 둬서 알림함에서 다시 누를 수 있게 한다.
+                match crate::landing::land(&target) {
+                    Ok(()) => {
+                        crate::inbox::mark_read(&id);
+                    }
+                    Err(e) => eprintln!("알림 랜딩 실패: {e}"),
                 }
                 crate::refresh_inbox_badge();
             }
