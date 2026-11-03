@@ -136,6 +136,10 @@ trait UsageProvider {
   - `primary`(5h, used_percent/resets_at), `secondary`(주간), `plan_type`("plus")
   - `resets_at`은 epoch seconds → RFC3339 변환
   - 최근 24h 파일에서 가장 신선한 rate_limits 선택
+- **오르카에서 띄운 Codex는 `~/.codex`에 안 쌓인다** — 오르카가 계정마다 `CODEX_HOME`을
+  `orca/codex-accounts/<uuid>/home`으로 잡는다. `codex::session_roots`가 `$CODEX_HOME`,
+  `~/.codex`, 오르카 계정 홈, `codex-runtime-home`을 모두 훑고 활동 감지도 같은 목록을 쓴다
+  (2026-11 확인: `~/.codex/sessions`는 9월 이후 비어 있었다)
 
 ### Gemini (`gemini.rs`) — 추정
 - **시계열**: `~/.gemini/tmp/<프로젝트>/logs.json`(JSON 배열), `type=="user"` 메시지 카운트

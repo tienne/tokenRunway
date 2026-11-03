@@ -91,10 +91,12 @@ fn mtime_ms(path: &Path) -> Option<i64> {
     Some(dur.as_millis() as i64)
 }
 
-/// `root` 아래에서 `matches`를 만족하는 파일 중 mtime이 가장 최근인 것.
-fn newest_file(root: &Path, matches: &dyn Fn(&str) -> bool) -> Option<PathBuf> {
+/// `roots` 아래에서 `matches`를 만족하는 파일 중 mtime이 가장 최근인 것.
+fn newest_file(roots: &[PathBuf], matches: &dyn Fn(&str) -> bool) -> Option<PathBuf> {
     let mut best: Option<(PathBuf, i64)> = None;
-    walk(root, matches, 0, &mut best);
+    for root in roots {
+        walk(root, matches, 0, &mut best);
+    }
     best.map(|(p, _)| p)
 }
 
@@ -165,7 +167,7 @@ fn rfc3339_ms(raw: &str) -> Option<i64> {
 /// 순서가 `SCAN_CACHE`의 인덱스라서 바꾸면 캐시 의미도 바뀐다(추가는 뒤에).
 type Detector = fn(&[String], i64, i64) -> Option<AgentActivity>;
 /// `(표시명, 탐색 루트, 파일명 조건, 해석 함수)`.
-type Target = (&'static str, Option<PathBuf>, fn(&str) -> bool, Detector);
+type Target = (&'static str, Vec<PathBuf>, fn(&str) -> bool, Detector);
 
 fn targets() -> Vec<Target> {
     let home = dirs::home_dir();
@@ -175,32 +177,34 @@ fn targets() -> Vec<Target> {
     vec![
         (
             "Claude Code",
-            home.as_ref().map(|h| h.join(".claude").join("projects")),
+            home.as_ref().map(|h| h.join(".claude").join("projects")).into_iter().collect(),
             |n: &str| n.ends_with(".jsonl"),
             detect_claude as Detector,
         ),
         (
             "Codex",
-            home.as_ref().map(|h| h.join(".codex").join("sessions")),
+            crate::providers::codex::session_roots(),
             |n: &str| n.starts_with("rollout-") && n.ends_with(".jsonl"),
             detect_codex as Detector,
         ),
         (
             "Grok",
-            grok_root.map(|r| r.join("sessions")),
+            grok_root.map(|r| r.join("sessions")).into_iter().collect(),
             |n: &str| n == "updates.jsonl",
             detect_grok as Detector,
         ),
         (
             "Gemini",
-            home.as_ref().map(|h| h.join(".gemini").join("tmp")),
+            home.as_ref().map(|h| h.join(".gemini").join("tmp")).into_iter().collect(),
             |n: &str| n.starts_with("session-") && n.ends_with(".jsonl"),
             detect_gemini as Detector,
         ),
         (
             "Antigravity",
             home.as_ref()
-                .map(|h| h.join(".gemini").join("antigravity-cli").join("log")),
+                .map(|h| h.join(".gemini").join("antigravity-cli").join("log"))
+                .into_iter()
+                .collect(),
             |n: &str| n.starts_with("cli-") && n.ends_with(".log"),
             detect_antigravity as Detector,
         ),
@@ -417,7 +421,7 @@ pub fn detect_all() -> Vec<AgentActivity> {
                 let fresh: Vec<Option<PathBuf>> = targets
                     .iter()
                     .map(|(_, root, matches, _)| {
-                        root.as_deref().and_then(|r| newest_file(r, matches))
+                        newest_file(root, matches)
                     })
                     .collect();
                 if let Some(g) = guard.as_mut() {

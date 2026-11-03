@@ -1,6 +1,6 @@
 //! OpenAI Codex 사용량 수집기 (P1).
 //!
-//! 데이터 소스: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`
+//! 데이터 소스: `<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-*.jsonl` — 경로는 `session_roots`
 //! `event_msg` 타입의 `token_count` 이벤트에서 턴별 토큰을 추출한다.
 
 use super::{find_recent_jsonl, OfficialUsage, SampleCache, UsageProvider, UsageSample};
@@ -30,17 +30,44 @@ static SAMPLES_CACHE: SampleCache = SampleCache::new(CACHE_TTL);
 /// 24시간치 파일 재스캔이 폴링마다 반복되지 않게 한다.
 static RATE_LIMIT_CACHE: Mutex<Option<(Instant, Option<OfficialUsage>, i64)>> = Mutex::new(None);
 
-pub struct CodexProvider {
-    sessions_dir: PathBuf,
-}
+pub struct CodexProvider;
 
 impl CodexProvider {
     pub fn new() -> Self {
-        let sessions_dir = dirs::home_dir()
-            .map(|h| h.join(".codex").join("sessions"))
-            .unwrap_or_default();
-        Self { sessions_dir }
+        Self
     }
+}
+
+/// rollout 파일이 쌓이는 곳 전부.
+///
+/// 오르카는 Codex 계정마다 `CODEX_HOME`을 `codex-accounts/<uuid>/home`으로 잡아 띄운다.
+/// 그 세션은 `~/.codex`에 하나도 안 남아서, 홈만 읽으면 오르카에서 쓴 사용량과
+/// rate_limits가 통째로 빠진다. 계정이 나중에 추가될 수 있어 부를 때마다 다시 훑는다.
+pub fn session_roots() -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Some(h) = std::env::var_os("CODEX_HOME") {
+        roots.push(PathBuf::from(h).join("sessions"));
+    }
+    if let Some(home) = dirs::home_dir() {
+        roots.push(home.join(".codex").join("sessions"));
+        let orca = home.join("Library/Application Support/orca");
+        if let Ok(entries) = fs::read_dir(orca.join("codex-accounts")) {
+            for e in entries.flatten() {
+                roots.push(e.path().join("home").join("sessions"));
+            }
+        }
+        roots.push(orca.join("codex-runtime-home").join("home").join("sessions"));
+    }
+    let mut seen = HashSet::new();
+    roots.retain(|r| r.is_dir() && seen.insert(r.clone()));
+    roots
+}
+
+fn recent_rollouts(since_ms: i64) -> Vec<PathBuf> {
+    session_roots()
+        .iter()
+        .flat_map(|r| find_recent_jsonl(r, since_ms))
+        .collect()
 }
 
 impl Default for CodexProvider {
@@ -109,7 +136,7 @@ impl UsageProvider for CodexProvider {
     }
 
     fn available(&self) -> bool {
-        self.sessions_dir.is_dir()
+        !session_roots().is_empty()
     }
 
     /// primary 윈도우 길이를 그대로 따른다 — 계정에 따라 5시간이거나 주간이다.
@@ -130,7 +157,7 @@ impl UsageProvider for CodexProvider {
         // 밀리초 타임스탬프까지 같으면서 토큰 수도 같은 별개의 턴은 사실상 없다.
         let mut seen: HashSet<(i64, u64, u64, u64)> = HashSet::new();
 
-        for path in find_recent_jsonl(&self.sessions_dir, since_ms) {
+        for path in recent_rollouts(since_ms) {
             let Ok(content) = fs::read_to_string(&path) else {
                 continue;
             };
@@ -183,7 +210,7 @@ impl CodexProvider {
         let since_ms = now_ms - RATE_LIMIT_LOOKBACK_MS;
 
         let mut latest: Option<(i64, RateLimits)> = None;
-        for path in find_recent_jsonl(&self.sessions_dir, since_ms) {
+        for path in recent_rollouts(since_ms) {
             let Ok(content) = fs::read_to_string(&path) else {
                 continue;
             };
@@ -285,4 +312,20 @@ fn parse_line(line: &str, since_ms: i64) -> Option<UsageSample> {
         input_total: usage.input_tokens, // cached 포함된 입력 총량
         model: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 실제 홈을 읽어 경로와 사용률이 잡히는지 본다. `cargo test -- --ignored`로 돌린다.
+    #[test]
+    #[ignore]
+    fn real_home() {
+        let p = CodexProvider::new();
+        println!("roots={:?}", session_roots());
+        let since = chrono::Utc::now().timestamp_millis() - 24 * 3600 * 1000;
+        println!("samples_24h={}", p.collect_samples(since).len());
+        println!("window_secs={} usage={:?}", p.window_secs(), p.official_usage());
+    }
 }
