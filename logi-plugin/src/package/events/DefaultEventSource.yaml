@@ -1,0 +1,18 @@
+displayName: Token Runway
+description: AI 코딩 에이전트 완료 알림과 토큰 잔여량 경보
+events:
+  - name: taskDone
+    displayName: 작업 완료
+    description: 에이전트가 작업을 끝냈다고 알려왔을 때
+  - name: turnDone
+    displayName: 턴 종료
+    description: 에이전트가 한 턴을 마쳤을 때
+  - name: quotaLow
+    displayName: 잔여량 부족
+    description: 잔여율이 경보 임계치 아래로 내려갔을 때
+  - name: etaDanger
+    displayName: 리셋 전 소진 예상
+    description: 지금 페이스면 리셋 전에 바닥날 때
+  - name: resetSoon
+    displayName: 리셋 임박
+    description: 곧 리셋되는데 남은 토큰이 많을 때

@@ -26,6 +26,9 @@ fn default_notifications_enabled() -> bool {
 fn default_completion_alerts() -> bool {
     true
 }
+fn default_haptics_enabled() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,6 +63,15 @@ pub struct Settings {
     /// 밤에 직접 작업하는 경우엔 막으면 알림을 놓친다. 성격이 달라 따로 둔다.
     #[serde(default)]
     pub completion_alerts_quiet: bool,
+    /// 알림이 뜰 때 MX Master 4도 진동시킬지.
+    ///
+    /// 기본이 켜짐인 건 Logi 플러그인을 깔아야만 실제로 울리기 때문이다 — 플러그인이
+    /// 없으면 소켓 연결만 실패하고 끝난다.
+    #[serde(default = "default_haptics_enabled")]
+    pub haptics_enabled: bool,
+    /// trw 완료 알림 말고 에이전트 턴이 끝날 때마다도 진동할지. pet이 손을 흔드는 순간과 같다.
+    #[serde(default = "default_haptics_enabled")]
+    pub haptics_on_turn_end: bool,
     /// 앱이 꺼져 있을 때 `trw`가 알림을 보내면 앱을 띄울지. 이 값은 앱이 아니라 `trw`가
     /// settings.json을 직접 읽어서 쓴다 — 앱이 꺼져 있을 때 필요한 값이라서.
     #[serde(default = "default_completion_alerts")]
@@ -156,6 +168,8 @@ impl Default for Settings {
             pet_scale: 1.0,
             completion_alerts_enabled: default_completion_alerts(),
             completion_alerts_quiet: false,
+            haptics_enabled: default_haptics_enabled(),
+            haptics_on_turn_end: default_haptics_enabled(),
             wake_on_notify: default_completion_alerts(),
         }
     }
@@ -234,6 +248,22 @@ pub fn completion_alerts_quiet() -> bool {
         .lock()
         .map(|s| s.completion_alerts_quiet)
         .unwrap_or(false)
+}
+
+/// 알림과 함께 마우스 진동을 보낼지.
+pub fn haptics_enabled() -> bool {
+    SETTINGS
+        .lock()
+        .map(|s| s.haptics_enabled)
+        .unwrap_or(true)
+}
+
+/// 턴 종료 때도 마우스 진동을 보낼지.
+pub fn haptics_on_turn_end() -> bool {
+    SETTINGS
+        .lock()
+        .map(|s| s.haptics_on_turn_end)
+        .unwrap_or(true)
 }
 
 /// 경보 임계치 (%).

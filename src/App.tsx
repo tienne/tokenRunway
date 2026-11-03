@@ -939,6 +939,8 @@ interface Settings {
   completionAlertsEnabled: boolean;
   completionAlertsQuiet: boolean;
   wakeOnNotify: boolean;
+  hapticsEnabled: boolean;
+  hapticsOnTurnEnd: boolean;
   language: string | null;
   quietEnabled: boolean;
   quietStartHour: number;
@@ -1629,6 +1631,8 @@ function SettingsView() {
     completionAlertsEnabled: true,
     completionAlertsQuiet: false,
     wakeOnNotify: true,
+    hapticsEnabled: true,
+    hapticsOnTurnEnd: true,
     language: null,
     quietEnabled: false,
     quietStartHour: 22,
@@ -1858,6 +1862,28 @@ function SettingsView() {
             )}
             {trwError && <p className="perm-warn">⚠️ {trwError}</p>}
           </div>
+        )}
+
+        <label className="setting-row toggle-row">
+          <span>{tr("haptics")}</span>
+          <input
+            type="checkbox"
+            checked={settings.hapticsEnabled}
+            onChange={(e) => update({ hapticsEnabled: e.target.checked })}
+          />
+        </label>
+        {settings.hapticsEnabled && (
+          <p className="setting-hint">{tr("hapticsHint")}</p>
+        )}
+        {settings.hapticsEnabled && (
+          <label className="setting-row toggle-row sub-row">
+            <span>{tr("hapticsOnTurnEnd")}</span>
+            <input
+              type="checkbox"
+              checked={settings.hapticsOnTurnEnd}
+              onChange={(e) => update({ hapticsOnTurnEnd: e.target.checked })}
+            />
+          </label>
         )}
 
         <label className="setting-row toggle-row">

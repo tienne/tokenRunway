@@ -1,6 +1,7 @@
 mod activity;
 mod analytics;
 mod atomicfile;
+mod haptic;
 mod i18n;
 mod inbox;
 mod installer;
@@ -685,9 +686,12 @@ async fn get_runway() -> Vec<RunwayStatus> {
 /// 전체 파싱도 없지만 파일 I/O는 있으므로 blocking 풀에서 실행한다.
 #[tauri::command]
 async fn get_activity() -> Vec<activity::AgentActivity> {
-    tauri::async_runtime::spawn_blocking(activity::detect_all)
+    let activities = tauri::async_runtime::spawn_blocking(activity::detect_all)
         .await
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let muted = !settings::notifications_enabled() || completion_quiet_now();
+    haptic::on_activity(&activities, muted);
+    activities
 }
 
 /// 현재 설정을 반환.
@@ -1023,6 +1027,7 @@ fn on_notify_request(req: inbox::NotifyRequest) {
     let fresh = chrono::Utc::now().timestamp_millis() - item.created_ms < STALE_BANNER_MS;
     if fresh && !item.quiet && settings::notifications_enabled() && !completion_quiet_now() {
         notify_os::show(&item);
+        haptic::fire(haptic::Haptic::TaskDone);
     }
     refresh_inbox_badge();
 }
@@ -1244,6 +1249,11 @@ fn check_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
                 .show();
             // 익명: 어떤 종류 경보가 떴는지 메타만 (값 X)
             let kind = if eta_hit && !pct_hit { "eta" } else { "low" };
+            haptic::fire(if eta_hit && !pct_hit {
+                haptic::Haptic::EtaDanger
+            } else {
+                haptic::Haptic::QuotaLow
+            });
             analytics::track("alert_fired", serde_json::json!({ "kind": kind }));
             let _ = app.emit(
                 "pet-alert",
@@ -1569,6 +1579,7 @@ fn check_reset_alerts(app: &AppHandle, statuses: &[RunwayStatus]) {
                 .title(lang.reset_title(&t.title_name))
                 .body(lang.alert_reset(mins, t.percent))
                 .show();
+            haptic::fire(haptic::Haptic::ResetSoon);
             analytics::track("alert_fired", serde_json::json!({ "kind": "reset" }));
             let _ = app.emit(
                 "pet-alert",

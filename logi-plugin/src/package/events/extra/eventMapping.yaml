@@ -1,0 +1,11 @@
+haptics:
+  taskDone:
+    DEFAULT: completed
+  turnDone:
+    DEFAULT: knock
+  quotaLow:
+    DEFAULT: angry_alert
+  etaDanger:
+    DEFAULT: mad
+  resetSoon:
+    DEFAULT: happy_alert
