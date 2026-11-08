@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "build:trw": "bash scripts/build-trw.sh",
-    "build:trw:dev": "bash scripts/build-trw.sh --debug"
+    "build:trw:dev": "bash scripts/build-trw.sh --debug",
+    "check:i18n": "node scripts/check-i18n.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
