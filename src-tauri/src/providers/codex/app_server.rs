@@ -4,11 +4,22 @@
 //! 토큰이 만료돼 401이 난다. 우리가 토큰을 갱신하면 CLI가 쥔 refresh token이 죽어서
 //! 직접 갱신하지 않고, 갱신 규칙을 아는 Codex 바이너리에게 맡긴다.
 
-use super::{RateLimits, RateWindow};
+use super::{ApiResult, RateLimits, RateWindow};
 use serde::Deserialize;
 use std::ffi::OsStr;
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
+
+/// 이 안에 응답이 없으면 자식 프로세스를 죽인다. 토큰 갱신 왕복이 끼어 HTTP 타임아웃보다
+/// 넉넉히 잡는다.
+pub(super) const APP_SERVER_TIMEOUT: Duration = Duration::from_secs(15);
+
+const INIT_ID: u64 = 1;
+const READ_ID: u64 = 2;
 
 /// `account/rateLimits/read`의 `result`. app-server는 experimental이라 필드가 바뀔 수
 /// 있어 쓰는 것만 받고 전부 Option으로 둔다.
@@ -73,6 +84,108 @@ fn parse_result(result: serde_json::Value) -> Option<RateLimits> {
             .rate_limit_reset_credits
             .and_then(|c| u32::try_from(c.available_count).ok()),
     })
+}
+
+/// 계정 홈 하나를 `CODEX_HOME`으로 넣어 app-server를 띄우고 사용량을 읽는다.
+///
+/// 캐시 락은 전혀 모른다 — 부르는 쪽이 락 밖에서 부른다. stderr는 버린다. 거기엔
+/// 인증 실패 메시지가 실릴 수 있어서 남기면 로그로 새어나갈 길이 생긴다.
+pub(super) fn read_rate_limits(bin: &Path, codex_home: &Path, timeout: Duration) -> ApiResult {
+    let mut child = Command::new(bin)
+        .arg("app-server")
+        .env("CODEX_HOME", codex_home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| "error.unavailable")?;
+    let result = converse(&mut child, timeout);
+    let _ = child.kill();
+    let _ = child.wait();
+    result
+}
+
+fn converse(child: &mut Child, timeout: Duration) -> ApiResult {
+    let deadline = Instant::now() + timeout;
+    let mut stdin = child.stdin.take().ok_or("error.unavailable")?;
+    let stdout = child.stdout.take().ok_or("error.unavailable")?;
+
+    // 읽기는 별도 스레드로 돌린다. 메인에서 막히는 read를 하면 타임아웃을 못 건다.
+    // kill하면 파이프가 닫혀 스레드도 끝난다.
+    let (tx, rx) = mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+
+    let init = serde_json::json!({
+        "id": INIT_ID,
+        "method": "initialize",
+        "params": {"clientInfo": {"name": "token-runway", "version": env!("CARGO_PKG_VERSION")}},
+    });
+    send(&mut stdin, &init)?;
+    wait_response(&rx, INIT_ID, deadline)?;
+
+    send(&mut stdin, &serde_json::json!({"method": "initialized"}))?;
+    let read = serde_json::json!({
+        "id": READ_ID,
+        "method": "account/rateLimits/read",
+        "params": {"excludeResetCreditDetails": true},
+    });
+    send(&mut stdin, &read)?;
+    let result = wait_response(&rx, READ_ID, deadline)?;
+    parse_result(result).ok_or("error.unavailable")
+}
+
+fn send(stdin: &mut impl Write, msg: &serde_json::Value) -> Result<(), &'static str> {
+    writeln!(stdin, "{msg}")
+        .and_then(|_| stdin.flush())
+        .map_err(|_| "error.unavailable")
+}
+
+/// `id`가 맞는 응답의 `result`. 그 사이에 오는 알림은 건너뛴다.
+fn wait_response(
+    rx: &mpsc::Receiver<String>,
+    id: u64,
+    deadline: Instant,
+) -> Result<serde_json::Value, &'static str> {
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let line = rx.recv_timeout(left).map_err(|_| "error.unavailable")?;
+        let Ok(mut msg) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if msg.get("id").and_then(|v| v.as_u64()) != Some(id) {
+            continue;
+        }
+        if let Some(err) = msg.get("error") {
+            return Err(rpc_error_key(err));
+        }
+        return msg
+            .get_mut("result")
+            .map(serde_json::Value::take)
+            .ok_or("error.unavailable");
+    }
+}
+
+/// app-server도 갱신에 실패했으면 사람이 다시 로그인해야 하므로 토큰 만료로 남긴다.
+/// 그 밖의 실패는 잠시 뒤 다시 시도할 일이다.
+fn rpc_error_key(err: &serde_json::Value) -> &'static str {
+    let msg = err
+        .get("message")
+        .and_then(|m| m.as_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let auth = ["401", "unauthorized", "login", "log in", "sign in", "refresh token", "authentication"];
+    if auth.iter().any(|k| msg.contains(k)) {
+        "error.stale_token"
+    } else {
+        "error.unavailable"
+    }
 }
 
 /// 고정 위치 후보. 앱은 launchd로 떠서 PATH가 `/usr/bin:/bin` 정도뿐이라
@@ -205,6 +318,80 @@ mod tests {
         assert_eq!(parse_result(v.clone()).unwrap().reset_credits, None);
         v["rateLimitResetCredits"] = serde_json::json!({"availableCount": 0, "credits": null});
         assert_eq!(parse_result(v).unwrap().reset_credits, Some(0));
+    }
+
+    /// 가짜 app-server. 받은 요청에 정해진 줄로 답한다.
+    fn fake_bin(name: &str, script: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch(name);
+        let bin = dir.join("codex");
+        fs::write(&bin, format!("#!/bin/sh\n{script}\n")).unwrap();
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+        bin
+    }
+
+    #[test]
+    fn talks_json_rpc_and_skips_notifications() {
+        let result = SAMPLE.replace('\n', " ");
+        let bin = fake_bin(
+            "ok",
+            &format!(
+                r#"read l; echo '{{"method":"account/updated","params":{{}}}}'; echo '{{"id":1,"result":{{}}}}'
+read l; read l; echo 'not json'; echo '{{"id":2,"result":{result}}}'"#
+            ),
+        );
+        let rl = read_rate_limits(&bin, Path::new("/nonexistent"), Duration::from_secs(5)).unwrap();
+        assert_eq!(rl.reset_credits, Some(2));
+        assert_eq!(rl.primary.unwrap().used_percent, 42.0);
+    }
+
+    #[test]
+    fn passes_account_home_as_codex_home() {
+        let bin = fake_bin(
+            "env",
+            r#"read l; echo '{"id":1,"result":{}}'; read l; read l
+if [ "$CODEX_HOME" = "/acct/home" ]; then echo '{"id":2,"result":{"rateLimits":{"primary":{"usedPercent":1}}}}'; fi"#,
+        );
+        assert!(read_rate_limits(&bin, Path::new("/acct/home"), Duration::from_secs(5)).is_ok());
+    }
+
+    #[test]
+    fn hung_server_is_killed_at_timeout() {
+        let bin = fake_bin("hang", "exec sleep 30");
+        let start = Instant::now();
+        let r = read_rate_limits(&bin, Path::new("/nonexistent"), Duration::from_millis(500));
+        assert_eq!(r.err(), Some("error.unavailable"));
+        assert!(start.elapsed() < Duration::from_secs(5), "{:?}", start.elapsed());
+    }
+
+    #[test]
+    fn rpc_errors_map_to_keys() {
+        let bin = fake_bin(
+            "autherr",
+            r#"read l; echo '{"id":1,"result":{}}'; read l; read l
+echo '{"id":2,"error":{"code":-32000,"message":"Your refresh token has expired. Please log in again."}}'"#,
+        );
+        let r = read_rate_limits(&bin, Path::new("/nonexistent"), Duration::from_secs(5));
+        assert_eq!(r.err(), Some("error.stale_token"));
+        assert_eq!(
+            rpc_error_key(&serde_json::json!({"message": "backend 503"})),
+            "error.unavailable"
+        );
+    }
+
+    #[test]
+    fn broken_shape_or_early_exit_is_unavailable() {
+        let bin = fake_bin(
+            "shape",
+            r#"read l; echo '{"id":1,"result":{}}'; read l; read l; echo '{"id":2,"result":{"rateLimits":"v3"}}'"#,
+        );
+        let r = read_rate_limits(&bin, Path::new("/nonexistent"), Duration::from_secs(5));
+        assert_eq!(r.err(), Some("error.unavailable"));
+        let gone = fake_bin("exit", "exit 3");
+        let r = read_rate_limits(&gone, Path::new("/nonexistent"), Duration::from_secs(5));
+        assert_eq!(r.err(), Some("error.unavailable"));
+        let r = read_rate_limits(Path::new("/nonexistent/codex"), Path::new("/x"), Duration::from_secs(1));
+        assert_eq!(r.err(), Some("error.unavailable"));
     }
 
     #[test]
