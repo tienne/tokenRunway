@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
@@ -54,6 +55,10 @@ static ACCOUNTS_CACHE: LazyLock<Mutex<CachedAccounts>> = LazyLock::new(|| Mutex:
 /// 갱신 중복 방지용. 이 락을 잡은 스레드만 HTTP를 호출한다 —
 /// 데이터 락(USAGE_CACHE)은 네트워크 대기 중에 절대 잡고 있지 않다.
 static FETCH_GUARD: Mutex<()> = Mutex::new(());
+
+/// OAuth 사용량 HTTP 호출 횟수. statusLine 릴레이가 폴링 빈도를 바꾸지 않는다는 걸
+/// 테스트로 확인하려고 센다.
+static OAUTH_HTTP_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 /// 계정 발견 중복 실행 방지용. UI 폴링(30초)과 백그라운드 루프(60초)가 캐시 만료
 /// 시점에 겹치면 키체인 조회와 홈 스캔을 두 번 한다.
@@ -229,7 +234,15 @@ fn accounts_usage() -> Vec<AccountUsage> {
     accounts
         .iter()
         .map(|acc| {
-            let (usage, note) = read_cached(&acc.id);
+            let (usage, note, fetched_at) = read_cached(&acc.id);
+            let usage = super::claude_relay::overlay(
+                &acc.id,
+                usage,
+                fetched_at,
+                acc.plan.clone(),
+                acc.rate_mult,
+                chrono::Utc::now().timestamp_millis(),
+            );
             AccountUsage {
                 id: acc.id.clone(),
                 label: acc.label.clone(),
@@ -329,15 +342,25 @@ fn is_fresh(id: &str) -> bool {
     })
 }
 
-/// 캐시된 값. TTL이 지났어도 직전 값을 그대로 쓴다 — 빈 화면보다 낫다.
-fn read_cached(id: &str) -> (Option<OfficialUsage>, Option<&'static str>) {
+/// 캐시된 값과 받은 시각. TTL이 지났어도 직전 값을 그대로 쓴다 — 빈 화면보다 낫다.
+fn read_cached(id: &str) -> (Option<OfficialUsage>, Option<&'static str>, Option<Instant>) {
     let Ok(cache) = USAGE_CACHE.lock() else {
-        return (None, None);
+        return (None, None, None);
     };
     match cache.get(id) {
-        Some(e) => (e.usage.clone(), e.error),
-        None => (None, None),
+        Some(e) => (e.usage.clone(), e.error, Some(e.fetched_at)),
+        None => (None, None, None),
     }
+}
+
+/// 이미 찾아둔 계정들의 id와 Keychain 서비스 이름. 릴레이 매핑용이라 계정 발견을
+/// 새로 돌리지 않는다 — 캐시가 비어 있으면 빈 목록이고 그 값은 버려진다.
+pub(crate) fn known_account_services() -> Vec<(String, Vec<String>)> {
+    cached_account_list(false)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|a| (a.id, a.keychain_services))
+        .collect()
 }
 
 fn store_usage(id: &str, usage: Option<OfficialUsage>, error: Option<&'static str>) {
@@ -361,6 +384,7 @@ fn fetch_official_usage(account: &ClaudeAccount) -> (Option<OfficialUsage>, Opti
     let token = &account.token;
     let user_agent = format!("claude-code/{}", &*CLAUDE_VERSION);
 
+    OAUTH_HTTP_CALLS.fetch_add(1, Ordering::Relaxed);
     // User-Agent 프리픽스가 없으면 즉시 영구 429 버킷에 빠진다.
     let resp = ureq::get(OAUTH_USAGE_URL)
         .timeout(HTTP_TIMEOUT)
@@ -552,6 +576,37 @@ fn parse_line(line: &str, since_ms: i64) -> Option<(Option<String>, UsageSample)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relay_does_not_change_oauth_polling() {
+        use super::super::claude_relay::tests::{limits, overlay_for_test, store_for_test};
+        let id = "relay-http-count";
+        let usage = OfficialUsage {
+            five_hour_utilization: 10.0,
+            five_hour_resets_at: "2026-11-08T10:00:00+00:00".into(),
+            seven_day_utilization: 20.0,
+            seven_day_resets_at: "2026-11-12T00:00:00+00:00".into(),
+            plan: None,
+            rate_limit_multiplier: None,
+            is_estimate: false,
+        };
+        store_usage(id, Some(usage), None);
+        let (_, _, fetched_before) = read_cached(id);
+        let calls_before = OAUTH_HTTP_CALLS.load(Ordering::Relaxed);
+
+        let reset = 1_786_000_000;
+        for p in [30.0, 31.0, 32.0] {
+            store_for_test(id, &limits(Some((p, reset)), None), Instant::now());
+        }
+        let (cached, _, fetched_at) = read_cached(id);
+        let merged = overlay_for_test(id, cached, fetched_at, (reset - 3600) * 1000).unwrap();
+
+        assert_eq!(merged.five_hour_utilization, 32.0);
+        assert_eq!(OAUTH_HTTP_CALLS.load(Ordering::Relaxed), calls_before);
+        // 릴레이가 OAuth 캐시 시각을 건드리면 다음 폴링이 밀리거나 당겨진다.
+        assert_eq!(fetched_at, fetched_before);
+        assert!(is_fresh(id));
+    }
 
     fn account(label: &str, is_active: bool, util: Option<f64>) -> AccountUsage {
         AccountUsage {

@@ -1018,7 +1018,7 @@ const STALE_BANNER_MS: i64 = 10 * 60 * 1000;
 fn on_ipc_message(msg: ipc::IpcMessage) {
     match msg {
         ipc::IpcMessage::Notify(req) => on_notify_request(req),
-        ipc::IpcMessage::Statusline(_) => {}
+        ipc::IpcMessage::Statusline(relay) => providers::claude_relay::receive(relay),
     }
 }
 
