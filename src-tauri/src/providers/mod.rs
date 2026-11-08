@@ -6,6 +6,7 @@
 pub mod antigravity;
 pub mod claude_accounts;
 pub mod claude_code;
+pub mod claude_relay;
 pub mod codex;
 pub mod gemini;
 pub mod grok;

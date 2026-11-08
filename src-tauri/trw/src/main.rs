@@ -20,6 +20,11 @@ trw — Token Runway 알림 보내기
   trw ls [--json]
   trw where
   trw hook stop        Claude Code Stop 훅용 — stdin의 훅 입력을 읽어 알림함에 조용히 남긴다
+  trw hook codex <이벤트> --home <CODEX_HOME>
+                       Codex 훅용 — SessionStart | UserPromptSubmit | Stop | Interrupt를
+                       활동 상태 파일로 남긴다
+  trw statusline       Claude Code statusLine용 — rate_limits만 앱에 넘기고 원래
+                       statusLine 명령의 출력을 그대로 찍는다
 
 옵션 (notify):
   --body <문구>        알림 본문
@@ -389,8 +394,7 @@ fn session_key(from_hook: Option<&str>) -> Option<String> {
 /// 에이전트가 `trw notify`를 부를지 판단하게 두면 평범한 턴은 전부 빠진다. 그래서 훅이
 /// 턴마다 남기되 OS 알림과 진동은 없이(`quiet`) 세션당 한 줄로 덮어쓴다.
 fn cmd_hook_stop() -> ExitCode {
-    let mut raw = String::new();
-    let _ = std::io::stdin().take(1 << 20).read_to_string(&mut raw);
+    let raw = read_stdin_limited();
     let input: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
     let field = |k: &str| input.get(k).and_then(|v| v.as_str());
 
@@ -416,6 +420,253 @@ fn cmd_hook_stop() -> ExitCode {
         "sentMs": now_ms(),
     });
     deliver(&payload, false);
+    ExitCode::SUCCESS
+}
+
+/// 훅 입력 상한. 훅 입력은 몇 KB라 이걸 넘으면 뒤를 버리고, 잘린 JSON은 빈 입력처럼 다룬다.
+const STDIN_LIMIT: u64 = 1 << 20;
+
+fn read_stdin_limited() -> String {
+    let mut buf = Vec::new();
+    let _ = std::io::stdin().take(STDIN_LIMIT).read_to_end(&mut buf);
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
+/// 훅 상태 파일 디렉토리. 앱 `activity.rs`가 같은 경로를 읽는다.
+fn hooks_dir() -> Option<PathBuf> {
+    app_dir().map(|d| d.join("hooks"))
+}
+
+/// 하루 넘게 안 바뀐 상태 파일. 세션마다 파일이 생겨서 지우지 않으면 계속 쌓인다.
+const HOOK_STATE_KEEP: Duration = Duration::from_secs(24 * 3600);
+
+/// Codex 훅 — 턴 경계를 rollout 추론 대신 이벤트로 남긴다.
+///
+/// 상태 파일: `~/.token-runway/hooks/codex-<세션>.json`, 내용은 JSON 한 줄
+/// `{"tool":"codex","state":"working|done|idle|interrupted","at_ms":..,"session":..,"home":..}`.
+/// 앱 `activity::read_hook_states`가 이 모양을 그대로 읽으니 바꿀 땐 둘을 같이 바꾼다.
+///
+/// 홈은 `--home` 인자로 받는다. 오르카가 계정마다 `CODEX_HOME`을 따로 잡는데, 훅
+/// 프로세스 환경변수만 믿으면 어느 홈의 세션인지 못 가르는 경우가 있다.
+fn cmd_hook_codex(args: &[String]) -> ExitCode {
+    let Some(event) = args.first() else {
+        return ExitCode::SUCCESS;
+    };
+    let state = match event.as_str() {
+        "SessionStart" => "idle",
+        "UserPromptSubmit" => "working",
+        "Stop" => "done",
+        "Interrupt" => "interrupted",
+        _ => return ExitCode::SUCCESS,
+    };
+    let home = args
+        .iter()
+        .position(|a| a == "--home")
+        .and_then(|i| args.get(i + 1).cloned())
+        .or_else(|| std::env::var("CODEX_HOME").ok())
+        .filter(|s| !s.is_empty());
+    let raw = read_stdin_limited();
+    let input: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+    let session = ["session_id", "sessionId"]
+        .iter()
+        .find_map(|k| input.get(*k).and_then(|v| v.as_str()))
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let line = serde_json::json!({
+        "tool": "codex",
+        "state": state,
+        "at_ms": now_ms(),
+        "session": session,
+        "home": home,
+    });
+    let _ = write_hook_state(session.as_deref(), &line);
+    ExitCode::SUCCESS
+}
+
+fn write_hook_state(session: Option<&str>, line: &serde_json::Value) -> Result<(), String> {
+    let dir = hooks_dir().ok_or("홈 디렉토리를 찾을 수 없습니다")?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let safe: String = session
+        .unwrap_or("unknown")
+        .chars()
+        .take(128)
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' })
+        .collect();
+    let name = format!("codex-{safe}.json");
+    // 앱 atomicfile과 같은 규칙. 앱이 반쯤 쓰인 파일을 읽으면 상태를 놓친다.
+    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, format!("{line}\n")).map_err(|e| e.to_string())?;
+    if let Err(e) = std::fs::rename(&tmp, dir.join(&name)) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.to_string());
+    }
+    prune_hook_states(&dir);
+    Ok(())
+}
+
+fn prune_hook_states(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let stale = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > HOOK_STATE_KEEP);
+        if stale {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
+/// 원래 statusLine 명령을 기다리는 상한. statusLine은 매 응답마다 불려서 오래 붙잡으면 화면이 굳는다.
+const ORIGINAL_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// 앱으로 보낼 statusline 릴레이 메시지. 남은 비율 계산에 쓰는 `rate_limits`만 뽑는다 —
+/// 같은 입력에 세션 내용, 프로젝트 경로, 모델명, 비용이 함께 오지만 앱은 그걸 받을 이유가 없다.
+fn relay_payload(input: &serde_json::Value, config_dir: &str, sent_ms: i64) -> Option<serde_json::Value> {
+    let limits = input.get("rate_limits")?;
+    let window = |key: &str| -> Option<serde_json::Value> {
+        let w = limits.get(key)?;
+        // Claude Code는 0~200 범위로 준다. 한도 초과분은 잔여율 계산에서 의미가 없어 100으로 자른다.
+        let used = w.get("used_percentage")?.as_f64()?.clamp(0.0, 100.0);
+        let resets = w
+            .get("resets_at")
+            .filter(|v| v.is_number() || v.is_string())
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        Some(serde_json::json!({ "usedPercentage": used, "resetsAt": resets }))
+    };
+    let five = window("five_hour");
+    let seven = window("seven_day");
+    if five.is_none() && seven.is_none() {
+        return None;
+    }
+    Some(serde_json::json!({
+        "kind": "statusline",
+        "configDir": config_dir,
+        "rateLimits": { "fiveHour": five, "sevenDay": seven },
+        "sentMs": sent_ms,
+    }))
+}
+
+/// 이 세션의 config dir. 앱이 같은 문자열로 Keychain 서비스 이름을 만들어 계정을 찾는다.
+fn claude_config_dir() -> Option<String> {
+    std::env::var("CLAUDE_CONFIG_DIR")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| dirs::home_dir().map(|h| h.join(".claude").to_string_lossy().into_owned()))
+        .map(|s| {
+            let trimmed = s.trim_end_matches('/');
+            if trimmed.is_empty() { s } else { trimmed.to_string() }
+        })
+}
+
+/// 설치할 때 치워둔 원래 statusLine 명령. 앱 installer가 `statusline.json`에 config dir별로 남긴다.
+fn original_statusline(config_dir: &str) -> Option<String> {
+    let raw = std::fs::read_to_string(app_dir()?.join("statusline.json")).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    v.get("originals")?
+        .get(config_dir)?
+        .get("command")?
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.to_string())
+}
+
+/// 앱이 꺼져 있으면 버린다. 잔여율은 시간이 지나면 의미가 없어 스풀에 남기지 않고 앱을 깨우지도 않는다.
+fn send_relay(payload: &serde_json::Value) {
+    let Some(path) = app_dir().map(|d| d.join("trw.sock")) else {
+        return;
+    };
+    let Ok(mut stream) = UnixStream::connect(path) else {
+        return;
+    };
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
+    let _ = stream.write_all(format!("{payload}\n").as_bytes());
+}
+
+/// `sh -c`로 원래 명령을 돌려 stdout을 모은다. 상한을 넘기면 프로세스 그룹째 끊고 그때까지 모은 것만 돌려준다.
+fn run_with_timeout(command: &str, input: &[u8], timeout: Duration) -> Vec<u8> {
+    use std::os::unix::process::CommandExt;
+    use std::sync::{mpsc, Arc, Mutex};
+    let Ok(mut child) = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(command)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        // 셸이 띄운 손자 프로세스까지 한 번에 끊으려고 그룹을 따로 잡는다.
+        .process_group(0)
+        .spawn()
+    else {
+        return Vec::new();
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let data = input.to_vec();
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(&data);
+        });
+    }
+    let out = Arc::new(Mutex::new(Vec::new()));
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    if let Some(mut stdout) = child.stdout.take() {
+        let out = Arc::clone(&out);
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 8192];
+            while let Ok(n) = stdout.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                if let Ok(mut o) = out.lock() {
+                    o.extend_from_slice(&buf[..n]);
+                }
+            }
+            let _ = done_tx.send(());
+        });
+    }
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if started.elapsed() < timeout => std::thread::sleep(Duration::from_millis(20)),
+            _ => {
+                let _ = Command::new("/bin/kill")
+                    .args(["-KILL", &format!("-{}", child.id())])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+                let _ = child.kill();
+                let _ = child.wait();
+                break;
+            }
+        }
+    }
+    // 손자 프로세스가 stdout을 쥐고 있으면 읽기가 안 끝난다. 그때는 모은 데까지만 쓴다.
+    let _ = done_rx.recv_timeout(Duration::from_millis(300));
+    out.lock().map(|o| o.clone()).unwrap_or_default()
+}
+
+/// Claude Code statusLine — 잔여율을 OAuth 폴링보다 먼저 앱에 넘기는 보조 경로.
+///
+/// statusLine 자리를 차지하므로 원래 명령이 있으면 대신 돌려 그 출력을 그대로 찍는다.
+/// 무엇이 실패해도 0으로 끝난다 — 여기서 실패하면 사용자 화면의 상태 줄이 빈다.
+fn cmd_statusline() -> ExitCode {
+    let mut raw = Vec::new();
+    let _ = std::io::stdin().take(STDIN_LIMIT).read_to_end(&mut raw);
+    let config_dir = claude_config_dir();
+    if let Some(dir) = config_dir.as_deref() {
+        let input: serde_json::Value = serde_json::from_slice(&raw).unwrap_or_default();
+        if let Some(payload) = relay_payload(&input, dir, now_ms()) {
+            send_relay(&payload);
+        }
+    }
+    if let Some(command) = config_dir.as_deref().and_then(original_statusline) {
+        let out = run_with_timeout(&command, &raw, ORIGINAL_TIMEOUT);
+        let mut stdout = std::io::stdout();
+        let _ = stdout.write_all(&out);
+        let _ = stdout.flush();
+    }
     ExitCode::SUCCESS
 }
 
@@ -514,7 +765,13 @@ fn main() -> ExitCode {
         Some("notify") => cmd_notify(&args[1..]),
         Some("ls") => cmd_ls(&args[1..]),
         Some("where") => cmd_where(),
-        Some("hook") if args.get(1).map(|s| s.as_str()) == Some("stop") => cmd_hook_stop(),
+        Some("statusline") => cmd_statusline(),
+        Some("hook") => match args.get(1).map(|s| s.as_str()) {
+            Some("stop") => cmd_hook_stop(),
+            Some("codex") => cmd_hook_codex(&args[2..]),
+            // 훅 안에서 도는 명령이라 모르는 이벤트여도 세션을 깨지 않는다.
+            _ => ExitCode::SUCCESS,
+        },
         Some("--help") | Some("-h") | None => {
             println!("{USAGE}");
             ExitCode::SUCCESS
@@ -523,5 +780,62 @@ fn main() -> ExitCode {
             eprintln!("알 수 없는 명령: {other}\n\n{USAGE}");
             ExitCode::from(2)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relay_payload_keeps_only_rate_limits() {
+        let input = serde_json::json!({
+            "session_id": "s-1",
+            "cwd": "/Users/me/secret-project",
+            "model": { "id": "claude-opus", "display_name": "Opus" },
+            "cost": { "total_cost_usd": 3.2 },
+            "workspace": { "project_dir": "/Users/me/secret-project" },
+            "transcript_path": "/Users/me/.claude/projects/x.jsonl",
+            "rate_limits": {
+                "five_hour": { "used_percentage": 150.0, "resets_at": 1_786_000_000, "extra": 1 },
+                "seven_day": { "used_percentage": 42.5, "resets_at": "2026-11-10T00:00:00Z" }
+            }
+        });
+        let p = relay_payload(&input, "/Users/me/.claude", 7).unwrap();
+        let keys: Vec<&String> = p.as_object().unwrap().keys().collect();
+        assert_eq!(keys.len(), 4);
+        for k in ["kind", "configDir", "rateLimits", "sentMs"] {
+            assert!(p.get(k).is_some(), "{k} 빠짐");
+        }
+        assert_eq!(p["kind"], "statusline");
+        assert_eq!(p["rateLimits"]["fiveHour"]["usedPercentage"], 100.0);
+        assert_eq!(p["rateLimits"]["fiveHour"]["resetsAt"], 1_786_000_000);
+        assert!(p["rateLimits"]["fiveHour"].get("extra").is_none());
+        assert_eq!(p["rateLimits"]["sevenDay"]["usedPercentage"], 42.5);
+        let text = p.to_string();
+        for leaked in ["secret-project", "Opus", "claude-opus", "3.2", "s-1", "projects/x.jsonl"] {
+            assert!(!text.contains(leaked), "{leaked}가 새어 나갔다");
+        }
+    }
+
+    #[test]
+    fn relay_payload_needs_rate_limits() {
+        assert!(relay_payload(&serde_json::json!({ "model": {} }), "/d", 0).is_none());
+        let empty = serde_json::json!({ "rate_limits": { "five_hour": {} } });
+        assert!(relay_payload(&empty, "/d", 0).is_none());
+    }
+
+    #[test]
+    fn original_command_gets_stdin_and_output_is_passed_through() {
+        let out = run_with_timeout("cat; printf ' ok'", b"{\"a\":1}", Duration::from_secs(5));
+        assert_eq!(out, b"{\"a\":1} ok");
+    }
+
+    #[test]
+    fn slow_original_command_is_cut_off() {
+        let started = Instant::now();
+        let out = run_with_timeout("printf early; sleep 30; printf late", b"", Duration::from_millis(300));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(out, b"early");
     }
 }

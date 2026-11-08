@@ -940,6 +940,8 @@ interface Settings {
   completionAlertsEnabled: boolean;
   completionAlertsQuiet: boolean;
   wakeOnNotify: boolean;
+  codexHooksInstalled: boolean;
+  statuslineRelayEnabled: boolean;
   hapticsEnabled: boolean;
   hapticsOnTurnEnd: boolean;
   codexAppServerFallback: boolean;
@@ -1625,6 +1627,116 @@ function Dashboard() {
   );
 }
 
+type HookPreview = {
+  files: { path: string; diff: string }[];
+  fingerprint: string;
+};
+
+/**
+ * 사용자 설정 파일을 고치는 설치·제거. 바로 쓰지 않고 diff를 먼저 보여준 뒤
+ * 확인을 받아야 쓴다. 미리보기 지문을 넘겨 그사이 파일이 바뀌었으면 Rust 쪽이 거절한다.
+ */
+function HookInstaller({
+  feature,
+  installed,
+  tr,
+  onApplied,
+}: {
+  feature: "codexHooks" | "statusline";
+  installed: boolean;
+  tr: (k: string, p?: Record<string, string | number>) => string;
+  onApplied: (s: Settings) => void;
+}) {
+  const [preview, setPreview] = useState<HookPreview | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const cmd = feature === "codexHooks" ? "codex_hooks" : "statusline";
+  const install = !installed;
+  const panelId = `hook-preview-${feature}`;
+
+  async function showPreview() {
+    setBusy(true);
+    setError(null);
+    try {
+      setPreview(await invoke<HookPreview>(`preview_${cmd}`, { install }));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirm() {
+    if (!preview) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await invoke<Settings>(`apply_${cmd}`, {
+        install,
+        fingerprint: preview.fingerprint,
+      });
+      setPreview(null);
+      onApplied(next);
+    } catch (e) {
+      setError(String(e));
+      setPreview(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="hook-installer">
+      <div className="trw-row">
+        <span>{tr(`${feature}Title`)}</span>
+        <button
+          className="link-btn"
+          onClick={preview ? () => setPreview(null) : showPreview}
+          disabled={busy}
+          aria-expanded={preview !== null}
+          aria-controls={panelId}
+        >
+          {preview
+            ? tr("hookCancel")
+            : installed
+              ? tr("hookRemoveBtn")
+              : tr("hookInstallBtn")}
+        </button>
+      </div>
+      <p className="setting-hint">
+        {tr(installed ? `${feature}On` : `${feature}Hint`)}
+      </p>
+      {installed && feature === "codexHooks" && (
+        <p className="setting-hint">{tr("codexHooksTrust")}</p>
+      )}
+      <div id={panelId} hidden={preview === null}>
+        {preview && (
+          <>
+            {preview.files.length === 0 ? (
+              <p className="setting-hint">{tr("hookNoChanges")}</p>
+            ) : (
+              preview.files.map((f) => (
+                <div key={f.path} className="hook-diff">
+                  <p className="setting-hint trw-path">{f.path}</p>
+                  <pre>{f.diff}</pre>
+                </div>
+              ))
+            )}
+            <p className="setting-hint">{tr("hookBackupNote")}</p>
+            <div className="trw-row">
+              <span />
+              <button className="link-btn" onClick={confirm} disabled={busy}>
+                {busy ? tr("hookApplying") : tr("hookConfirm")}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+      {error && <p className="perm-warn">⚠️ {tr("hookFailed", { e: error })}</p>}
+    </div>
+  );
+}
+
 /** 설정 전용 창 */
 function SettingsView() {
   const [settings, setSettings] = useState<Settings>({
@@ -1638,6 +1750,8 @@ function SettingsView() {
     completionAlertsEnabled: true,
     completionAlertsQuiet: false,
     wakeOnNotify: true,
+    codexHooksInstalled: false,
+    statuslineRelayEnabled: false,
     hapticsEnabled: true,
     hapticsOnTurnEnd: true,
     codexAppServerFallback: true,
@@ -1869,6 +1983,22 @@ function SettingsView() {
               <p className="setting-hint trw-path">{trwStatus.cliPath}</p>
             )}
             {trwError && <p className="perm-warn">⚠️ {trwError}</p>}
+            {trwStatus?.cliPath && (
+              <>
+                <HookInstaller
+                  feature="codexHooks"
+                  installed={settings.codexHooksInstalled}
+                  tr={tr}
+                  onApplied={setSettings}
+                />
+                <HookInstaller
+                  feature="statusline"
+                  installed={settings.statuslineRelayEnabled}
+                  tr={tr}
+                  onApplied={setSettings}
+                />
+              </>
+            )}
           </div>
         )}
 
