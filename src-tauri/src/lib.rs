@@ -1126,6 +1126,47 @@ fn trw_status() -> installer::InstallStatus {
     installer::status()
 }
 
+/// 훅·statusLine 미리보기와 적용은 사용자 설정 파일을 읽고 써서 blocking 풀에서 돈다.
+#[tauri::command]
+async fn preview_codex_hooks(install: bool) -> Result<installer::HookPreview, String> {
+    tauri::async_runtime::spawn_blocking(move || installer::preview_codex_hooks(install))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn apply_codex_hooks(install: bool, fingerprint: String) -> Result<Settings, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        installer::apply_codex_hooks(install, &fingerprint)?;
+        let mut s = settings::get();
+        s.codex_hooks_installed = install;
+        settings::set(s.clone());
+        Ok(s)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn preview_statusline(install: bool) -> Result<installer::HookPreview, String> {
+    tauri::async_runtime::spawn_blocking(move || installer::preview_statusline(install))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn apply_statusline(install: bool, fingerprint: String) -> Result<Settings, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        installer::apply_statusline(install, &fingerprint)?;
+        let mut s = settings::get();
+        s.statusline_relay_enabled = install;
+        settings::set(s.clone());
+        Ok(s)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// 프론트에서 익명 이벤트 전송 (opt-in일 때만 실제 전송됨).
 /// 주의: properties에 토큰 값·잔여율 등 내용은 절대 넣지 말 것 (행동 메타만).
 #[tauri::command]
@@ -1683,7 +1724,11 @@ pub fn run() {
             inbox_remove,
             inbox_clear,
             install_trw,
-            trw_status
+            trw_status,
+            preview_codex_hooks,
+            apply_codex_hooks,
+            preview_statusline,
+            apply_statusline
         ])
         // pet 우클릭 메뉴와 트레이 메뉴 둘 다 이 하나의 전역 핸들러로 들어온다 — Tauri는
         // TrayIconBuilder::on_menu_event와 Builder::on_menu_event를 같은

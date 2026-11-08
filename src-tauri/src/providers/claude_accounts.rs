@@ -370,7 +370,7 @@ fn profile_paths(dir: &Path) -> Vec<PathBuf> {
 /// 후보 하나마다 Keychain 조회가 한 번씩 붙으므로 이름만 보고 담지 않는다. 실제로
 /// Claude가 쓰는 자리인지(프로필 파일이나 projects 디렉토리) 확인해 무관한 디렉토리를
 /// 미리 걸러낸다.
-fn config_dir_candidates() -> Vec<PathBuf> {
+pub(crate) fn config_dir_candidates() -> Vec<PathBuf> {
     let mut out = Vec::new();
     let Some(home) = dirs::home_dir() else {
         return out;

@@ -223,3 +223,126 @@ pub fn status() -> InstallStatus {
         agents,
     }
 }
+
+/// 바꿀 파일 하나와 그 diff. 사용자가 확인한 뒤에만 쓴다.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileChange {
+    pub path: String,
+    pub diff: String,
+}
+
+/// 미리보기. `fingerprint`는 적용할 때 다시 계산해 비교한다 — 그사이 파일이 바뀌면
+/// 사용자가 본 diff와 실제로 쓸 내용이 달라지기 때문이다.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookPreview {
+    pub files: Vec<FileChange>,
+    pub fingerprint: String,
+}
+
+fn app_dir() -> Result<PathBuf, String> {
+    crate::settings::app_dir().ok_or_else(|| "홈 디렉토리를 찾을 수 없습니다".to_string())
+}
+
+/// 훅과 statusLine이 부를 `trw` 경로. 앱 번들 안 경로를 박으면 앱을 옮기거나
+/// 업데이트할 때 끊기므로 `install`이 걸어둔 심링크를 쓴다.
+fn installed_cli() -> Result<PathBuf, String> {
+    let path = bin_dir()?.join("trw");
+    if fs::symlink_metadata(&path).is_err() {
+        return Err("trw CLI를 먼저 설치해 주세요".into());
+    }
+    Ok(path)
+}
+
+fn fingerprint_of<'a>(plans: impl Iterator<Item = &'a template::Plan>) -> String {
+    plans.map(|p| p.fingerprint()).collect::<Vec<_>>().join(":")
+}
+
+fn preview_of<'a>(plans: impl Iterator<Item = &'a template::Plan> + Clone) -> HookPreview {
+    HookPreview {
+        files: plans
+            .clone()
+            .filter(|p| p.changes())
+            .map(|p| FileChange {
+                path: p.path.to_string_lossy().to_string(),
+                diff: p.diff(),
+            })
+            .collect(),
+        fingerprint: fingerprint_of(plans),
+    }
+}
+
+fn check_fingerprint(expected: &str, actual: String) -> Result<(), String> {
+    if expected != actual {
+        return Err("미리보기 뒤에 파일이 바뀌었습니다. 다시 확인해 주세요".into());
+    }
+    Ok(())
+}
+
+fn codex_plans(install: bool) -> Result<Vec<template::Plan>, String> {
+    let app = app_dir()?;
+    let trw = if install { Some(installed_cli()?) } else { None };
+    let mut plans = Vec::new();
+    for home in crate::providers::codex::home_dirs() {
+        let file = codex_hooks::hooks_file(&home);
+        let record = template::record_for(&app, &file);
+        let plan = match &trw {
+            Some(trw) => codex_hooks::plan_install(&file, &home, trw, record)?,
+            None => codex_hooks::plan_uninstall(&file, record)?,
+        };
+        plans.push(plan);
+    }
+    Ok(plans)
+}
+
+pub fn preview_codex_hooks(install: bool) -> Result<HookPreview, String> {
+    Ok(preview_of(codex_plans(install)?.iter()))
+}
+
+/// 하나라도 실패하면 거기서 멈춘다. 앞서 쓴 파일은 백업과 기록이 남아 있어 다시
+/// 제거하면 원래대로 돌아간다.
+pub fn apply_codex_hooks(install: bool, fingerprint: &str) -> Result<(), String> {
+    let app = app_dir()?;
+    let plans = codex_plans(install)?;
+    check_fingerprint(fingerprint, fingerprint_of(plans.iter()))?;
+    for plan in &plans {
+        template::apply(plan, &app)?;
+    }
+    Ok(())
+}
+
+fn statusline_plans(install: bool) -> Result<Vec<statusline::StatuslinePlan>, String> {
+    let app = app_dir()?;
+    let trw = if install { Some(installed_cli()?) } else { None };
+    let mut plans = Vec::new();
+    for dir in crate::providers::claude_accounts::config_dir_candidates() {
+        if !dir.is_dir() {
+            continue;
+        }
+        let file = statusline::settings_file(&dir);
+        let key = statusline::config_key(&dir);
+        let record = template::record_for(&app, &file);
+        let plan = match &trw {
+            Some(trw) => statusline::plan_install(&file, &key, trw, record)?,
+            None => statusline::plan_uninstall(&file, &key, record, statusline::original_of(&app, &key))?,
+        };
+        plans.push(plan);
+    }
+    Ok(plans)
+}
+
+pub fn preview_statusline(install: bool) -> Result<HookPreview, String> {
+    let plans = statusline_plans(install)?;
+    Ok(preview_of(plans.iter().map(|p| &p.plan)))
+}
+
+pub fn apply_statusline(install: bool, fingerprint: &str) -> Result<(), String> {
+    let app = app_dir()?;
+    let plans = statusline_plans(install)?;
+    check_fingerprint(fingerprint, fingerprint_of(plans.iter().map(|p| &p.plan)))?;
+    for plan in &plans {
+        statusline::apply(plan, &app, install)?;
+    }
+    Ok(())
+}

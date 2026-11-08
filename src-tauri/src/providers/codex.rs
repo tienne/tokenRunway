@@ -99,7 +99,7 @@ struct AuthInfo {
 /// 오르카는 Codex 계정마다 `CODEX_HOME`을 `codex-accounts/<uuid>/home`으로 잡아 띄운다.
 /// 그 세션은 `~/.codex`에 하나도 안 남아서, 홈만 읽으면 오르카에서 쓴 사용량과
 /// rate_limits가 통째로 빠진다. 계정이 나중에 추가될 수 있어 부를 때마다 다시 훑는다.
-fn home_dirs() -> Vec<PathBuf> {
+pub(crate) fn home_dirs() -> Vec<PathBuf> {
     let mut dirs_: Vec<PathBuf> = Vec::new();
     if let Some(h) = std::env::var_os("CODEX_HOME") {
         dirs_.push(PathBuf::from(h));
