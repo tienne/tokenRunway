@@ -300,6 +300,9 @@ struct RateLimits {
     secondary: Option<RateWindow>,
     /// 구독 등급 (예: "plus", "pro").
     plan_type: Option<String>,
+    /// 남은 무료 리셋 횟수. app-server 응답에만 있어 rollout과 wham/usage 경로에선 None.
+    #[serde(skip)]
+    reset_credits: Option<u32>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -641,6 +644,7 @@ fn fetch_usage(acc: &AuthInfo) -> ApiResult {
         primary: Some(rl.primary_window.ok_or("error.unavailable")?.into()),
         secondary: rl.secondary_window.map(Into::into),
         plan_type: body.plan_type,
+        reset_credits: None,
     })
 }
 
@@ -784,6 +788,7 @@ mod tests {
             }),
             secondary: None,
             plan_type: Some("plus".into()),
+            reset_credits: None,
         };
         let (u, w) = to_usage(&rl, 2_000_000).unwrap();
         assert_eq!(w, 5 * 3600);
