@@ -8,6 +8,8 @@
 //! 두고 에이전트별 디렉토리에는 상대 심링크를 건다. 그러면 한 번 갱신하면 모든
 //! 에이전트에 반영되고, 에이전트를 늘려도 심링크만 추가하면 된다.
 
+pub mod template;
+
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
