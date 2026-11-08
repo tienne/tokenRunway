@@ -1015,6 +1015,13 @@ pub fn refresh_inbox_badge() {
 /// 앱이 뜰 때 한꺼번에 배너로 쏟아지면 몇 시간 전 일을 지금 끝난 것처럼 보여준다.
 const STALE_BANNER_MS: i64 = 10 * 60 * 1000;
 
+fn on_ipc_message(msg: ipc::IpcMessage) {
+    match msg {
+        ipc::IpcMessage::Notify(req) => on_notify_request(req),
+        ipc::IpcMessage::Statusline(_) => {}
+    }
+}
+
 fn on_notify_request(req: inbox::NotifyRequest) {
     if !settings::completion_alerts_enabled() {
         return;
@@ -1756,7 +1763,7 @@ pub fn run() {
             let _ = APP_HANDLE.set(app.handle().clone());
             notify_os::init(&app.config().identifier);
             // `trw` 소켓과 스풀을 띄운다. 앱이 꺼진 사이 쌓인 알림도 여기서 걷어온다.
-            ipc::start(on_notify_request);
+            ipc::start(on_ipc_message);
             refresh_inbox_badge();
 
             // 우클릭 메뉴 (열기/설정/종료). 언어 변경 시 set_settings에서 재생성.
