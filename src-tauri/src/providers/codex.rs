@@ -6,6 +6,8 @@
 //! 계정이 여럿이면 홈(`CODEX_HOME`)도 여럿이다. Claude와 달리 rollout 첫 줄
 //! (`session_meta`)에 `creator_account_id`가 남아 있어서 시계열까지 계정별로 가를 수 있다.
 
+mod app_server;
+
 use super::{
     find_recent_jsonl, AccountUsage, OfficialUsage, SampleCache, UsageProvider, UsageSample,
 };
