@@ -941,6 +941,7 @@ interface Settings {
   wakeOnNotify: boolean;
   hapticsEnabled: boolean;
   hapticsOnTurnEnd: boolean;
+  codexAppServerFallback: boolean;
   language: string | null;
   quietEnabled: boolean;
   quietStartHour: number;
@@ -1633,6 +1634,7 @@ function SettingsView() {
     wakeOnNotify: true,
     hapticsEnabled: true,
     hapticsOnTurnEnd: true,
+    codexAppServerFallback: true,
     language: null,
     quietEnabled: false,
     quietStartHour: 22,
@@ -1884,6 +1886,18 @@ function SettingsView() {
               onChange={(e) => update({ hapticsOnTurnEnd: e.target.checked })}
             />
           </label>
+        )}
+
+        <label className="setting-row toggle-row">
+          <span>{tr("codexAppServerFallback")}</span>
+          <input
+            type="checkbox"
+            checked={settings.codexAppServerFallback}
+            onChange={(e) => update({ codexAppServerFallback: e.target.checked })}
+          />
+        </label>
+        {settings.codexAppServerFallback && (
+          <p className="setting-hint">{tr("codexAppServerFallbackHint")}</p>
         )}
 
         <label className="setting-row toggle-row">
