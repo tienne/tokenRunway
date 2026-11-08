@@ -602,4 +602,20 @@ mod tests {
         assert!(representative(&accounts).is_none());
         assert!(representative(&[]).is_none());
     }
+
+    #[test]
+    fn status_notes_hold_no_token() {
+        use crate::providers::secret_check::assert_no_secret;
+        let token = "sk-ant-oat01-fake-9d8c7b";
+        for key in ["error.expired", "error.rate_limit", "error.unavailable"] {
+            let id = format!("secret-test-{key}");
+            store_usage(&id, None, Some(key));
+            let (usage, note) = read_cached(&id);
+            assert!(usage.is_none());
+            let note = note.unwrap();
+            assert_no_secret("Claude 상태 노트", note, &[token]);
+            assert_no_secret("Claude 로그", &format!("{note:?}"), &[token]);
+        }
+    }
 }
+

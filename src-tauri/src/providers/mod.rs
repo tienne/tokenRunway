@@ -412,3 +412,25 @@ fn is_recent(entry: &std::fs::DirEntry, since_ms: i64) -> bool {
         Err(_) => true,
     }
 }
+
+#[cfg(test)]
+pub(crate) mod secret_check {
+    /// 노트·로그로 나갈 문자열에 시크릿이 섞였는지 본다. 실패 메시지에 시크릿 자체를
+    /// 찍지 않는다 — 테스트 로그로 새면 검사하는 의미가 없다.
+    pub(crate) fn assert_no_secret(label: &str, text: &str, secrets: &[&str]) {
+        assert!(!text.contains("Bearer "), "{label}: Bearer 헤더가 섞였어요");
+        for (i, s) in secrets.iter().enumerate() {
+            assert!(!s.is_empty(), "{label}: 빈 시크릿은 검사할 수 없어요");
+            assert!(!text.contains(s), "{label}: 시크릿 #{i}가 섞였어요");
+        }
+    }
+
+    #[test]
+    fn helper_catches_leaks() {
+        assert_no_secret("clean", "error.stale_token", &["sk-fake"]);
+        let leaked = std::panic::catch_unwind(|| assert_no_secret("x", "token sk-fake", &["sk-fake"]));
+        assert!(leaked.is_err());
+        let bearer = std::panic::catch_unwind(|| assert_no_secret("x", "Bearer abc", &["zzz"]));
+        assert!(bearer.is_err());
+    }
+}

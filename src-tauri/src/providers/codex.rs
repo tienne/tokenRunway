@@ -998,6 +998,76 @@ mod tests {
         assert!(matches!(api_cached("fb-slow-b"), Some(Ok(_))));
     }
 
+    /// 실제 값과 겹칠 일 없는 가짜 토큰.
+    const FAKE_ACCESS: &str = "fake-access-7f3a9c";
+    const FAKE_REFRESH: &str = "fake-refresh-1b2d4e";
+
+    fn fake_home(name: &str, with_access: bool) -> PathBuf {
+        let home = std::env::temp_dir().join(format!("trw-codex-secret-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home);
+        fs::create_dir_all(&home).unwrap();
+        let claims = serde_json::json!({
+            "email": "dev@example.com",
+            "https://api.openai.com/auth": {"chatgpt_plan_type": "plus", "chatgpt_account_id": "acct-fake"}
+        });
+        let body = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(claims.to_string());
+        let mut tokens = serde_json::json!({
+            "account_id": "acct-fake",
+            "id_token": format!("e30.{body}.sig"),
+            "refresh_token": FAKE_REFRESH,
+        });
+        if with_access {
+            tokens["access_token"] = serde_json::json!(FAKE_ACCESS);
+        }
+        let auth = serde_json::json!({"tokens": tokens, "last_refresh": "2026-11-01T00:00:00Z"});
+        fs::write(home.join("auth.json"), auth.to_string()).unwrap();
+        home
+    }
+
+    #[test]
+    fn auth_info_and_notes_hold_no_token() {
+        use crate::providers::secret_check::assert_no_secret;
+        let secrets = [FAKE_ACCESS, FAKE_REFRESH];
+        let home = fake_home("info", true);
+        let info = read_auth(&home).unwrap();
+        let shown = format!(
+            "{} {:?} {:?} {:?} {:?}",
+            info.account_id, info.email, info.plan, info.home, info.last_refresh
+        );
+        assert_no_secret("AuthInfo", &shown, &secrets);
+        assert_eq!(info.email.as_deref(), Some("dev@example.com"));
+
+        let no_token = fake_home("notoken", false);
+        let mut acc = read_auth(&no_token).unwrap();
+        acc.home = Some(no_token.clone());
+        let r = fetch_usage(&acc);
+        assert_eq!(r.as_ref().err(), Some(&"error.no_token"));
+        assert_no_secret("fetch 실패 노트", &format!("{:?}", r.err()), &secrets);
+        let _ = fs::remove_dir_all(&home);
+        let _ = fs::remove_dir_all(&no_token);
+    }
+
+    #[test]
+    fn app_server_error_note_drops_server_message() {
+        use crate::providers::secret_check::assert_no_secret;
+        use std::os::unix::fs::PermissionsExt;
+        let home = fake_home("appserver", true);
+        let bin = home.join("codex");
+        // 서버가 에러 메시지에 토큰을 실어 보내도 노트에는 i18n 키만 남아야 한다.
+        let script = format!(
+            "#!/bin/sh\necho 'Authorization: Bearer {FAKE_ACCESS}' >&2\nread l; echo '{{\"id\":1,\"result\":{{}}}}'\nread l; read l\n\
+             echo '{{\"id\":2,\"error\":{{\"message\":\"401 Bearer {FAKE_ACCESS} refresh {FAKE_REFRESH}\"}}}}'\n"
+        );
+        fs::write(&bin, script).unwrap();
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+        let r = app_server::read_rate_limits(&bin, &home, Duration::from_secs(5));
+        let note = r.as_ref().err().copied().unwrap();
+        assert_eq!(note, "error.stale_token");
+        assert_no_secret("app-server 노트", note, &[FAKE_ACCESS, FAKE_REFRESH]);
+        assert_no_secret("app-server 로그", &format!("{:?}", r.err()), &[FAKE_ACCESS, FAKE_REFRESH]);
+        let _ = fs::remove_dir_all(&home);
+    }
+
     #[test]
     #[ignore]
     fn real_home() {
