@@ -9,6 +9,7 @@
 //! 에이전트에 반영되고, 에이전트를 늘려도 심링크만 추가하면 된다.
 
 pub mod codex_hooks;
+pub mod statusline;
 pub mod template;
 
 use serde::Serialize;
