@@ -538,6 +538,7 @@ fn scan_snapshot(now_ms: i64) -> Snapshot {
                 plan: plan.clone(),
                 note: usage.is_none().then_some(fail_note),
                 window_secs: usage.as_ref().map(|(_, w)| *w),
+                reset_credits_available: source.and_then(|rl| rl.reset_credits),
                 usage: usage.map(|(mut u, _)| {
                     u.plan = plan;
                     u

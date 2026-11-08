@@ -89,6 +89,8 @@ pub struct AccountUsage {
     /// Codex는 계정마다 윈도우가 다르다(5시간 계정, 주간 하나뿐인 계정). 도구 윈도우로
     /// 페이스를 재면 다른 계정의 ETA가 엉뚱한 구간 기준으로 나온다.
     pub window_secs: Option<i64>,
+    /// 남은 무료 리셋 횟수. Codex app-server 폴백으로 받은 계정에만 있다.
+    pub reset_credits_available: Option<u32>,
 }
 
 /// 카드 대표로 세울 계정 — 지금 쓰는 계정.
@@ -129,6 +131,8 @@ pub struct AccountStatus {
     pub seven_day_eta_minutes: Option<f64>,
     /// 상태 보조 설명 (i18n 키).
     pub note: Option<String>,
+    /// 남은 무료 리셋 횟수. 0이거나 모르면 UI가 줄을 숨긴다.
+    pub reset_credits_available: Option<u32>,
 }
 
 /// 효율 인사이트 한 건 — i18n 키 + 레벨(색 구분용).

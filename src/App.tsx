@@ -895,6 +895,7 @@ interface AccountStatus {
   sevenDayEtaMinutes: number | null;
   /** 상태 보조 설명. 백엔드가 항상 i18n 키를 준다 (자유 문자열이 아니다) */
   note: string | null;
+  resetCreditsAvailable: number | null;
 }
 
 interface RunwayStatus {
@@ -1273,6 +1274,11 @@ function AccountRows({
                 <span>
                   {t(lang, "acctWeekly", { n: a.sevenDayRemaining.toFixed(0) })}
                   {weeklyReset && ` · ${weeklyReset}`}
+                </span>
+              )}
+              {!!a.resetCreditsAvailable && (
+                <span>
+                  {t(lang, "acctResetCredits", { n: a.resetCreditsAvailable })}
                 </span>
               )}
             </div>

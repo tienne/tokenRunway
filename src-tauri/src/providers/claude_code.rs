@@ -238,6 +238,7 @@ fn accounts_usage() -> Vec<AccountUsage> {
                 usage,
                 note: note.map(|s| s.to_string()),
                 window_secs: None,
+                reset_credits_available: None,
             }
         })
         .collect()
@@ -570,6 +571,7 @@ mod tests {
             }),
             note: None,
             window_secs: None,
+            reset_credits_available: None,
         }
     }
 
