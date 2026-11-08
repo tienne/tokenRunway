@@ -57,6 +57,11 @@ type ApiResult = Result<RateLimits, &'static str>;
 static API_CACHE: LazyLock<Mutex<HashMap<String, (Instant, ApiResult)>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// 계정 id → 마지막으로 app-server 폴백을 띄운 시각. 폴백도 실패하면 캐시엔 여전히
+/// 토큰 만료가 남아서, 이게 없으면 폴링마다 자식 프로세스를 다시 띄운다.
+static FALLBACK_AT: LazyLock<Mutex<HashMap<String, Instant>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 /// 동시 갱신 방지. UI 폴링과 백그라운드 루프가 캐시 만료 시점에 겹쳐도 한 번만 쏜다.
 static FETCH_GUARD: Mutex<()> = Mutex::new(());
 
@@ -499,6 +504,14 @@ fn scan_snapshot(now_ms: i64) -> Snapshot {
 
     if let Ok(_guard) = FETCH_GUARD.try_lock() {
         refresh_api(&known);
+        refresh_app_server(
+            &known,
+            crate::settings::codex_app_server_fallback(),
+            &|home| match app_server::find_codex_binary() {
+                Some(bin) => app_server::read_rate_limits(&bin, home, app_server::APP_SERVER_TIMEOUT),
+                None => Err("error.stale_token"),
+            },
+        );
     }
 
     let single = known.len() == 1;
@@ -571,6 +584,71 @@ fn refresh_api(accounts: &[AuthInfo]) {
         let handles: Vec<_> = stale
             .iter()
             .map(|a| scope.spawn(move || (a.account_id.clone(), fetch_usage(a))))
+            .collect();
+        handles.into_iter().filter_map(|h| h.join().ok()).collect()
+    });
+    if let Ok(mut cache) = API_CACHE.lock() {
+        let now = Instant::now();
+        for (id, r) in results {
+            cache.insert(id, (now, r));
+        }
+    }
+}
+
+/// 사용량 API가 토큰 만료를 돌려준 계정만 app-server로 다시 묻는다.
+///
+/// 성공했거나 rate limit, 일시 장애로 실패한 계정은 토큰 문제가 아니라 대상이 아니다.
+/// 대상은 캐시 락을 잡은 동안 모으고, 자식 프로세스는 락 밖에서 계정마다 스레드로
+/// 띄운다 — 순차로 띄우면 FETCH_GUARD를 계정 수 × 15초까지 쥐게 된다.
+fn refresh_app_server(
+    accounts: &[AuthInfo],
+    enabled: bool,
+    read: &(dyn Fn(&Path) -> ApiResult + Sync),
+) {
+    if !enabled {
+        return;
+    }
+    let expired: Vec<&AuthInfo> = {
+        let Ok(cache) = API_CACHE.lock() else {
+            return;
+        };
+        accounts
+            .iter()
+            .filter(|a| a.home.is_some())
+            .filter(|a| {
+                matches!(
+                    cache.get(&a.account_id),
+                    Some((_, Err("error.stale_token")))
+                )
+            })
+            .collect()
+    };
+    let targets: Vec<&AuthInfo> = {
+        let Ok(mut tried) = FALLBACK_AT.lock() else {
+            return;
+        };
+        let now = Instant::now();
+        expired
+            .into_iter()
+            .filter(|a| {
+                let due = tried
+                    .get(&a.account_id)
+                    .is_none_or(|at| at.elapsed() >= API_TTL);
+                if due {
+                    tried.insert(a.account_id.clone(), now);
+                }
+                due
+            })
+            .collect()
+    };
+    if targets.is_empty() {
+        return;
+    }
+    let results: Vec<(String, ApiResult)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = targets
+            .iter()
+            .filter_map(|a| Some((a.account_id.clone(), a.home.clone()?)))
+            .map(|(id, home)| scope.spawn(move || (id, read(&home))))
             .collect();
         handles.into_iter().filter_map(|h| h.join().ok()).collect()
     });
@@ -794,6 +872,129 @@ mod tests {
         assert_eq!(w, 5 * 3600);
         assert_eq!(u.five_hour_utilization, 0.0);
         assert!(u.five_hour_resets_at.is_empty());
+    }
+
+    fn acct(id: &str) -> AuthInfo {
+        AuthInfo {
+            account_id: id.to_string(),
+            email: None,
+            plan: None,
+            home: Some(PathBuf::from(format!("/homes/{id}"))),
+            last_refresh: None,
+        }
+    }
+
+    fn sample_limits() -> RateLimits {
+        RateLimits {
+            primary: Some(RateWindow {
+                used_percent: 10.0,
+                resets_at: 4_000_000_000,
+                window_minutes: Some(300),
+            }),
+            secondary: None,
+            plan_type: Some("plus".into()),
+            reset_credits: Some(1),
+        }
+    }
+
+    /// 테스트끼리 전역 캐시를 같이 쓰므로 계정 id를 테스트마다 다르게 잡는다.
+    fn seed(id: &str, r: ApiResult) {
+        API_CACHE
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), (Instant::now(), r));
+    }
+
+    fn counting(
+        count: &std::sync::atomic::AtomicUsize,
+        result: ApiResult,
+    ) -> impl Fn(&Path) -> ApiResult + Sync + '_ {
+        move |_| {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            result.clone()
+        }
+    }
+
+    #[test]
+    fn healthy_or_transient_accounts_never_spawn() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        seed("fb-ok", Ok(sample_limits()));
+        seed("fb-429", Err("error.rate_limit"));
+        seed("fb-5xx", Err("error.unavailable"));
+        let accounts = [acct("fb-ok"), acct("fb-429"), acct("fb-5xx"), acct("fb-unseen")];
+        let count = AtomicUsize::new(0);
+        refresh_app_server(&accounts, true, &counting(&count, Ok(sample_limits())));
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+        assert!(matches!(api_cached("fb-ok"), Some(Ok(_))));
+        assert_eq!(api_cached("fb-429").unwrap().err(), Some("error.rate_limit"));
+    }
+
+    #[test]
+    fn expired_account_is_filled_and_cached() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        seed("fb-401", Err("error.stale_token"));
+        let accounts = [acct("fb-401")];
+        let count = AtomicUsize::new(0);
+        let read = counting(&count, Ok(sample_limits()));
+        refresh_app_server(&accounts, true, &read);
+        refresh_app_server(&accounts, true, &read);
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        let rl = api_cached("fb-401").unwrap().unwrap();
+        assert_eq!(rl.reset_credits, Some(1));
+    }
+
+    #[test]
+    fn failed_fallback_is_not_retried_within_ttl() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        seed("fb-401-again", Err("error.stale_token"));
+        let accounts = [acct("fb-401-again")];
+        let count = AtomicUsize::new(0);
+        let read = counting(&count, Err("error.stale_token"));
+        refresh_app_server(&accounts, true, &read);
+        refresh_app_server(&accounts, true, &read);
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        assert_eq!(api_cached("fb-401-again").unwrap().err(), Some("error.stale_token"));
+    }
+
+    #[test]
+    fn missing_binary_leaves_stale_token() {
+        seed("fb-nobin", Err("error.stale_token"));
+        refresh_app_server(&[acct("fb-nobin")], true, &|_| Err("error.stale_token"));
+        assert_eq!(api_cached("fb-nobin").unwrap().err(), Some("error.stale_token"));
+    }
+
+    #[test]
+    fn toggle_off_skips_everything() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        seed("fb-off", Err("error.stale_token"));
+        let count = AtomicUsize::new(0);
+        refresh_app_server(&[acct("fb-off")], false, &counting(&count, Ok(sample_limits())));
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+        assert_eq!(api_cached("fb-off").unwrap().err(), Some("error.stale_token"));
+    }
+
+    #[test]
+    fn slow_fallback_does_not_hold_cache_lock_and_runs_in_parallel() {
+        seed("fb-slow-a", Err("error.stale_token"));
+        seed("fb-slow-b", Err("error.stale_token"));
+        seed("fb-probe", Ok(sample_limits()));
+        let accounts = [acct("fb-slow-a"), acct("fb-slow-b")];
+        let start = Instant::now();
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                refresh_app_server(&accounts, true, &|_| {
+                    std::thread::sleep(Duration::from_millis(600));
+                    Ok(sample_limits())
+                })
+            });
+            std::thread::sleep(Duration::from_millis(150));
+            let probe = Instant::now();
+            assert!(api_cached("fb-probe").is_some());
+            assert!(probe.elapsed() < Duration::from_millis(100), "{:?}", probe.elapsed());
+        });
+        // 둘을 순차로 띄웠다면 1.2초를 넘는다.
+        assert!(start.elapsed() < Duration::from_millis(1100), "{:?}", start.elapsed());
+        assert!(matches!(api_cached("fb-slow-b"), Some(Ok(_))));
     }
 
     #[test]
