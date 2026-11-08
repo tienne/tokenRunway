@@ -939,6 +939,8 @@ interface Settings {
   completionAlertsEnabled: boolean;
   completionAlertsQuiet: boolean;
   wakeOnNotify: boolean;
+  codexHooksInstalled: boolean;
+  statuslineRelayEnabled: boolean;
   hapticsEnabled: boolean;
   hapticsOnTurnEnd: boolean;
   language: string | null;
@@ -1631,6 +1633,8 @@ function SettingsView() {
     completionAlertsEnabled: true,
     completionAlertsQuiet: false,
     wakeOnNotify: true,
+    codexHooksInstalled: false,
+    statuslineRelayEnabled: false,
     hapticsEnabled: true,
     hapticsOnTurnEnd: true,
     language: null,

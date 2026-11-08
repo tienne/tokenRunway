@@ -76,6 +76,14 @@ pub struct Settings {
     /// settings.json을 직접 읽어서 쓴다 — 앱이 꺼져 있을 때 필요한 값이라서.
     #[serde(default = "default_completion_alerts")]
     pub wake_on_notify: bool,
+    /// Codex 훅(`trw hook codex`)을 깔았는지. 켜져 있을 때만 활동 감지가 훅 상태 파일을
+    /// rollout보다 먼저 본다 — 훅을 지운 뒤 남은 상태 파일이 판정을 흔들지 않게.
+    #[serde(default)]
+    pub codex_hooks_installed: bool,
+    /// Claude statusLine 릴레이(`trw statusline`)를 받을지. 기본 꺼짐 — 사용자 settings.json의
+    /// statusLine을 바꿔야 해서 직접 켠 경우에만 쓴다. 꺼져 있으면 들어온 값도 버린다.
+    #[serde(default)]
+    pub statusline_relay_enabled: bool,
     /// UI/알림 언어. None이면 시스템 로케일 자동 감지 ("ko" | "en").
     #[serde(default)]
     pub language: Option<String>,
@@ -171,6 +179,8 @@ impl Default for Settings {
             haptics_enabled: default_haptics_enabled(),
             haptics_on_turn_end: default_haptics_enabled(),
             wake_on_notify: default_completion_alerts(),
+            codex_hooks_installed: false,
+            statusline_relay_enabled: false,
         }
     }
 }
@@ -256,6 +266,22 @@ pub fn haptics_enabled() -> bool {
         .lock()
         .map(|s| s.haptics_enabled)
         .unwrap_or(true)
+}
+
+/// Codex 훅 상태 파일을 활동 감지에 쓸지.
+pub fn codex_hooks_installed() -> bool {
+    SETTINGS
+        .lock()
+        .map(|s| s.codex_hooks_installed)
+        .unwrap_or(false)
+}
+
+/// statusLine 릴레이 값을 받아 쓸지.
+pub fn statusline_relay_enabled() -> bool {
+    SETTINGS
+        .lock()
+        .map(|s| s.statusline_relay_enabled)
+        .unwrap_or(false)
 }
 
 /// 턴 종료 때도 마우스 진동을 보낼지.
