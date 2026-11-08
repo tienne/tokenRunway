@@ -506,6 +506,7 @@ fn account_statuses(
                     )
                 }),
                 note: a.note.clone(),
+                reset_credits_available: a.reset_credits_available,
             }
         })
         .collect()
@@ -718,5 +719,22 @@ mod tests {
             is_estimate: false,
         };
         assert!(weekly_days("Claude Code", &official, now, 0).is_empty());
+    }
+
+    #[test]
+    fn account_rows_carry_reset_credits() {
+        let acct = |id: &str, credits: Option<u32>| AccountUsage {
+            id: id.into(),
+            label: id.into(),
+            is_active: false,
+            plan: None,
+            usage: None,
+            note: None,
+            window_secs: None,
+            reset_credits_available: credits,
+        };
+        let rows = account_statuses(&[acct("a", Some(2)), acct("b", None)], 0, 5 * 3600);
+        assert_eq!(rows[0].reset_credits_available, Some(2));
+        assert_eq!(rows[1].reset_credits_available, None);
     }
 }

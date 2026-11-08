@@ -620,4 +620,14 @@ mod tests {
             Some("org-b".to_string())
         );
     }
+
+    #[test]
+    fn fingerprint_id_never_contains_token() {
+        use crate::providers::secret_check::assert_no_secret;
+        let token = "sk-ant-oat01-fake-9d8c7b";
+        let id = fingerprint(token);
+        assert_eq!(id.len(), 16);
+        assert_no_secret("토큰 지문 id", &id, &[token, &token[..12]]);
+    }
 }
+

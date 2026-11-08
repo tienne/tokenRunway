@@ -89,6 +89,8 @@ pub struct AccountUsage {
     /// Codex는 계정마다 윈도우가 다르다(5시간 계정, 주간 하나뿐인 계정). 도구 윈도우로
     /// 페이스를 재면 다른 계정의 ETA가 엉뚱한 구간 기준으로 나온다.
     pub window_secs: Option<i64>,
+    /// 남은 무료 리셋 횟수. Codex app-server 폴백으로 받은 계정에만 있다.
+    pub reset_credits_available: Option<u32>,
 }
 
 /// 카드 대표로 세울 계정 — 지금 쓰는 계정.
@@ -129,6 +131,8 @@ pub struct AccountStatus {
     pub seven_day_eta_minutes: Option<f64>,
     /// 상태 보조 설명 (i18n 키).
     pub note: Option<String>,
+    /// 남은 무료 리셋 횟수. 0이거나 모르면 UI가 줄을 숨긴다.
+    pub reset_credits_available: Option<u32>,
 }
 
 /// 효율 인사이트 한 건 — i18n 키 + 레벨(색 구분용).
@@ -406,5 +410,27 @@ fn is_recent(entry: &std::fs::DirEntry, since_ms: i64) -> bool {
     match mtime.duration_since(UNIX_EPOCH) {
         Ok(dur) => dur.as_millis() as i64 >= since_ms,
         Err(_) => true,
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod secret_check {
+    /// 노트·로그로 나갈 문자열에 시크릿이 섞였는지 본다. 실패 메시지에 시크릿 자체를
+    /// 찍지 않는다 — 테스트 로그로 새면 검사하는 의미가 없다.
+    pub(crate) fn assert_no_secret(label: &str, text: &str, secrets: &[&str]) {
+        assert!(!text.contains("Bearer "), "{label}: Bearer 헤더가 섞였어요");
+        for (i, s) in secrets.iter().enumerate() {
+            assert!(!s.is_empty(), "{label}: 빈 시크릿은 검사할 수 없어요");
+            assert!(!text.contains(s), "{label}: 시크릿 #{i}가 섞였어요");
+        }
+    }
+
+    #[test]
+    fn helper_catches_leaks() {
+        assert_no_secret("clean", "error.stale_token", &["sk-fake"]);
+        let leaked = std::panic::catch_unwind(|| assert_no_secret("x", "token sk-fake", &["sk-fake"]));
+        assert!(leaked.is_err());
+        let bearer = std::panic::catch_unwind(|| assert_no_secret("x", "Bearer abc", &["zzz"]));
+        assert!(bearer.is_err());
     }
 }

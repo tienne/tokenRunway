@@ -120,6 +120,9 @@ pub struct Settings {
     /// pet 표시 배율 (1.0 = 기본 크기). PET_SCALE_MIN~MAX로 제한한다.
     #[serde(default = "default_pet_scale")]
     pub pet_scale: f64,
+    /// 사용량 API가 토큰 만료(401)를 돌려준 Codex 계정만 `codex app-server`로 다시 묻는다.
+    #[serde(default = "default_true")]
+    pub codex_app_server_fallback: bool,
 }
 
 /// pet 배율 허용 범위 — 너무 작으면 못 잡고, 너무 크면 화면을 가린다.
@@ -166,6 +169,7 @@ impl Default for Settings {
             pet_last_x: None,
             pet_last_y: None,
             pet_scale: 1.0,
+            codex_app_server_fallback: true,
             completion_alerts_enabled: default_completion_alerts(),
             completion_alerts_quiet: false,
             haptics_enabled: default_haptics_enabled(),
@@ -263,6 +267,13 @@ pub fn haptics_on_turn_end() -> bool {
     SETTINGS
         .lock()
         .map(|s| s.haptics_on_turn_end)
+        .unwrap_or(true)
+}
+
+pub fn codex_app_server_fallback() -> bool {
+    SETTINGS
+        .lock()
+        .map(|s| s.codex_app_server_fallback)
         .unwrap_or(true)
 }
 

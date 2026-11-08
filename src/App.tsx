@@ -895,6 +895,7 @@ interface AccountStatus {
   sevenDayEtaMinutes: number | null;
   /** 상태 보조 설명. 백엔드가 항상 i18n 키를 준다 (자유 문자열이 아니다) */
   note: string | null;
+  resetCreditsAvailable: number | null;
 }
 
 interface RunwayStatus {
@@ -941,6 +942,7 @@ interface Settings {
   wakeOnNotify: boolean;
   hapticsEnabled: boolean;
   hapticsOnTurnEnd: boolean;
+  codexAppServerFallback: boolean;
   language: string | null;
   quietEnabled: boolean;
   quietStartHour: number;
@@ -1272,6 +1274,11 @@ function AccountRows({
                 <span>
                   {t(lang, "acctWeekly", { n: a.sevenDayRemaining.toFixed(0) })}
                   {weeklyReset && ` · ${weeklyReset}`}
+                </span>
+              )}
+              {!!a.resetCreditsAvailable && (
+                <span>
+                  {t(lang, "acctResetCredits", { n: a.resetCreditsAvailable })}
                 </span>
               )}
             </div>
@@ -1633,6 +1640,7 @@ function SettingsView() {
     wakeOnNotify: true,
     hapticsEnabled: true,
     hapticsOnTurnEnd: true,
+    codexAppServerFallback: true,
     language: null,
     quietEnabled: false,
     quietStartHour: 22,
@@ -1884,6 +1892,18 @@ function SettingsView() {
               onChange={(e) => update({ hapticsOnTurnEnd: e.target.checked })}
             />
           </label>
+        )}
+
+        <label className="setting-row toggle-row">
+          <span>{tr("codexAppServerFallback")}</span>
+          <input
+            type="checkbox"
+            checked={settings.codexAppServerFallback}
+            onChange={(e) => update({ codexAppServerFallback: e.target.checked })}
+          />
+        </label>
+        {settings.codexAppServerFallback && (
+          <p className="setting-hint">{tr("codexAppServerFallbackHint")}</p>
         )}
 
         <label className="setting-row toggle-row">

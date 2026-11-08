@@ -161,6 +161,23 @@ trait UsageProvider {
     (2026-11 확인: 8월 이후 안 쓴 홈의 토큰이 `invalid_jwt`로 401)
   - API가 실패하면 로컬 rollout의 마지막 기록으로 버틴다. 리셋 시각이 지난 기록은
     사용률 0으로 보고, 30일 안에 기록도 없으면 실패 사유를 띄운다
+  - **401 계정은 `codex app-server`로 한 번 더 묻는다** (`codex/app_server.rs`, 설정
+    `codex_app_server_fallback`, 기본 켜짐). 토큰 갱신을 CLI 자신에게 맡기는 길이라
+    우리가 refresh token을 쓰지 않는다. JSON-RPC는 줄 단위이고 `jsonrpc` 필드가 없다 —
+    `initialize` → `initialized` 알림 → `account/rateLimits/read`. 응답의 `usedPercent`는
+    정수, `resetsAt`은 epoch 초(null 가능), `rateLimitResetCredits.availableCount`가
+    남은 무료 리셋 횟수다. 15초 안에 답이 없으면 자식을 죽이고, 실패해도 180초 안에는
+    다시 띄우지 않는다
+  - **떠 있는 세션 옆에서 app-server를 띄워도 되는지는 판정 불가**(2026-11-08 실험,
+    codex-cli 0.166.0, `codex-runtime-home`의 Plus 계정 하나만). 같은 `CODEX_HOME`으로
+    세션 A(턴 실행)를 띄운 채 B로 사용량을 묻고 A에서 다음 턴을 돌려봤는데, 그 계정의
+    refresh token이 이미 폐기된 상태라 A의 두 턴 모두 `unauthorized`("refresh token was
+    revoked")로 실패했고 B도 wham/usage 401을 돌려받았다. 갱신이 한 번도 일어나지 않아
+    `auth.json` 해시와 `last_refresh`는 실험 내내 그대로였다 — 갱신 경합으로 세션이
+    깨지는지는 확인하지 못했다. 그 계정은 실험 전부터 로그아웃 상태였고 실험이 새로
+    로그아웃시킨 것은 없다. 그래서 **최근 `STALE_MS`(activity와 같은 5분) 안에 rollout이
+    자란 홈은 건너뛴다** — 도는 세션과 토큰 갱신을 겨루지 않게. refresh token까지 죽은
+    계정은 app-server로도 못 살리고 `error.stale_token`이 그대로 남는다(재로그인 필요)
 
 ### Gemini (`gemini.rs`) — 추정
 - **시계열**: `~/.gemini/tmp/<프로젝트>/logs.json`(JSON 배열), `type=="user"` 메시지 카운트

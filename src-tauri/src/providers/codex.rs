@@ -6,6 +6,8 @@
 //! 계정이 여럿이면 홈(`CODEX_HOME`)도 여럿이다. Claude와 달리 rollout 첫 줄
 //! (`session_meta`)에 `creator_account_id`가 남아 있어서 시계열까지 계정별로 가를 수 있다.
 
+mod app_server;
+
 use super::{
     find_recent_jsonl, AccountUsage, OfficialUsage, SampleCache, UsageProvider, UsageSample,
 };
@@ -53,6 +55,11 @@ const USER_AGENT: &str = "codex_cli_rs/0.166.0";
 /// 계정 id → (조회 시각, rate_limits 또는 실패 사유 i18n 키).
 type ApiResult = Result<RateLimits, &'static str>;
 static API_CACHE: LazyLock<Mutex<HashMap<String, (Instant, ApiResult)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// 계정 id → 마지막으로 app-server 폴백을 띄운 시각. 폴백도 실패하면 캐시엔 여전히
+/// 토큰 만료가 남아서, 이게 없으면 폴링마다 자식 프로세스를 다시 띄운다.
+static FALLBACK_AT: LazyLock<Mutex<HashMap<String, Instant>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// 동시 갱신 방지. UI 폴링과 백그라운드 루프가 캐시 만료 시점에 겹쳐도 한 번만 쏜다.
@@ -298,6 +305,9 @@ struct RateLimits {
     secondary: Option<RateWindow>,
     /// 구독 등급 (예: "plus", "pro").
     plan_type: Option<String>,
+    /// 남은 무료 리셋 횟수. app-server 응답에만 있어 rollout과 wham/usage 경로에선 None.
+    #[serde(skip)]
+    reset_credits: Option<u32>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -494,6 +504,15 @@ fn scan_snapshot(now_ms: i64) -> Snapshot {
 
     if let Ok(_guard) = FETCH_GUARD.try_lock() {
         refresh_api(&known);
+        refresh_app_server(
+            &known,
+            crate::settings::codex_app_server_fallback(),
+            &|home| home_busy(home, now_ms),
+            &|home| match app_server::find_codex_binary() {
+                Some(bin) => app_server::read_rate_limits(&bin, home, app_server::APP_SERVER_TIMEOUT),
+                None => Err("error.stale_token"),
+            },
+        );
     }
 
     let single = known.len() == 1;
@@ -520,6 +539,7 @@ fn scan_snapshot(now_ms: i64) -> Snapshot {
                 plan: plan.clone(),
                 note: usage.is_none().then_some(fail_note),
                 window_secs: usage.as_ref().map(|(_, w)| *w),
+                reset_credits_available: source.and_then(|rl| rl.reset_credits),
                 usage: usage.map(|(mut u, _)| {
                     u.plan = plan;
                     u
@@ -575,6 +595,84 @@ fn refresh_api(accounts: &[AuthInfo]) {
             cache.insert(id, (now, r));
         }
     }
+}
+
+/// 사용량 API가 토큰 만료를 돌려준 계정만 app-server로 다시 묻는다.
+///
+/// 성공했거나 rate limit, 일시 장애로 실패한 계정은 토큰 문제가 아니라 대상이 아니다.
+/// 대상은 캐시 락을 잡은 동안 모으고, 자식 프로세스는 락 밖에서 계정마다 스레드로
+/// 띄운다 — 순차로 띄우면 FETCH_GUARD를 계정 수 × 15초까지 쥐게 된다.
+///
+/// 세션이 도는 홈은 건너뛴다. 같은 홈에서 app-server가 토큰을 갱신하면 도는 세션이
+/// 들고 있는 refresh token이 죽을 수 있는데, 실험으로 그렇지 않다는 걸 확인하지
+/// 못했다(CLAUDE.md Codex 항목). 건너뛴 홈은 시도 기록을 남기지 않아 세션이 쉬면
+/// 다음 폴링에서 바로 묻는다.
+fn refresh_app_server(
+    accounts: &[AuthInfo],
+    enabled: bool,
+    busy: &dyn Fn(&Path) -> bool,
+    read: &(dyn Fn(&Path) -> ApiResult + Sync),
+) {
+    if !enabled {
+        return;
+    }
+    let expired: Vec<&AuthInfo> = {
+        let Ok(cache) = API_CACHE.lock() else {
+            return;
+        };
+        accounts
+            .iter()
+            .filter(|a| a.home.is_some())
+            .filter(|a| {
+                matches!(
+                    cache.get(&a.account_id),
+                    Some((_, Err("error.stale_token")))
+                )
+            })
+            .collect()
+    };
+    let targets: Vec<&AuthInfo> = {
+        let Ok(mut tried) = FALLBACK_AT.lock() else {
+            return;
+        };
+        let now = Instant::now();
+        expired
+            .into_iter()
+            .filter(|a| !a.home.as_deref().is_some_and(busy))
+            .filter(|a| {
+                let due = tried
+                    .get(&a.account_id)
+                    .is_none_or(|at| at.elapsed() >= API_TTL);
+                if due {
+                    tried.insert(a.account_id.clone(), now);
+                }
+                due
+            })
+            .collect()
+    };
+    if targets.is_empty() {
+        return;
+    }
+    let results: Vec<(String, ApiResult)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = targets
+            .iter()
+            .filter_map(|a| Some((a.account_id.clone(), a.home.clone()?)))
+            .map(|(id, home)| scope.spawn(move || (id, read(&home))))
+            .collect();
+        handles.into_iter().filter_map(|h| h.join().ok()).collect()
+    });
+    if let Ok(mut cache) = API_CACHE.lock() {
+        let now = Instant::now();
+        for (id, r) in results {
+            cache.insert(id, (now, r));
+        }
+    }
+}
+
+/// activity가 "쉬는 중"으로 보는 기준과 같다 — 둘이 어긋나면 pet은 쉬는데
+/// 폴백은 계속 건너뛰거나, 그 반대가 된다.
+fn home_busy(home: &Path, now_ms: i64) -> bool {
+    !find_recent_jsonl(&home.join("sessions"), now_ms - crate::activity::STALE_MS).is_empty()
 }
 
 #[derive(Deserialize)]
@@ -639,6 +737,7 @@ fn fetch_usage(acc: &AuthInfo) -> ApiResult {
         primary: Some(rl.primary_window.ok_or("error.unavailable")?.into()),
         secondary: rl.secondary_window.map(Into::into),
         plan_type: body.plan_type,
+        reset_credits: None,
     })
 }
 
@@ -782,11 +881,237 @@ mod tests {
             }),
             secondary: None,
             plan_type: Some("plus".into()),
+            reset_credits: None,
         };
         let (u, w) = to_usage(&rl, 2_000_000).unwrap();
         assert_eq!(w, 5 * 3600);
         assert_eq!(u.five_hour_utilization, 0.0);
         assert!(u.five_hour_resets_at.is_empty());
+    }
+
+    fn acct(id: &str) -> AuthInfo {
+        AuthInfo {
+            account_id: id.to_string(),
+            email: None,
+            plan: None,
+            home: Some(PathBuf::from(format!("/homes/{id}"))),
+            last_refresh: None,
+        }
+    }
+
+    fn sample_limits() -> RateLimits {
+        RateLimits {
+            primary: Some(RateWindow {
+                used_percent: 10.0,
+                resets_at: 4_000_000_000,
+                window_minutes: Some(300),
+            }),
+            secondary: None,
+            plan_type: Some("plus".into()),
+            reset_credits: Some(1),
+        }
+    }
+
+    /// 테스트끼리 전역 캐시를 같이 쓰므로 계정 id를 테스트마다 다르게 잡는다.
+    fn seed(id: &str, r: ApiResult) {
+        API_CACHE
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), (Instant::now(), r));
+    }
+
+    fn counting(
+        count: &std::sync::atomic::AtomicUsize,
+        result: ApiResult,
+    ) -> impl Fn(&Path) -> ApiResult + Sync + '_ {
+        move |_| {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            result.clone()
+        }
+    }
+
+    #[test]
+    fn healthy_or_transient_accounts_never_spawn() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        seed("fb-ok", Ok(sample_limits()));
+        seed("fb-429", Err("error.rate_limit"));
+        seed("fb-5xx", Err("error.unavailable"));
+        let accounts = [acct("fb-ok"), acct("fb-429"), acct("fb-5xx"), acct("fb-unseen")];
+        let count = AtomicUsize::new(0);
+        refresh_app_server(&accounts, true, &|_| false, &counting(&count, Ok(sample_limits())));
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+        assert!(matches!(api_cached("fb-ok"), Some(Ok(_))));
+        assert_eq!(api_cached("fb-429").unwrap().err(), Some("error.rate_limit"));
+    }
+
+    #[test]
+    fn expired_account_is_filled_and_cached() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        seed("fb-401", Err("error.stale_token"));
+        let accounts = [acct("fb-401")];
+        let count = AtomicUsize::new(0);
+        let read = counting(&count, Ok(sample_limits()));
+        refresh_app_server(&accounts, true, &|_| false, &read);
+        refresh_app_server(&accounts, true, &|_| false, &read);
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        let rl = api_cached("fb-401").unwrap().unwrap();
+        assert_eq!(rl.reset_credits, Some(1));
+    }
+
+    #[test]
+    fn failed_fallback_is_not_retried_within_ttl() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        seed("fb-401-again", Err("error.stale_token"));
+        let accounts = [acct("fb-401-again")];
+        let count = AtomicUsize::new(0);
+        let read = counting(&count, Err("error.stale_token"));
+        refresh_app_server(&accounts, true, &|_| false, &read);
+        refresh_app_server(&accounts, true, &|_| false, &read);
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        assert_eq!(api_cached("fb-401-again").unwrap().err(), Some("error.stale_token"));
+    }
+
+    #[test]
+    fn missing_binary_leaves_stale_token() {
+        seed("fb-nobin", Err("error.stale_token"));
+        refresh_app_server(&[acct("fb-nobin")], true, &|_| false, &|_| Err("error.stale_token"));
+        assert_eq!(api_cached("fb-nobin").unwrap().err(), Some("error.stale_token"));
+    }
+
+    #[test]
+    fn toggle_off_skips_everything() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        seed("fb-off", Err("error.stale_token"));
+        let count = AtomicUsize::new(0);
+        refresh_app_server(&[acct("fb-off")], false, &|_| false, &counting(&count, Ok(sample_limits())));
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+        assert_eq!(api_cached("fb-off").unwrap().err(), Some("error.stale_token"));
+    }
+
+    #[test]
+    fn busy_home_is_skipped_and_retried_once_idle() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        seed("fb-busy", Err("error.stale_token"));
+        seed("fb-idle", Err("error.stale_token"));
+        let accounts = [acct("fb-busy"), acct("fb-idle")];
+        let count = AtomicUsize::new(0);
+        let read = counting(&count, Ok(sample_limits()));
+        let busy = |home: &Path| home.ends_with("fb-busy");
+        refresh_app_server(&accounts, true, &busy, &read);
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        assert_eq!(api_cached("fb-busy").unwrap().err(), Some("error.stale_token"));
+        assert!(matches!(api_cached("fb-idle"), Some(Ok(_))));
+        refresh_app_server(&accounts, true, &|_| false, &read);
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+        assert!(matches!(api_cached("fb-busy"), Some(Ok(_))));
+    }
+
+    #[test]
+    fn home_busy_follows_recent_rollouts() {
+        let home = std::env::temp_dir().join(format!("trw-codex-busy-{}", std::process::id()));
+        let day = home.join("sessions/2026/11/08");
+        fs::create_dir_all(&day).unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        assert!(!home_busy(&home.join("nowhere"), now));
+        assert!(!home_busy(&home, now));
+        fs::write(day.join("rollout-x.jsonl"), "{}\n").unwrap();
+        assert!(home_busy(&home, now));
+        assert!(!home_busy(&home, now + crate::activity::STALE_MS + 60_000));
+        fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn slow_fallback_does_not_hold_cache_lock_and_runs_in_parallel() {
+        seed("fb-slow-a", Err("error.stale_token"));
+        seed("fb-slow-b", Err("error.stale_token"));
+        seed("fb-probe", Ok(sample_limits()));
+        let accounts = [acct("fb-slow-a"), acct("fb-slow-b")];
+        let start = Instant::now();
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                refresh_app_server(&accounts, true, &|_| false, &|_| {
+                    std::thread::sleep(Duration::from_millis(600));
+                    Ok(sample_limits())
+                })
+            });
+            std::thread::sleep(Duration::from_millis(150));
+            let probe = Instant::now();
+            assert!(api_cached("fb-probe").is_some());
+            assert!(probe.elapsed() < Duration::from_millis(100), "{:?}", probe.elapsed());
+        });
+        // 둘을 순차로 띄웠다면 1.2초를 넘는다.
+        assert!(start.elapsed() < Duration::from_millis(1100), "{:?}", start.elapsed());
+        assert!(matches!(api_cached("fb-slow-b"), Some(Ok(_))));
+    }
+
+    /// 실제 값과 겹칠 일 없는 가짜 토큰.
+    const FAKE_ACCESS: &str = "fake-access-7f3a9c";
+    const FAKE_REFRESH: &str = "fake-refresh-1b2d4e";
+
+    fn fake_home(name: &str, with_access: bool) -> PathBuf {
+        let home = std::env::temp_dir().join(format!("trw-codex-secret-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home);
+        fs::create_dir_all(&home).unwrap();
+        let claims = serde_json::json!({
+            "email": "dev@example.com",
+            "https://api.openai.com/auth": {"chatgpt_plan_type": "plus", "chatgpt_account_id": "acct-fake"}
+        });
+        let body = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(claims.to_string());
+        let mut tokens = serde_json::json!({
+            "account_id": "acct-fake",
+            "id_token": format!("e30.{body}.sig"),
+            "refresh_token": FAKE_REFRESH,
+        });
+        if with_access {
+            tokens["access_token"] = serde_json::json!(FAKE_ACCESS);
+        }
+        let auth = serde_json::json!({"tokens": tokens, "last_refresh": "2026-11-01T00:00:00Z"});
+        fs::write(home.join("auth.json"), auth.to_string()).unwrap();
+        home
+    }
+
+    #[test]
+    fn auth_info_and_notes_hold_no_token() {
+        use crate::providers::secret_check::assert_no_secret;
+        let secrets = [FAKE_ACCESS, FAKE_REFRESH];
+        let home = fake_home("info", true);
+        let info = read_auth(&home).unwrap();
+        let shown = format!(
+            "{} {:?} {:?} {:?} {:?}",
+            info.account_id, info.email, info.plan, info.home, info.last_refresh
+        );
+        assert_no_secret("AuthInfo", &shown, &secrets);
+        assert_eq!(info.email.as_deref(), Some("dev@example.com"));
+
+        let no_token = fake_home("notoken", false);
+        let mut acc = read_auth(&no_token).unwrap();
+        acc.home = Some(no_token.clone());
+        let r = fetch_usage(&acc);
+        assert_eq!(r.as_ref().err(), Some(&"error.no_token"));
+        assert_no_secret("fetch 실패 노트", &format!("{:?}", r.err()), &secrets);
+        let _ = fs::remove_dir_all(&home);
+        let _ = fs::remove_dir_all(&no_token);
+    }
+
+    #[test]
+    fn app_server_error_note_drops_server_message() {
+        use crate::providers::secret_check::assert_no_secret;
+        use std::os::unix::fs::PermissionsExt;
+        let home = fake_home("appserver", true);
+        let bin = home.join("codex");
+        // 서버가 에러 메시지에 토큰을 실어 보내도 노트에는 i18n 키만 남아야 한다.
+        let script = format!(
+            "#!/bin/sh\necho 'Authorization: Bearer {FAKE_ACCESS}' >&2\nread l; echo '{{\"id\":1,\"result\":{{}}}}'\nread l; read l\n\
+             echo '{{\"id\":2,\"error\":{{\"message\":\"401 Bearer {FAKE_ACCESS} refresh {FAKE_REFRESH}\"}}}}'\n"
+        );
+        fs::write(&bin, script).unwrap();
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+        let r = app_server::read_rate_limits(&bin, &home, Duration::from_secs(5));
+        let note = r.as_ref().err().copied().unwrap();
+        assert_eq!(note, "error.stale_token");
+        assert_no_secret("app-server 노트", note, &[FAKE_ACCESS, FAKE_REFRESH]);
+        assert_no_secret("app-server 로그", &format!("{:?}", r.err()), &[FAKE_ACCESS, FAKE_REFRESH]);
+        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
