@@ -400,6 +400,68 @@ fn glog_tod_ms(line: &str) -> Option<i64> {
     Some(((h * 60 + m) * 60 + s) * 1000 + ms)
 }
 
+// --- Codex 훅 상태 ---
+
+/// `trw hook codex`가 세션마다 남기는 상태 한 줄. 같은 모양을 `trw`가 쓴다.
+#[derive(serde::Deserialize)]
+struct HookState {
+    state: String,
+    at_ms: i64,
+}
+
+/// 훅 상태 디렉토리의 세션별 상태들. 쓰는 중인 임시 파일(`.`으로 시작)은 건너뛴다.
+fn read_hook_states(dir: &Path) -> Vec<(String, i64)> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with("codex-") && name.ends_with(".json")
+        })
+        .filter_map(|e| {
+            let raw = std::fs::read_to_string(e.path()).ok()?;
+            let st: HookState = serde_json::from_str(raw.trim()).ok()?;
+            Some((st.state, st.at_ms))
+        })
+        .collect()
+}
+
+/// 훅 상태로 낸 Codex 활동. 신선한(`STALE_MS` 안) 상태가 없으면 None — rollout 판정으로 넘긴다.
+///
+/// 세션이 여럿이면 하나라도 도는 중이면 도는 중이다. rollout은 최근 파일 하나만 봐서
+/// 다른 세션이 끝난 순간 도는 세션을 놓치는데, 훅은 세션마다 파일이 따로라 안 놓친다.
+fn hook_activity(states: &[(String, i64)], now_ms: i64) -> Option<AgentActivity> {
+    let fresh: Vec<&(String, i64)> = states
+        .iter()
+        .filter(|(_, at)| now_ms - at <= STALE_MS)
+        .collect();
+    if let Some(at) = fresh
+        .iter()
+        .filter(|(s, _)| s == "working")
+        .map(|(_, at)| *at)
+        .max()
+    {
+        return Some(AgentActivity::new("Codex", ActivityState::Working, at));
+    }
+    let (state, at) = fresh.iter().max_by_key(|(_, at)| *at)?;
+    let state = match state.as_str() {
+        "done" => done_state(*at, now_ms),
+        _ => ActivityState::Idle,
+    };
+    Some(AgentActivity::new("Codex", state, *at))
+}
+
+fn codex_hook_activity(now_ms: i64) -> Option<AgentActivity> {
+    if !crate::settings::codex_hooks_installed() {
+        return None;
+    }
+    let dir = crate::settings::app_dir()?.join("hooks");
+    hook_activity(&read_hook_states(&dir), now_ms)
+}
+
 // --- 진입점 ---
 
 /// 활성화된 도구들의 현재 활동 상태. blocking I/O — 호출부에서 `spawn_blocking`.
@@ -438,6 +500,12 @@ pub fn detect_all() -> Vec<AgentActivity> {
         if disabled.iter().any(|d| d == tool) {
             continue;
         }
+        if *tool == "Codex" {
+            if let Some(a) = codex_hook_activity(now_ms) {
+                out.push(a);
+                continue;
+            }
+        }
         let Some(path) = path else { continue };
         let Some(mt) = mtime_ms(&path) else { continue };
         // 오래 안 자란 파일은 죽은 세션 — 마지막 줄이 "도는 중" 모양이어도 쉬는 것으로 본다.
@@ -461,6 +529,63 @@ mod tests {
     use super::*;
 
     const NOW: i64 = 1_786_000_000_000;
+
+    fn codex_complete_rollout(ts_ms: i64) -> Vec<String> {
+        let ts = chrono::DateTime::from_timestamp_millis(ts_ms).unwrap().to_rfc3339();
+        vec![
+            format!(r#"{{"type":"event_msg","timestamp":"{ts}","payload":{{"type":"task_started"}}}}"#),
+            format!(r#"{{"type":"event_msg","timestamp":"{ts}","payload":{{"type":"task_complete"}}}}"#),
+        ]
+    }
+
+    #[test]
+    fn fresh_working_hook_beats_completed_rollout() {
+        // 다른 세션이 막 끝나 rollout은 완료지만 훅으로는 아직 도는 세션이 있다.
+        let rollout = detect_codex(&codex_complete_rollout(NOW - 1_000), NOW, NOW).unwrap();
+        assert_eq!(rollout.state, ActivityState::JustDone);
+        let states = vec![
+            ("done".to_string(), NOW - 1_000),
+            ("working".to_string(), NOW - 30_000),
+        ];
+        let a = hook_activity(&states, NOW).unwrap();
+        assert_eq!(a.state, ActivityState::Working);
+        assert_eq!(a.since_ms, NOW - 30_000);
+    }
+
+    #[test]
+    fn stale_hook_falls_back_to_rollout() {
+        let six_min = 6 * 60 * 1000;
+        let states = vec![("working".to_string(), NOW - six_min)];
+        assert!(hook_activity(&states, NOW).is_none());
+    }
+
+    #[test]
+    fn newest_finished_hook_decides_state() {
+        let states = vec![
+            ("idle".to_string(), NOW - 60_000),
+            ("done".to_string(), NOW - 2_000),
+        ];
+        assert_eq!(hook_activity(&states, NOW).unwrap().state, ActivityState::JustDone);
+        let states = vec![("interrupted".to_string(), NOW - 2_000)];
+        assert_eq!(hook_activity(&states, NOW).unwrap().state, ActivityState::Idle);
+    }
+
+    #[test]
+    fn hook_state_files_are_read_and_temp_files_skipped() {
+        let dir = std::env::temp_dir().join(format!("trw-hook-states-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("codex-s1.json"),
+            format!("{{\"tool\":\"codex\",\"state\":\"working\",\"at_ms\":{NOW},\"session\":\"s1\",\"home\":\"/h\"}}\n"),
+        )
+        .unwrap();
+        std::fs::write(dir.join(".codex-s2.json.1.tmp"), "{").unwrap();
+        std::fs::write(dir.join("codex-broken.json"), "{").unwrap();
+        let states = read_hook_states(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(states, vec![("working".to_string(), NOW)]);
+    }
 
     #[test]
     fn claude_tool_use_is_working() {
