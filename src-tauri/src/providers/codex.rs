@@ -507,6 +507,7 @@ fn scan_snapshot(now_ms: i64) -> Snapshot {
         refresh_app_server(
             &known,
             crate::settings::codex_app_server_fallback(),
+            &|home| home_busy(home, now_ms),
             &|home| match app_server::find_codex_binary() {
                 Some(bin) => app_server::read_rate_limits(&bin, home, app_server::APP_SERVER_TIMEOUT),
                 None => Err("error.stale_token"),
@@ -601,9 +602,15 @@ fn refresh_api(accounts: &[AuthInfo]) {
 /// 성공했거나 rate limit, 일시 장애로 실패한 계정은 토큰 문제가 아니라 대상이 아니다.
 /// 대상은 캐시 락을 잡은 동안 모으고, 자식 프로세스는 락 밖에서 계정마다 스레드로
 /// 띄운다 — 순차로 띄우면 FETCH_GUARD를 계정 수 × 15초까지 쥐게 된다.
+///
+/// 세션이 도는 홈은 건너뛴다. 같은 홈에서 app-server가 토큰을 갱신하면 도는 세션이
+/// 들고 있는 refresh token이 죽을 수 있는데, 실험으로 그렇지 않다는 걸 확인하지
+/// 못했다(CLAUDE.md Codex 항목). 건너뛴 홈은 시도 기록을 남기지 않아 세션이 쉬면
+/// 다음 폴링에서 바로 묻는다.
 fn refresh_app_server(
     accounts: &[AuthInfo],
     enabled: bool,
+    busy: &dyn Fn(&Path) -> bool,
     read: &(dyn Fn(&Path) -> ApiResult + Sync),
 ) {
     if !enabled {
@@ -631,6 +638,7 @@ fn refresh_app_server(
         let now = Instant::now();
         expired
             .into_iter()
+            .filter(|a| !a.home.as_deref().is_some_and(busy))
             .filter(|a| {
                 let due = tried
                     .get(&a.account_id)
@@ -659,6 +667,12 @@ fn refresh_app_server(
             cache.insert(id, (now, r));
         }
     }
+}
+
+/// activity가 "쉬는 중"으로 보는 기준과 같다 — 둘이 어긋나면 pet은 쉬는데
+/// 폴백은 계속 건너뛰거나, 그 반대가 된다.
+fn home_busy(home: &Path, now_ms: i64) -> bool {
+    !find_recent_jsonl(&home.join("sessions"), now_ms - crate::activity::STALE_MS).is_empty()
 }
 
 #[derive(Deserialize)]
@@ -924,7 +938,7 @@ mod tests {
         seed("fb-5xx", Err("error.unavailable"));
         let accounts = [acct("fb-ok"), acct("fb-429"), acct("fb-5xx"), acct("fb-unseen")];
         let count = AtomicUsize::new(0);
-        refresh_app_server(&accounts, true, &counting(&count, Ok(sample_limits())));
+        refresh_app_server(&accounts, true, &|_| false, &counting(&count, Ok(sample_limits())));
         assert_eq!(count.load(Ordering::SeqCst), 0);
         assert!(matches!(api_cached("fb-ok"), Some(Ok(_))));
         assert_eq!(api_cached("fb-429").unwrap().err(), Some("error.rate_limit"));
@@ -937,8 +951,8 @@ mod tests {
         let accounts = [acct("fb-401")];
         let count = AtomicUsize::new(0);
         let read = counting(&count, Ok(sample_limits()));
-        refresh_app_server(&accounts, true, &read);
-        refresh_app_server(&accounts, true, &read);
+        refresh_app_server(&accounts, true, &|_| false, &read);
+        refresh_app_server(&accounts, true, &|_| false, &read);
         assert_eq!(count.load(Ordering::SeqCst), 1);
         let rl = api_cached("fb-401").unwrap().unwrap();
         assert_eq!(rl.reset_credits, Some(1));
@@ -951,8 +965,8 @@ mod tests {
         let accounts = [acct("fb-401-again")];
         let count = AtomicUsize::new(0);
         let read = counting(&count, Err("error.stale_token"));
-        refresh_app_server(&accounts, true, &read);
-        refresh_app_server(&accounts, true, &read);
+        refresh_app_server(&accounts, true, &|_| false, &read);
+        refresh_app_server(&accounts, true, &|_| false, &read);
         assert_eq!(count.load(Ordering::SeqCst), 1);
         assert_eq!(api_cached("fb-401-again").unwrap().err(), Some("error.stale_token"));
     }
@@ -960,7 +974,7 @@ mod tests {
     #[test]
     fn missing_binary_leaves_stale_token() {
         seed("fb-nobin", Err("error.stale_token"));
-        refresh_app_server(&[acct("fb-nobin")], true, &|_| Err("error.stale_token"));
+        refresh_app_server(&[acct("fb-nobin")], true, &|_| false, &|_| Err("error.stale_token"));
         assert_eq!(api_cached("fb-nobin").unwrap().err(), Some("error.stale_token"));
     }
 
@@ -969,9 +983,41 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
         seed("fb-off", Err("error.stale_token"));
         let count = AtomicUsize::new(0);
-        refresh_app_server(&[acct("fb-off")], false, &counting(&count, Ok(sample_limits())));
+        refresh_app_server(&[acct("fb-off")], false, &|_| false, &counting(&count, Ok(sample_limits())));
         assert_eq!(count.load(Ordering::SeqCst), 0);
         assert_eq!(api_cached("fb-off").unwrap().err(), Some("error.stale_token"));
+    }
+
+    #[test]
+    fn busy_home_is_skipped_and_retried_once_idle() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        seed("fb-busy", Err("error.stale_token"));
+        seed("fb-idle", Err("error.stale_token"));
+        let accounts = [acct("fb-busy"), acct("fb-idle")];
+        let count = AtomicUsize::new(0);
+        let read = counting(&count, Ok(sample_limits()));
+        let busy = |home: &Path| home.ends_with("fb-busy");
+        refresh_app_server(&accounts, true, &busy, &read);
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        assert_eq!(api_cached("fb-busy").unwrap().err(), Some("error.stale_token"));
+        assert!(matches!(api_cached("fb-idle"), Some(Ok(_))));
+        refresh_app_server(&accounts, true, &|_| false, &read);
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+        assert!(matches!(api_cached("fb-busy"), Some(Ok(_))));
+    }
+
+    #[test]
+    fn home_busy_follows_recent_rollouts() {
+        let home = std::env::temp_dir().join(format!("trw-codex-busy-{}", std::process::id()));
+        let day = home.join("sessions/2026/11/08");
+        fs::create_dir_all(&day).unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        assert!(!home_busy(&home.join("nowhere"), now));
+        assert!(!home_busy(&home, now));
+        fs::write(day.join("rollout-x.jsonl"), "{}\n").unwrap();
+        assert!(home_busy(&home, now));
+        assert!(!home_busy(&home, now + crate::activity::STALE_MS + 60_000));
+        fs::remove_dir_all(&home).unwrap();
     }
 
     #[test]
@@ -983,7 +1029,7 @@ mod tests {
         let start = Instant::now();
         std::thread::scope(|s| {
             s.spawn(|| {
-                refresh_app_server(&accounts, true, &|_| {
+                refresh_app_server(&accounts, true, &|_| false, &|_| {
                     std::thread::sleep(Duration::from_millis(600));
                     Ok(sample_limits())
                 })

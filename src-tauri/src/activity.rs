@@ -26,7 +26,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 const TAIL_BYTES: u64 = 256 * 1024;
 /// 파일이 이만큼 안 자라면 세션이 죽은 것으로 본다. 턴 중간에 도구를 종료하면 마지막
 /// 줄이 "도는 중" 모양으로 남아 pet이 영원히 일하게 되는 걸 막는 안전장치다.
-const STALE_MS: i64 = 5 * 60 * 1000;
+pub const STALE_MS: i64 = 5 * 60 * 1000;
 /// 턴이 끝난 뒤 이 시간 동안만 `JustDone`. 지나면 `Idle`.
 const JUST_DONE_MS: i64 = 8_000;
 /// 완료 이벤트가 없는 도구(Antigravity)에서 "요청 흔적이 이 안에 있으면 도는 중".
