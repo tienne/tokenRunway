@@ -19,6 +19,7 @@ import petGood from "./assets/pet/default/good.svg";
 import petWarn from "./assets/pet/default/warn.svg";
 import petDanger from "./assets/pet/default/danger.svg";
 import petSpriteSheet from "./assets/pet/default/sprite.webp";
+import { NotchView } from "./Notch";
 import "./App.css";
 
 type PetLevel = "idle" | "good" | "warn" | "danger";
@@ -2874,6 +2875,7 @@ function App() {
   if (label === "history") return <HistoryView />;
   if (label === "inbox") return <InboxView />;
   if (label === "pet") return <PetOverlay />;
+  if (label === "notch") return <NotchView />;
   return <Dashboard />;
 }
 

@@ -7,6 +7,7 @@ mod inbox;
 mod installer;
 mod ipc;
 mod landing;
+mod notch;
 mod notify_os;
 mod pet;
 mod providers;
@@ -1676,7 +1677,8 @@ pub fn run() {
             inbox_remove,
             inbox_clear,
             install_trw,
-            trw_status
+            trw_status,
+            notch::notch_layout
         ])
         // pet 우클릭 메뉴와 트레이 메뉴 둘 다 이 하나의 전역 핸들러로 들어온다 — Tauri는
         // TrayIconBuilder::on_menu_event와 Builder::on_menu_event를 같은
@@ -1807,6 +1809,10 @@ pub fn run() {
 
             // 데스크톱 pet 오버레이 — 화면을 돌아다니는 항상-표시 창.
             create_pet_window(&app.handle().clone());
+
+            if std::env::var_os("TRW_NOTCH_PROTO").is_some() {
+                notch::ensure(app.handle());
+            }
 
             // 백그라운드 경보 루프 시작 (창이 닫혀도 메뉴바 상주 상태로 동작)
             spawn_alert_loop(app.handle().clone());
