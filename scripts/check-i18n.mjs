@@ -82,8 +82,13 @@ const placeholderKeys = new Set(
 // 템플릿 리터럴이면 접두가 같은 키 전부를 본다. 그 밖의 식(백엔드가 준 키 등)은
 // 정적으로 알 수 없어 건너뛴다.
 function candidateKeys(expr) {
-  const tpl = expr.match(/^`([^`$]*)\$\{/);
-  if (tpl) return [...ko.keys()].filter((k) => k.startsWith(tpl[1]));
+  // 템플릿 키는 앞뒤 고정부를 다 맞춰 본다. 앞부분만 보면 `${x}Title`이 모든 키에 걸린다.
+  const tpl = expr.match(/^`([^`]*\$\{[^`]*)`$/);
+  if (tpl) {
+    const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`^${tpl[1].split(/\$\{[^}]*\}/).map(esc).join(".+")}$`);
+    return [...ko.keys()].filter((k) => re.test(k));
+  }
   return [...expr.matchAll(/"([^"]+)"|'([^']+)'/g)].map((m) => m[1] ?? m[2]);
 }
 
