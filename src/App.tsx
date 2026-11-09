@@ -139,7 +139,7 @@ function worstPetLevel(statuses: RunwayStatus[]): PetLevel {
 }
 
 /** 에이전트 활동 상태 — 잔여율(PetLevel)과 독립된 축. Rust `activity::ActivityState`와 짝. */
-type ActivityState = "working" | "justDone" | "idle";
+type ActivityState = "working" | "waiting" | "justDone" | "idle";
 
 export interface AgentActivity {
   tool: string;
@@ -148,14 +148,14 @@ export interface AgentActivity {
   failed: boolean;
 }
 
-/** pet이 따라갈 도구 하나 — 도는 게 있으면 그중 가장 최근, 없으면 가장 최근에 끝난 것.
+/** pet이 따라갈 도구 하나 — 도는 게 있으면 그중 가장 최근, 다음은 입력을 기다리는 것, 그다음 막 끝난 것.
  * 여러 도구를 동시에 굴려도 pet은 하나뿐이라 제일 최근에 움직인 쪽을 대표로 보여준다. */
 export function leadActivity(list: AgentActivity[]): AgentActivity | null {
   const pick = (state: ActivityState) =>
     list
       .filter((a) => a.state === state)
       .sort((a, b) => b.sinceMs - a.sinceMs)[0] ?? null;
-  return pick("working") ?? pick("justDone");
+  return pick("working") ?? pick("waiting") ?? pick("justDone");
 }
 
 function petImageSrc(level: PetLevel, bundle: PetBundle | null): string {
@@ -264,6 +264,8 @@ function pickSpriteAnimation(opts: {
   if (alerting && has("jumping")) return "jumping";
   // 작업 중엔 제자리 작업 포즈가 기본이고, 산책 구간에서만 방향별 걷기로 내려간다.
   if (activity?.state === "working" && !strolling && has("running")) return "running";
+  // 권한 확인을 기다리는 세션은 사람이 봐야 움직이니 손을 흔들어 부른다.
+  if (activity?.state === "waiting" && has("waving")) return "waving";
   if (activity?.state === "justDone") {
     if (activity.failed && has("failed")) return "failed";
     if (has("waving")) return "waving";
@@ -768,6 +770,8 @@ function PetOverlay() {
   // 잔여율 경보가 활동 알림보다 급하니 먼저 자리를 차지한다.
   const speechBubble = alertFlash ? (
     <div className="pet-speech-bubble">{t(lang, `pet.alert.${alertFlash.kind}`, { tool: alertFlash.tool })}</div>
+  ) : activity?.state === "waiting" ? (
+    <div className="pet-speech-bubble">{t(lang, "pet.activity.waiting", { tool: activity.tool })}</div>
   ) : doneFlash ? (
     <div className="pet-speech-bubble">
       {t(lang, doneFlash.failed ? "pet.activity.failed" : "pet.activity.done", {
