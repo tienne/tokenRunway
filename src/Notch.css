@@ -61,6 +61,23 @@
   color: #30d158;
 }
 
+/* 입력 대기는 systemYellow(#ffd60a, 검정 대비 14.9:1). 위험 색(#ff453a)을 쓰면 잔여율 경고로
+   읽히고, 작업 중(#64d2ff)과는 밝기가 비슷해 색만으론 안 갈리니 속 빈 고리를 앞에 붙인다.
+   세션 목록 점과 같은 모양이다. */
+.notch-activity.waiting {
+  color: #ffd60a;
+}
+
+.notch-activity.waiting::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  box-sizing: border-box;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+
 .notch-notice {
   flex: none;
   display: flex;

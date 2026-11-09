@@ -58,7 +58,7 @@ export function SessionList({
           <>
             <span className={`session-dot ${state}`} aria-hidden />
             <span className="session-name">{s.project ?? s.tool}</span>
-            <span className="session-state">{t(lang, `sessions.${state}`)}</span>
+            <span className={`session-state ${state}`}>{t(lang, `sessions.${state}`)}</span>
             <span className="session-age">{formatAge(s.sinceMs, lang)}</span>
           </>
         );

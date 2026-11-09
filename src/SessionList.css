@@ -46,8 +46,12 @@ button.session-row:focus-visible {
   background: #64d2ff;
 }
 
+/* 입력 대기만 속 빈 고리 — 작업 중과 밝기가 비슷해 색이 안 보여도 모양으로 갈린다.
+   고리 선이 얇아도 검정 대비 14.9:1이라 비텍스트 기준(3:1)을 넉넉히 넘는다. */
 .session-dot.waiting {
-  background: #ffd60a;
+  background: transparent;
+  box-sizing: border-box;
+  border: 1.5px solid #ffd60a;
 }
 
 .session-dot.justDone {
@@ -73,4 +77,8 @@ button.session-row:focus-visible {
 
 .session-age {
   font-variant-numeric: tabular-nums;
+}
+
+.session-state.waiting {
+  color: #ffd60a;
 }
