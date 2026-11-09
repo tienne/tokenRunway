@@ -19,9 +19,16 @@ interface NotchLayout {
   barHeight: number;
   expandedWidth: number;
   expandedHeight: number;
+  noticeHeight: number;
 }
 
-type NotchMode = "collapsed" | "full";
+type NotchMode = "collapsed" | "notice" | "full";
+
+interface Notice {
+  id: string;
+  title: string;
+  context: string | null;
+}
 
 /** 트레이와 같은 규칙 — 지정한 도구, 없으면 공식 잔여율 중 가장 적게 남은 도구. */
 function pickRepresentative(
@@ -49,6 +56,7 @@ export function NotchView() {
   const [lang, setLang] = useState<Lang>(resolveLang(null));
   const [trayTool, setTrayTool] = useState<string | null>(null);
   const [pollSeconds, setPollSeconds] = useState(30);
+  const [notice, setNotice] = useState<Notice | null>(null);
 
   useEffect(() => {
     document.documentElement.style.background = "transparent";
@@ -64,14 +72,17 @@ export function NotchView() {
         .catch(() => {});
     loadSettings();
     const unSettings = listen("settings-changed", loadSettings);
+    const unNotice = listen<Notice>("notch-notice", (e) => setNotice(e.payload));
     const unMode = listen<NotchMode>("notch-mode", (e) => {
       setMode(e.payload);
+      if (e.payload === "collapsed") setNotice(null);
       // 모니터가 바뀌어 다시 배치됐을 수 있어 펼칠 때마다 치수를 새로 받는다.
       invoke<NotchLayout>("notch_layout").then(setLayout).catch(() => {});
     });
     return () => {
       unSettings.then((f) => f());
       unMode.then((f) => f());
+      unNotice.then((f) => f());
     };
   }, []);
 
@@ -100,6 +111,21 @@ export function NotchView() {
   const open = mode !== "collapsed";
   const islandWidth = layout.notchWidth + layout.wing * 2;
   const tools = statuses.filter((s) => s.available);
+  const height =
+    mode === "full"
+      ? layout.expandedHeight
+      : mode === "notice"
+        ? layout.barHeight + layout.noticeHeight
+        : layout.barHeight;
+
+  // 랜딩이 성공해야 inbox_land가 읽음으로 바꾼다. 실패하면 줄을 남겨 다시 누를 수 있게 한다.
+  const land = (n: Notice) =>
+    invoke("inbox_land", { id: n.id })
+      .then(() => {
+        setNotice(null);
+        invoke("notch_dismiss").catch(() => {});
+      })
+      .catch(() => {});
 
   return (
     <div className="notch-root">
@@ -107,7 +133,7 @@ export function NotchView() {
         className={`notch-island${open ? " open" : ""}${danger ? " danger" : ""}`}
         style={{
           width: open ? layout.expandedWidth : islandWidth,
-          height: open ? layout.expandedHeight : layout.barHeight,
+          height,
         }}
       >
         <div
@@ -128,6 +154,19 @@ export function NotchView() {
             {activity?.state === "justDone" && t(lang, "notch.justDone")}
           </span>
         </div>
+
+        {open && notice && (
+          <button
+            className="notch-notice"
+            style={{ height: layout.noticeHeight }}
+            onClick={() => land(notice)}
+          >
+            <span className="notch-notice-title">{notice.title}</span>
+            {notice.context && (
+              <span className="notch-notice-context">{notice.context}</span>
+            )}
+          </button>
+        )}
 
         {mode === "full" && (
           <ul className="notch-tools">

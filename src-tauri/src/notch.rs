@@ -9,7 +9,7 @@ use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
 use objc2::{class, msg_send, sel};
 use objc2_foundation::{NSArray, NSEdgeInsets, NSPoint, NSRect, NSSize};
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
@@ -23,6 +23,9 @@ const WING: f64 = 84.0;
 const EXPANDED_WIDTH: f64 = 380.0;
 const EXPANDED_HEIGHT: f64 = 236.0;
 const POLL_MS: u64 = 40;
+/// 완료 알림이 오면 섬 아래로 한 줄을 펼쳐두는 시간과 그 줄 높이.
+const NOTICE_MS: i64 = 6_000;
+const NOTICE_HEIGHT: f64 = 30.0;
 /// 모니터를 꽂거나 뺐는지 다시 재는 주기. Tauri에 디스플레이 변경 이벤트가 없다.
 const SCREEN_SYNC: Duration = Duration::from_secs(5);
 
@@ -41,6 +44,7 @@ const FULL_SCREEN_NONE: usize = 1 << 9;
 struct Geom {
     window: NSRect,
     island: NSRect,
+    notice: NSRect,
     expanded: NSRect,
     notch_width: f64,
     bar_height: f64,
@@ -55,11 +59,13 @@ pub struct NotchLayout {
     pub bar_height: f64,
     pub expanded_width: f64,
     pub expanded_height: f64,
+    pub notice_height: f64,
 }
 
 static GEOM: Mutex<Option<Geom>> = Mutex::new(None);
 static POLL_RUNNING: AtomicBool = AtomicBool::new(false);
 static WATCHING: AtomicBool = AtomicBool::new(false);
+static NOTICE_UNTIL: AtomicI64 = AtomicI64::new(0);
 
 fn rect_contains(r: &NSRect, p: NSPoint) -> bool {
     p.x >= r.origin.x
@@ -113,6 +119,12 @@ fn layout(screen: NSRect, notch_width: f64, bar_height: f64) -> Geom {
     Geom {
         window: rect(cx - win_w / 2.0, top - EXPANDED_HEIGHT, win_w, EXPANDED_HEIGHT),
         island: rect(cx - island_w / 2.0, top - bar_height, island_w, bar_height),
+        notice: rect(
+            cx - exp_w / 2.0,
+            top - bar_height - NOTICE_HEIGHT,
+            exp_w,
+            bar_height + NOTICE_HEIGHT,
+        ),
         expanded: rect(cx - exp_w / 2.0, top - EXPANDED_HEIGHT, exp_w, EXPANDED_HEIGHT),
         notch_width,
         bar_height,
@@ -128,6 +140,7 @@ pub fn layout_for_front() -> NotchLayout {
             bar_height: g.bar_height,
             expanded_width: g.expanded.size.width,
             expanded_height: g.expanded.size.height,
+            notice_height: NOTICE_HEIGHT,
         },
         None => NotchLayout::default(),
     }
@@ -305,6 +318,7 @@ fn spawn_watch(app: AppHandle) {
 #[serde(rename_all = "camelCase")]
 pub enum Mode {
     Collapsed,
+    Notice,
     Full,
 }
 
@@ -312,15 +326,18 @@ pub enum Mode {
 fn hit_rect(g: &Geom, mode: Mode) -> NSRect {
     match mode {
         Mode::Collapsed => g.island,
+        Mode::Notice => g.notice,
         Mode::Full => g.expanded,
     }
 }
 
 /// 커서 위치로 다음 모드를 정한다. 접힌 섬에 들어오면 펼치고, 펼친 영역을 벗어나야
 /// 접는다 — 같은 rect로 판정하면 펼치자마자 아래로 내려간 커서가 밖으로 잡혀 깜빡인다.
-fn next_mode(g: &Geom, mode: Mode, p: NSPoint) -> Mode {
+fn next_mode(g: &Geom, mode: Mode, p: NSPoint, notice: bool) -> Mode {
     if rect_contains(&hit_rect(g, mode), p) {
         Mode::Full
+    } else if notice {
+        Mode::Notice
     } else {
         Mode::Collapsed
     }
@@ -352,10 +369,11 @@ fn poll_until_closed(app: &AppHandle) {
         };
         let Some(g) = *GEOM.lock().unwrap() else { return };
         let p: NSPoint = unsafe { msg_send![class!(NSEvent), mouseLocation] };
-        let next = next_mode(&g, mode, p);
+        let notice = chrono::Utc::now().timestamp_millis() < NOTICE_UNTIL.load(Ordering::Relaxed);
+        let next = next_mode(&g, mode, p, notice);
         if next != mode {
             mode = next;
-            let _ = win.emit("notch-mode", mode);
+            let _ = app.emit_to(LABEL, "notch-mode", mode);
         }
         let ignore = !rect_contains(&hit_rect(&g, mode), p);
         if ignore != ignoring {
@@ -364,6 +382,38 @@ fn poll_until_closed(app: &AppHandle) {
         }
         std::thread::sleep(Duration::from_millis(POLL_MS));
     }
+}
+
+/// 알림 한 줄. 랜딩 대상 경로 같은 건 싣지 않는다 — 누르면 id로 `inbox_land`를 탄다.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct Notice<'a> {
+    id: &'a str,
+    title: &'a str,
+    context: Option<&'a str>,
+}
+
+/// 완료 알림이 오면 섬을 잠깐 펼쳐 한 줄을 보여준다. 접는 건 폴링 스레드가 시간을 보고 한다.
+pub fn announce(app: &AppHandle, item: &crate::inbox::InboxItem) {
+    if !crate::settings::notch_enabled() || GEOM.lock().unwrap().is_none() {
+        return;
+    }
+    let notice = Notice {
+        id: &item.id,
+        title: &item.title,
+        context: item.context.as_deref(),
+    };
+    let _ = app.emit_to(LABEL, "notch-notice", notice);
+    NOTICE_UNTIL.store(
+        chrono::Utc::now().timestamp_millis() + NOTICE_MS,
+        Ordering::Relaxed,
+    );
+}
+
+/// 알림 줄을 눌러 랜딩했으면 남은 시간을 기다리지 않고 접는다.
+#[tauri::command]
+pub fn notch_dismiss() {
+    NOTICE_UNTIL.store(0, Ordering::Relaxed);
 }
 
 #[tauri::command]
@@ -391,10 +441,22 @@ mod tests {
         let on_island = NSPoint::new(756.0, 970.0);
         let below_island = NSPoint::new(756.0, 900.0);
         let far = NSPoint::new(100.0, 500.0);
-        assert_eq!(next_mode(&g, Mode::Collapsed, below_island), Mode::Collapsed);
-        assert_eq!(next_mode(&g, Mode::Collapsed, on_island), Mode::Full);
-        assert_eq!(next_mode(&g, Mode::Full, below_island), Mode::Full);
-        assert_eq!(next_mode(&g, Mode::Full, far), Mode::Collapsed);
+        assert_eq!(next_mode(&g, Mode::Collapsed, below_island, false), Mode::Collapsed);
+        assert_eq!(next_mode(&g, Mode::Collapsed, on_island, false), Mode::Full);
+        assert_eq!(next_mode(&g, Mode::Full, below_island, false), Mode::Full);
+        assert_eq!(next_mode(&g, Mode::Full, far, false), Mode::Collapsed);
+    }
+
+    #[test]
+    fn notice_line_is_clickable_and_folds_back_when_it_expires() {
+        let g = layout(rect(0.0, 0.0, 1512.0, 982.0), 200.0, 32.0);
+        let on_line = NSPoint::new(756.0, 982.0 - 32.0 - 10.0);
+        let far = NSPoint::new(100.0, 500.0);
+        assert_eq!(next_mode(&g, Mode::Collapsed, far, true), Mode::Notice);
+        assert_eq!(next_mode(&g, Mode::Notice, on_line, true), Mode::Full);
+        // 알림 시간이 지나도 커서가 펼친 영역 안이면 그대로 둔다.
+        assert_eq!(next_mode(&g, Mode::Full, on_line, false), Mode::Full);
+        assert_eq!(next_mode(&g, Mode::Notice, far, false), Mode::Collapsed);
     }
 
     #[test]

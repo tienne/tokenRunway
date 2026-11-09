@@ -1031,6 +1031,11 @@ fn on_notify_request(req: inbox::NotifyRequest) {
         notify_os::show(&item);
         haptic::fire(haptic::Haptic::TaskDone);
     }
+    if fresh && !item.quiet && !completion_quiet_now() {
+        if let Some(app) = APP_HANDLE.get() {
+            notch::announce(app, &item);
+        }
+    }
     refresh_inbox_badge();
 }
 
@@ -1679,7 +1684,8 @@ pub fn run() {
             inbox_clear,
             install_trw,
             trw_status,
-            notch::notch_layout
+            notch::notch_layout,
+            notch::notch_dismiss
         ])
         // pet 우클릭 메뉴와 트레이 메뉴 둘 다 이 하나의 전역 핸들러로 들어온다 — Tauri는
         // TrayIconBuilder::on_menu_event와 Builder::on_menu_event를 같은

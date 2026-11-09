@@ -61,6 +61,37 @@
   color: #30d158;
 }
 
+.notch-notice {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.notch-notice:hover .notch-notice-title {
+  text-decoration: underline;
+}
+
+.notch-notice-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notch-notice-context {
+  flex: none;
+  color: #a1a1a6;
+  font-size: 11px;
+}
+
 .notch-tools {
   list-style: none;
   margin: 0;
