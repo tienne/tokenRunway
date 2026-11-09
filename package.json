@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "test": "cd src-tauri && cargo test",
     "preview": "vite preview",
     "tauri": "tauri",
     "build:trw": "bash scripts/build-trw.sh",
