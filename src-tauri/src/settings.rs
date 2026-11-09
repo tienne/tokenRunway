@@ -131,6 +131,9 @@ pub struct Settings {
     /// 사용량 API가 토큰 만료(401)를 돌려준 Codex 계정만 `codex app-server`로 다시 묻는다.
     #[serde(default = "default_true")]
     pub codex_app_server_fallback: bool,
+    /// 노치 양옆에 잔여율과 활동 상태를 띄울지. 메뉴바 위를 덮어서 기본은 꺼짐이다.
+    #[serde(default)]
+    pub notch_enabled: bool,
 }
 
 /// pet 배율 허용 범위 — 너무 작으면 못 잡고, 너무 크면 화면을 가린다.
@@ -178,6 +181,7 @@ impl Default for Settings {
             pet_last_y: None,
             pet_scale: 1.0,
             codex_app_server_fallback: true,
+            notch_enabled: false,
             completion_alerts_enabled: default_completion_alerts(),
             completion_alerts_quiet: false,
             haptics_enabled: default_haptics_enabled(),
@@ -325,6 +329,10 @@ pub fn disabled_tools() -> Vec<String> {
         .lock()
         .map(|s| s.disabled_tools.clone())
         .unwrap_or_default()
+}
+
+pub fn notch_enabled() -> bool {
+    SETTINGS.lock().map(|s| s.notch_enabled).unwrap_or(false)
 }
 
 /// 비활성(최근 사용량 0) 도구 숨김 여부.
