@@ -20,6 +20,7 @@ src-tauri/src/
 ├ landing.rs        알림 클릭 시 원래 세션으로 되돌리는 어댑터(Orca/Paseo/경로)
 ├ notify_os.rs      완료 알림의 OS 알림 발송 + 클릭 응답 수신
 ├ installer.rs      trw CLI·스킬을 사용자 환경에 설치(심링크·복사)
+├ notch.rs          노치 양옆 섬 — NSPanel 바꿔치기, 노치 지오메트리, 커서 폴링 클릭 통과
 └ providers/
    ├ mod.rs         UsageProvider trait + 공용 타입 + find_recent_jsonl 헬퍼
    ├ claude_code.rs Keychain OAuth + ~/.claude JSONL
@@ -377,6 +378,16 @@ bash scripts/build-trw.sh       # trw를 externalBin 자리에 놓기 (--debug�
 - **계정 중복 제거는 조직 UUID와 토큰 지문을 함께 본다** — 소스마다 프로필 유무가 달라
   한쪽은 조직 UUID를, 다른 쪽은 토큰 지문을 id로 받는다. 하나만 보면 같은 계정이 두 줄로
   남아 계정이 하나인 사용자에게 배지와 계정 줄이 뜬다
+- **노치 섬은 tao 창 클래스를 `TRWNotchPanel`(NSPanel 하위)로 바꿔치기한다** (`notch.rs`) —
+  그냥 NSWindow로 두면 메뉴바 위에 못 올라가고 누를 때마다 앱이 활성화돼 앞 앱 포커스를
+  빼앗는다. 바꿔치기는 인스턴스 크기가 같아야 안전해서 tao의 `focusable` ivar를 똑같이
+  붙이고, 크기가 다르면 전환을 포기하고 창을 닫는다(`panel_class_matches_tao_window_size`
+  테스트). NSPanel 기본값인 `hidesOnDeactivate`는 꺼야 한다 — 이 앱은 거의 항상 비활성이다.
+  `set_activation_policy`는 부르지 않는다(Dock 배지가 Regular에 묶여 있다)
+- **노치 펼침과 클릭 통과는 Rust 스레드가 정한다** — 창은 펼친 크기로 고정해두고 커서가
+  섬(펼친 뒤엔 펼친 영역) 안일 때만 `set_ignore_cursor_events(false)`로 바꾼다. 프론트가
+  hover를 보고 IPC로 알리면 그 왕복 사이 클릭이 뒤 창으로 샌다. 프론트는 `notch-mode`(collapsed/notice/full)만 받아 그린다.
+  노치 없는 화면에서는 창을 만들지 않고, 5초마다 화면 배치를 다시 재서 덮개를 다시 열면 되살린다
 - **완료 알림 클릭은 `tauri-plugin-notification`으로 못 받는다** — 데스크톱 구현이
   title/body/icon/sound만 넘기고 `action_type_id`를 버린다(`desktop.rs`의 `show()`).
   그래서 그 밑에 깔린 `mac-notification-sys`를 직접 쓴다(notify-rust 의존이라 crate가
