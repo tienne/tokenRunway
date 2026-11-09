@@ -131,8 +131,9 @@ pub struct Settings {
     /// 사용량 API가 토큰 만료(401)를 돌려준 Codex 계정만 `codex app-server`로 다시 묻는다.
     #[serde(default = "default_true")]
     pub codex_app_server_fallback: bool,
-    /// 노치 양옆에 잔여율과 활동 상태를 띄울지. 메뉴바 위를 덮어서 기본은 꺼짐이다.
-    #[serde(default)]
+    /// 노치 양옆에 잔여율과 활동 상태를 띄울지. 숫자를 한눈에 보는 자리를 노치가 맡으므로
+    /// 기본 켜짐이다 — 노치 없는 화면에서는 어차피 창을 만들지 않는다.
+    #[serde(default = "default_true")]
     pub notch_enabled: bool,
     /// 트레이 타이틀에 숫자를 띄울지. 기본은 노치가 보이면 숨기는 자동.
     #[serde(default)]
@@ -195,7 +196,7 @@ impl Default for Settings {
             pet_last_y: None,
             pet_scale: 1.0,
             codex_app_server_fallback: true,
-            notch_enabled: false,
+            notch_enabled: true,
             tray_title_mode: TrayTitleMode::Auto,
             completion_alerts_enabled: default_completion_alerts(),
             completion_alerts_quiet: false,
@@ -347,7 +348,7 @@ pub fn disabled_tools() -> Vec<String> {
 }
 
 pub fn notch_enabled() -> bool {
-    SETTINGS.lock().map(|s| s.notch_enabled).unwrap_or(false)
+    SETTINGS.lock().map(|s| s.notch_enabled).unwrap_or(true)
 }
 
 pub fn tray_title_mode() -> TrayTitleMode {
@@ -432,9 +433,11 @@ fn generate_anon_id() -> String {
 mod tests {
     use super::*;
 
+    /// 릴리스된 버전의 settings.json에는 두 필드가 없다. 없으면 노치 켜짐 + 자동이어야 한다.
     #[test]
-    fn missing_tray_title_mode_means_auto() {
+    fn old_settings_turn_the_notch_on_with_auto_tray() {
         let s: Settings = serde_json::from_str(r#"{"alertThreshold": 15}"#).unwrap();
+        assert!(s.notch_enabled);
         assert_eq!(s.tray_title_mode, TrayTitleMode::Auto);
     }
 

@@ -1771,7 +1771,7 @@ function SettingsView() {
     petLastX: null,
     petLastY: null,
     petScale: 1,
-    notchEnabled: false,
+    notchEnabled: true,
   });
   const [petError, setPetError] = useState<string | null>(null);
   const [trwStatus, setTrwStatus] = useState<TrwStatus | null>(null);
