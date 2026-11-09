@@ -1,0 +1,76 @@
+/* 노치 펼친 화면의 .notch-sessions 안에 들어간다. 구분선과 바깥 여백은 그 칸이 갖고,
+   스크롤도 .notch-scroll 하나로 한다 — 높이 측정이 목록까지 함께 잡게. */
+.session-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.session-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 4px;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+
+button.session-row {
+  cursor: pointer;
+}
+
+button.session-row:hover,
+button.session-row:focus-visible {
+  background: #1c1c1e;
+  outline: none;
+}
+
+.session-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #636366;
+}
+
+.session-dot.working {
+  background: #64d2ff;
+}
+
+.session-dot.waiting {
+  background: #ffd60a;
+}
+
+.session-dot.justDone {
+  background: #30d158;
+}
+
+.session-dot.failed {
+  background: #ff453a;
+}
+
+.session-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-state,
+.session-age {
+  color: #a1a1a6;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.session-age {
+  font-variant-numeric: tabular-nums;
+}

@@ -2864,7 +2864,7 @@ const TARGET_LABEL: Record<InboxTarget["kind"], string> = {
   none: "",
 };
 
-function formatAge(ms: number, lang: Lang): string {
+export function formatAge(ms: number, lang: Lang): string {
   const sec = Math.round((Date.now() - ms) / 1000);
   if (sec < 60) return t(lang, "inboxJustNow");
   const m = Math.floor(sec / 60);

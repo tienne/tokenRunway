@@ -12,6 +12,7 @@ import {
   type RunwayStatus,
   type Settings,
 } from "./App";
+import { SessionList, useSessions } from "./SessionList";
 import "./Notch.css";
 
 interface NotchLayout {
@@ -172,6 +173,7 @@ export function NotchView() {
   const [bodyHeight, setBodyHeight] = useState(0);
   const scrollInnerRef = useRef<HTMLDivElement>(null);
   const actionsRef = useRef<HTMLElement>(null);
+  const sessions = useSessions(mode === "full");
 
   useEffect(() => {
     document.documentElement.style.background = "transparent";
@@ -305,6 +307,7 @@ export function NotchView() {
           <span />
           <span className={`notch-side notch-activity ${activity?.state ?? "idle"}`}>
             {activity?.state === "working" && t(lang, "notch.working")}
+            {activity?.state === "waiting" && t(lang, "notch.waiting")}
             {activity?.state === "justDone" && t(lang, "notch.justDone")}
           </span>
         </div>
@@ -335,8 +338,20 @@ export function NotchView() {
                   <ToolRow key={s.tool} s={s} lang={lang} threshold={threshold} />
                 ))}
               </ul>
-              {/* 지금 떠 있는 세션 목록 자리. 비어 있으면 :empty로 접힌다. */}
-              <section className="notch-sessions">{/* SessionList */}</section>
+              {/* 세션이 없거나 훅이 없으면 SessionList가 null이라 :empty로 접힌다. */}
+              <section className="notch-sessions">
+                {sessions && (
+                  <SessionList
+                    sessions={sessions}
+                    lang={lang}
+                    onLand={(s) =>
+                      invoke("land_session", { tool: s.tool, session: s.session })
+                        .then(() => invoke("notch_dismiss"))
+                        .catch(() => {})
+                    }
+                  />
+                )}
+              </section>
             </div>
           </div>
           <nav className="notch-actions" ref={actionsRef}>
