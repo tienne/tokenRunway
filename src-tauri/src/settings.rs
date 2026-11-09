@@ -134,6 +134,20 @@ pub struct Settings {
     /// 노치 양옆에 잔여율과 활동 상태를 띄울지. 메뉴바 위를 덮어서 기본은 꺼짐이다.
     #[serde(default)]
     pub notch_enabled: bool,
+    /// 트레이 타이틀에 숫자를 띄울지. 기본은 노치가 보이면 숨기는 자동.
+    #[serde(default)]
+    pub tray_title_mode: TrayTitleMode,
+}
+
+/// 트레이 타이틀 숫자 표시 규칙.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrayTitleMode {
+    /// 메뉴바가 있는 주 화면에 노치 섬이 떠 있으면 숨기고, 아니면 띄운다.
+    #[default]
+    Auto,
+    Always,
+    IconOnly,
 }
 
 /// pet 배율 허용 범위 — 너무 작으면 못 잡고, 너무 크면 화면을 가린다.
@@ -182,6 +196,7 @@ impl Default for Settings {
             pet_scale: 1.0,
             codex_app_server_fallback: true,
             notch_enabled: false,
+            tray_title_mode: TrayTitleMode::Auto,
             completion_alerts_enabled: default_completion_alerts(),
             completion_alerts_quiet: false,
             haptics_enabled: default_haptics_enabled(),
@@ -335,6 +350,13 @@ pub fn notch_enabled() -> bool {
     SETTINGS.lock().map(|s| s.notch_enabled).unwrap_or(false)
 }
 
+pub fn tray_title_mode() -> TrayTitleMode {
+    SETTINGS
+        .lock()
+        .map(|s| s.tray_title_mode)
+        .unwrap_or_default()
+}
+
 /// 비활성(최근 사용량 0) 도구 숨김 여부.
 pub fn hide_inactive() -> bool {
     SETTINGS.lock().map(|s| s.hide_inactive).unwrap_or(false)
@@ -404,4 +426,23 @@ fn generate_anon_id() -> String {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     format!("anon-{nanos:x}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_tray_title_mode_means_auto() {
+        let s: Settings = serde_json::from_str(r#"{"alertThreshold": 15}"#).unwrap();
+        assert_eq!(s.tray_title_mode, TrayTitleMode::Auto);
+    }
+
+    #[test]
+    fn tray_title_mode_round_trips_as_snake_case() {
+        let s: Settings = serde_json::from_str(r#"{"trayTitleMode": "icon_only"}"#).unwrap();
+        assert_eq!(s.tray_title_mode, TrayTitleMode::IconOnly);
+        let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(json["trayTitleMode"], "icon_only");
+    }
 }

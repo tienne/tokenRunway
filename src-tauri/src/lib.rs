@@ -89,6 +89,12 @@ fn set_tray_mode(mode: u8) {
 /// 직전 위험 상태 — 변할 때만 모드를 전환(중복 set 방지).
 static TRAY_DANGER: AtomicBool = AtomicBool::new(false);
 
+/// 마지막으로 계산한 트레이 숫자. 노치 섬 상태와 무관하게 들고 있다가, 섬이 뜨고 지면
+/// 잔여율을 다시 계산하지 않고 이 값으로 타이틀만 다시 정한다.
+static TRAY_FIGURES: Mutex<Option<String>> = Mutex::new(None);
+/// 트레이에 지금 걸려 있는 타이틀. 같은 값이면 `set_title`을 건너뛰어 메뉴바가 깜빡이지 않게 한다.
+static TRAY_TITLE_SHOWN: Mutex<Option<Option<String>>> = Mutex::new(None);
+
 /// 도구별 소진 경보 발사 여부 (임계치 아래에서 1회만, 회복 시 리셋).
 static ALERTED: LazyLock<Mutex<HashMap<String, bool>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -711,6 +717,7 @@ fn set_settings(app: AppHandle, mut settings: Settings) {
     let pet_scale = settings.pet_scale;
     settings::set(settings);
     refresh_localized_ui(&app);
+    refresh_tray_title(&app);
     notch::sync(&app);
     if let Some(win) = app.get_webview_window("pet") {
         let _ = if pet_enabled { win.show() } else { win.hide() };
@@ -1442,7 +1449,7 @@ fn update_tray_title(app: &AppHandle, statuses: &[RunwayStatus]) {
             }),
     };
     let pct = status.and_then(|s| s.percent_remaining);
-    // 설정에 따라 비율·시간을 조합. 둘 다면 2줄(\n)로 시도.
+    // 설정에 따라 비율과 시간을 조합한다.
     let show_pct = settings::tray_show_percent();
     let show_reset = settings::tray_show_reset();
     let title = status.and_then(|s| {
@@ -1490,18 +1497,54 @@ fn update_tray_title(app: &AppHandle, statuses: &[RunwayStatus]) {
     // 정적 모드면 잔여율 레벨을 직접 그린다 (애니메이터는 쉬는 상태).
     let draw_level = TRAY_ANIM_MODE.load(Ordering::Relaxed) == TRAY_MODE_STATIC;
 
+    *TRAY_FIGURES.lock().unwrap() = title;
+    refresh_tray_title(app);
+
     // 트레이 UI 갱신은 메인 스레드에서.
     let app_for_tray = app.clone();
     let _ = app.run_on_main_thread(move || {
         let Some(tray) = app_for_tray.tray_by_id("main") else {
             return;
         };
-        let _ = tray.set_title(title);
         if draw_level {
             if let Ok(img) = tauri::image::Image::from_bytes(TRAY_LEVEL_FRAMES[level as usize]) {
                 let _ = tray.set_icon(Some(img));
             }
             let _ = tray.set_icon_as_template(true);
+        }
+    });
+}
+
+/// 트레이 타이틀에 숫자를 띄울지.
+///
+/// 자동이면 메뉴바가 있는 주 화면에 노치 섬이 떠 있을 때만 숨긴다. 외부 모니터가 주
+/// 화면이고 노치 화면이 보조로 열려 있으면 시선은 주 화면 메뉴바에 있으니 숫자를 남긴다 —
+/// 둘 다 보이는 중복은 해가 없지만, 아무 데서도 안 보이면 경고를 놓친다.
+fn tray_shows_figures(mode: settings::TrayTitleMode, notch: notch::Presence) -> bool {
+    match mode {
+        settings::TrayTitleMode::Always => true,
+        settings::TrayTitleMode::IconOnly => false,
+        settings::TrayTitleMode::Auto => notch != notch::Presence::Primary,
+    }
+}
+
+/// 들고 있는 트레이 숫자와 노치 섬 상태로 타이틀을 다시 정한다. 섬이 뜨고 질 때
+/// `notch.rs`가 부르고, 잔여율이 갱신될 때와 설정이 바뀔 때도 부른다.
+pub(crate) fn refresh_tray_title(app: &AppHandle) {
+    let figures = TRAY_FIGURES.lock().unwrap().clone();
+    let title =
+        figures.filter(|_| tray_shows_figures(settings::tray_title_mode(), notch::presence()));
+    {
+        let mut shown = TRAY_TITLE_SHOWN.lock().unwrap();
+        if shown.as_ref() == Some(&title) {
+            return;
+        }
+        *shown = Some(title.clone());
+    }
+    let app2 = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(tray) = app2.tray_by_id("main") {
+            let _ = tray.set_title(title);
         }
     });
 }
@@ -1985,6 +2028,20 @@ fn toggle_popover(app: &AppHandle, force_show: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tray_figures_follow_mode_and_notch_presence() {
+        use notch::Presence::*;
+        use settings::TrayTitleMode::*;
+        for notch in [Absent, Secondary, Primary] {
+            assert!(tray_shows_figures(Always, notch), "always / {notch:?}");
+            assert!(!tray_shows_figures(IconOnly, notch), "icon_only / {notch:?}");
+        }
+        // 자동: 주 화면에 섬이 떠 있을 때만 숨긴다.
+        assert!(tray_shows_figures(Auto, Absent));
+        assert!(tray_shows_figures(Auto, Secondary));
+        assert!(!tray_shows_figures(Auto, Primary));
+    }
 
     #[test]
     fn tray_duration_switches_to_days_past_a_day() {
