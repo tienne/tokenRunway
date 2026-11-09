@@ -12,7 +12,7 @@ use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 pub const LABEL: &str = "notch";
 
@@ -300,30 +300,70 @@ fn spawn_watch(app: AppHandle) {
     });
 }
 
+/// 섬이 펼쳐진 정도. 프론트는 이 값만 받아 그린다.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Mode {
+    Collapsed,
+    Full,
+}
+
+/// 지금 모드에서 클릭을 받는 영역.
+fn hit_rect(g: &Geom, mode: Mode) -> NSRect {
+    match mode {
+        Mode::Collapsed => g.island,
+        Mode::Full => g.expanded,
+    }
+}
+
+/// 커서 위치로 다음 모드를 정한다. 접힌 섬에 들어오면 펼치고, 펼친 영역을 벗어나야
+/// 접는다 — 같은 rect로 판정하면 펼치자마자 아래로 내려간 커서가 밖으로 잡혀 깜빡인다.
+fn next_mode(g: &Geom, mode: Mode, p: NSPoint) -> Mode {
+    if rect_contains(&hit_rect(g, mode), p) {
+        Mode::Full
+    } else {
+        Mode::Collapsed
+    }
+}
+
 /// 커서가 섬 위에 있을 때만 창이 클릭을 받게 한다. 판정을 프론트 IPC로 왕복하면
 /// 그 사이 들어온 클릭이 뒤 창으로 새거나 섬에서 사라진다.
 fn spawn_poll(app: AppHandle) {
     if POLL_RUNNING.swap(true, Ordering::SeqCst) {
         return;
     }
-    std::thread::spawn(move || {
-        let mut inside = false;
-        loop {
-            let Some(win) = app.get_webview_window(LABEL) else {
-                break;
-            };
-            let g = *GEOM.lock().unwrap();
-            let Some(g) = g else { break };
-            let p: NSPoint = unsafe { msg_send![class!(NSEvent), mouseLocation] };
-            let now = rect_contains(&g.island, p);
-            if now != inside {
-                inside = now;
-                let _ = win.set_ignore_cursor_events(!inside);
-            }
-            std::thread::sleep(Duration::from_millis(POLL_MS));
-        }
+    std::thread::spawn(move || loop {
+        poll_until_closed(&app);
         POLL_RUNNING.store(false, Ordering::SeqCst);
+        // 끝나는 사이 창이 다시 생겼는데 새 스레드가 swap에서 밀려났을 수 있다.
+        let reopened = app.get_webview_window(LABEL).is_some() && GEOM.lock().unwrap().is_some();
+        if !reopened || POLL_RUNNING.swap(true, Ordering::SeqCst) {
+            break;
+        }
     });
+}
+
+fn poll_until_closed(app: &AppHandle) {
+    let mut mode = Mode::Collapsed;
+    let mut ignoring = true;
+    while crate::settings::notch_enabled() {
+        let Some(win) = app.get_webview_window(LABEL) else {
+            return;
+        };
+        let Some(g) = *GEOM.lock().unwrap() else { return };
+        let p: NSPoint = unsafe { msg_send![class!(NSEvent), mouseLocation] };
+        let next = next_mode(&g, mode, p);
+        if next != mode {
+            mode = next;
+            let _ = win.emit("notch-mode", mode);
+        }
+        let ignore = !rect_contains(&hit_rect(&g, mode), p);
+        if ignore != ignoring {
+            ignoring = ignore;
+            let _ = win.set_ignore_cursor_events(ignore);
+        }
+        std::thread::sleep(Duration::from_millis(POLL_MS));
+    }
 }
 
 #[tauri::command]
@@ -343,6 +383,18 @@ mod tests {
         b.add_ivar::<Bool>(c"focusable");
         let tao_like = b.register();
         assert_eq!(tao_like.instance_size(), panel_class().instance_size());
+    }
+
+    #[test]
+    fn expands_on_the_island_and_collapses_only_outside_the_panel() {
+        let g = layout(rect(0.0, 0.0, 1512.0, 982.0), 200.0, 32.0);
+        let on_island = NSPoint::new(756.0, 970.0);
+        let below_island = NSPoint::new(756.0, 900.0);
+        let far = NSPoint::new(100.0, 500.0);
+        assert_eq!(next_mode(&g, Mode::Collapsed, below_island), Mode::Collapsed);
+        assert_eq!(next_mode(&g, Mode::Collapsed, on_island), Mode::Full);
+        assert_eq!(next_mode(&g, Mode::Full, below_island), Mode::Full);
+        assert_eq!(next_mode(&g, Mode::Full, far), Mode::Collapsed);
     }
 
     #[test]
