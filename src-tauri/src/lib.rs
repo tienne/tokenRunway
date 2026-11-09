@@ -1779,6 +1779,7 @@ pub fn run() {
             apply_codex_hooks,
             preview_statusline,
             apply_statusline,
+            notch::notch_fit,
             notch::notch_layout,
             notch::notch_dismiss
         ])

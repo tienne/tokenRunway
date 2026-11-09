@@ -1017,7 +1017,7 @@ export function formatEta(min: number | null, lang: Lang): string {
 }
 
 /** 하루가 넘는 기간용 — "3일 4시간". 소진 예측처럼 분까지는 의미 없는 추정치에 쓴다. */
-function formatDuration(min: number | null, lang: Lang): string {
+export function formatDuration(min: number | null, lang: Lang): string {
   if (min == null) return "—";
   if (min < 1) return t(lang, "lessThanMin");
   if (min >= 1440) {
@@ -1028,7 +1028,7 @@ function formatDuration(min: number | null, lang: Lang): string {
 }
 
 /** 리셋까지 남은 시간 — "5일 3시간 12분". 리셋 시각은 서버가 준 확정값이라 분까지 보여준다. */
-function formatCountdown(min: number | null, lang: Lang): string {
+export function formatCountdown(min: number | null, lang: Lang): string {
   if (min == null) return "—";
   if (min < 1) return t(lang, "lessThanMin");
   const total = Math.round(min);
