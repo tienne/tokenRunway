@@ -61,6 +61,23 @@
   color: #30d158;
 }
 
+/* 입력 대기는 systemYellow(#ffd60a, 검정 대비 14.9:1). 위험 색(#ff453a)을 쓰면 잔여율 경고로
+   읽히고, 작업 중(#64d2ff)과는 밝기가 비슷해 색만으론 안 갈리니 속 빈 고리를 앞에 붙인다.
+   세션 목록 점과 같은 모양이다. */
+.notch-activity.waiting {
+  color: #ffd60a;
+}
+
+.notch-activity.waiting::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  box-sizing: border-box;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+
 .notch-notice {
   flex: none;
   display: flex;
@@ -92,39 +109,133 @@
   font-size: 11px;
 }
 
-.notch-tools {
-  list-style: none;
-  margin: 0;
-  padding: 6px 16px 12px;
+/* 펼친 패널. 접혀 있을 때도 그려두고 섬이 잘라 가린다 — 높이를 미리 재 두려는 것이다.
+   폭은 펼친 폭으로 고정해 접힌 폭에서 줄바꿈이 달라져 높이가 틀리지 않게 한다. */
+.notch-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  align-self: center;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+}
+
+.notch-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 
+.notch-tools {
+  list-style: none;
+  margin: 0;
+  padding: 6px 16px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .notch-tool {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  row-gap: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   font-size: 12px;
+}
+
+.notch-tool-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .notch-tool-name {
   font-weight: 600;
 }
 
-.notch-tool-pct {
-  font-variant-numeric: tabular-nums;
+.notch-plan {
+  margin-left: 6px;
+  color: #a1a1a6;
+  font-size: 10px;
+  font-weight: 500;
 }
 
-.notch-tool.danger .notch-tool-pct {
+.notch-tool-pct {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+/* #ff453a는 검은 섬 위에서 대비 6.2:1 — WCAG AA(4.5:1)를 넘는다. */
+.notch-tool.danger .notch-tool-pct,
+.notch-acct-pct.danger {
+  color: #ff453a;
+}
+
+.notch-verdict {
+  margin: 0;
+  color: #d1d1d6;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.notch-verdict.danger {
   color: #ff453a;
 }
 
 .notch-tool-meta {
-  grid-column: 1 / -1;
+  margin: 0;
   color: #a1a1a6;
   font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 세션 목록 자리. 아직 채우는 쪽이 없으면 비어 있어 통째로 접힌다. */
+.notch-sessions {
+  margin: 10px 16px 0;
+  padding-top: 8px;
+  border-top: 1px solid #2c2c2e;
+}
+
+.notch-sessions:empty {
+  display: none;
+}
+
+.notch-actions {
+  flex: none;
+  display: flex;
+  gap: 4px;
+  padding: 10px 12px 12px;
+}
+
+.notch-actions button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 5px 0;
+  background: #1c1c1e;
+  border: 0;
+  border-radius: 6px;
+  color: #f5f5f7;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.notch-actions button:hover {
+  background: #2c2c2e;
+}
+
+.notch-badge {
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: #ff453a;
+  color: #000;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
 }
 
 .notch-empty {

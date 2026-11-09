@@ -80,6 +80,10 @@ pub struct Settings {
     /// rollout보다 먼저 본다 — 훅을 지운 뒤 남은 상태 파일이 판정을 흔들지 않게.
     #[serde(default)]
     pub codex_hooks_installed: bool,
+    /// Claude Code 훅(`trw hook claude`)을 깔았는지. 꺼져 있으면 상태 파일을 아예 읽지 않는다 —
+    /// 훅을 지운 뒤 남은 파일이 활동 판정과 세션 목록을 흔들지 않게.
+    #[serde(default)]
+    pub claude_hooks_installed: bool,
     /// Claude statusLine 릴레이(`trw statusline`)를 받을지. 기본 꺼짐 — 사용자 settings.json의
     /// statusLine을 바꿔야 해서 직접 켠 경우에만 쓴다. 꺼져 있으면 들어온 값도 버린다.
     #[serde(default)]
@@ -131,9 +135,24 @@ pub struct Settings {
     /// 사용량 API가 토큰 만료(401)를 돌려준 Codex 계정만 `codex app-server`로 다시 묻는다.
     #[serde(default = "default_true")]
     pub codex_app_server_fallback: bool,
-    /// 노치 양옆에 잔여율과 활동 상태를 띄울지. 메뉴바 위를 덮어서 기본은 꺼짐이다.
-    #[serde(default)]
+    /// 노치 양옆에 잔여율과 활동 상태를 띄울지. 숫자를 한눈에 보는 자리를 노치가 맡으므로
+    /// 기본 켜짐이다 — 노치 없는 화면에서는 어차피 창을 만들지 않는다.
+    #[serde(default = "default_true")]
     pub notch_enabled: bool,
+    /// 트레이 타이틀에 숫자를 띄울지. 기본은 노치가 보이면 숨기는 자동.
+    #[serde(default)]
+    pub tray_title_mode: TrayTitleMode,
+}
+
+/// 트레이 타이틀 숫자 표시 규칙.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrayTitleMode {
+    /// 메뉴바가 있는 주 화면에 노치 섬이 떠 있으면 숨기고, 아니면 띄운다.
+    #[default]
+    Auto,
+    Always,
+    IconOnly,
 }
 
 /// pet 배율 허용 범위 — 너무 작으면 못 잡고, 너무 크면 화면을 가린다.
@@ -181,13 +200,15 @@ impl Default for Settings {
             pet_last_y: None,
             pet_scale: 1.0,
             codex_app_server_fallback: true,
-            notch_enabled: false,
+            notch_enabled: true,
+            tray_title_mode: TrayTitleMode::Auto,
             completion_alerts_enabled: default_completion_alerts(),
             completion_alerts_quiet: false,
             haptics_enabled: default_haptics_enabled(),
             haptics_on_turn_end: default_haptics_enabled(),
             wake_on_notify: default_completion_alerts(),
             codex_hooks_installed: false,
+            claude_hooks_installed: false,
             statusline_relay_enabled: false,
         }
     }
@@ -284,6 +305,14 @@ pub fn codex_hooks_installed() -> bool {
         .unwrap_or(false)
 }
 
+/// Claude 훅 상태 파일을 활동 감지와 세션 목록에 쓸지.
+pub fn claude_hooks_installed() -> bool {
+    SETTINGS
+        .lock()
+        .map(|s| s.claude_hooks_installed)
+        .unwrap_or(false)
+}
+
 /// statusLine 릴레이 값을 받아 쓸지.
 pub fn statusline_relay_enabled() -> bool {
     SETTINGS
@@ -332,7 +361,14 @@ pub fn disabled_tools() -> Vec<String> {
 }
 
 pub fn notch_enabled() -> bool {
-    SETTINGS.lock().map(|s| s.notch_enabled).unwrap_or(false)
+    SETTINGS.lock().map(|s| s.notch_enabled).unwrap_or(true)
+}
+
+pub fn tray_title_mode() -> TrayTitleMode {
+    SETTINGS
+        .lock()
+        .map(|s| s.tray_title_mode)
+        .unwrap_or_default()
 }
 
 /// 비활성(최근 사용량 0) 도구 숨김 여부.
@@ -404,4 +440,25 @@ fn generate_anon_id() -> String {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     format!("anon-{nanos:x}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 릴리스된 버전의 settings.json에는 두 필드가 없다. 없으면 노치 켜짐 + 자동이어야 한다.
+    #[test]
+    fn old_settings_turn_the_notch_on_with_auto_tray() {
+        let s: Settings = serde_json::from_str(r#"{"alertThreshold": 15}"#).unwrap();
+        assert!(s.notch_enabled);
+        assert_eq!(s.tray_title_mode, TrayTitleMode::Auto);
+    }
+
+    #[test]
+    fn tray_title_mode_round_trips_as_snake_case() {
+        let s: Settings = serde_json::from_str(r#"{"trayTitleMode": "icon_only"}"#).unwrap();
+        assert_eq!(s.tray_title_mode, TrayTitleMode::IconOnly);
+        let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(json["trayTitleMode"], "icon_only");
+    }
 }

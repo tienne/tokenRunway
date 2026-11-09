@@ -139,7 +139,7 @@ function worstPetLevel(statuses: RunwayStatus[]): PetLevel {
 }
 
 /** 에이전트 활동 상태 — 잔여율(PetLevel)과 독립된 축. Rust `activity::ActivityState`와 짝. */
-type ActivityState = "working" | "justDone" | "idle";
+type ActivityState = "working" | "waiting" | "justDone" | "idle";
 
 export interface AgentActivity {
   tool: string;
@@ -148,14 +148,14 @@ export interface AgentActivity {
   failed: boolean;
 }
 
-/** pet이 따라갈 도구 하나 — 도는 게 있으면 그중 가장 최근, 없으면 가장 최근에 끝난 것.
+/** pet이 따라갈 도구 하나 — 도는 게 있으면 그중 가장 최근, 다음은 입력을 기다리는 것, 그다음 막 끝난 것.
  * 여러 도구를 동시에 굴려도 pet은 하나뿐이라 제일 최근에 움직인 쪽을 대표로 보여준다. */
 export function leadActivity(list: AgentActivity[]): AgentActivity | null {
   const pick = (state: ActivityState) =>
     list
       .filter((a) => a.state === state)
       .sort((a, b) => b.sinceMs - a.sinceMs)[0] ?? null;
-  return pick("working") ?? pick("justDone");
+  return pick("working") ?? pick("waiting") ?? pick("justDone");
 }
 
 function petImageSrc(level: PetLevel, bundle: PetBundle | null): string {
@@ -264,6 +264,8 @@ function pickSpriteAnimation(opts: {
   if (alerting && has("jumping")) return "jumping";
   // 작업 중엔 제자리 작업 포즈가 기본이고, 산책 구간에서만 방향별 걷기로 내려간다.
   if (activity?.state === "working" && !strolling && has("running")) return "running";
+  // 권한 확인을 기다리는 세션은 사람이 봐야 움직이니 손을 흔들어 부른다.
+  if (activity?.state === "waiting" && has("waving")) return "waving";
   if (activity?.state === "justDone") {
     if (activity.failed && has("failed")) return "failed";
     if (has("waving")) return "waving";
@@ -768,6 +770,8 @@ function PetOverlay() {
   // 잔여율 경보가 활동 알림보다 급하니 먼저 자리를 차지한다.
   const speechBubble = alertFlash ? (
     <div className="pet-speech-bubble">{t(lang, `pet.alert.${alertFlash.kind}`, { tool: alertFlash.tool })}</div>
+  ) : activity?.state === "waiting" ? (
+    <div className="pet-speech-bubble">{t(lang, "pet.activity.waiting", { tool: activity.tool })}</div>
   ) : doneFlash ? (
     <div className="pet-speech-bubble">
       {t(lang, doneFlash.failed ? "pet.activity.failed" : "pet.activity.done", {
@@ -942,6 +946,7 @@ export interface Settings {
   completionAlertsQuiet: boolean;
   wakeOnNotify: boolean;
   codexHooksInstalled: boolean;
+  claudeHooksInstalled: boolean;
   statuslineRelayEnabled: boolean;
   hapticsEnabled: boolean;
   hapticsOnTurnEnd: boolean;
@@ -961,7 +966,10 @@ export interface Settings {
   petLastY: number | null;
   petScale: number;
   notchEnabled: boolean;
+  trayTitleMode: TrayTitleMode;
 }
+
+export type TrayTitleMode = "auto" | "always" | "icon_only";
 
 interface TrwStatus {
   cliPath: string | null;
@@ -1017,7 +1025,7 @@ export function formatEta(min: number | null, lang: Lang): string {
 }
 
 /** 하루가 넘는 기간용 — "3일 4시간". 소진 예측처럼 분까지는 의미 없는 추정치에 쓴다. */
-function formatDuration(min: number | null, lang: Lang): string {
+export function formatDuration(min: number | null, lang: Lang): string {
   if (min == null) return "—";
   if (min < 1) return t(lang, "lessThanMin");
   if (min >= 1440) {
@@ -1028,7 +1036,7 @@ function formatDuration(min: number | null, lang: Lang): string {
 }
 
 /** 리셋까지 남은 시간 — "5일 3시간 12분". 리셋 시각은 서버가 준 확정값이라 분까지 보여준다. */
-function formatCountdown(min: number | null, lang: Lang): string {
+export function formatCountdown(min: number | null, lang: Lang): string {
   if (min == null) return "—";
   if (min < 1) return t(lang, "lessThanMin");
   const total = Math.round(min);
@@ -1644,7 +1652,7 @@ function HookInstaller({
   tr,
   onApplied,
 }: {
-  feature: "codexHooks" | "statusline";
+  feature: "codexHooks" | "claudeHooks" | "statusline";
   installed: boolean;
   tr: (k: string, p?: Record<string, string | number>) => string;
   onApplied: (s: Settings) => void;
@@ -1652,7 +1660,7 @@ function HookInstaller({
   const [preview, setPreview] = useState<HookPreview | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const cmd = feature === "codexHooks" ? "codex_hooks" : "statusline";
+  const cmd = { codexHooks: "codex_hooks", claudeHooks: "claude_hooks", statusline: "statusline" }[feature];
   const install = !installed;
   const panelId = `hook-preview-${feature}`;
 
@@ -1753,6 +1761,7 @@ function SettingsView() {
     completionAlertsQuiet: false,
     wakeOnNotify: true,
     codexHooksInstalled: false,
+    claudeHooksInstalled: false,
     statuslineRelayEnabled: false,
     hapticsEnabled: true,
     hapticsOnTurnEnd: true,
@@ -1771,7 +1780,8 @@ function SettingsView() {
     petLastX: null,
     petLastY: null,
     petScale: 1,
-    notchEnabled: false,
+    notchEnabled: true,
+    trayTitleMode: "auto",
   });
   const [petError, setPetError] = useState<string | null>(null);
   const [trwStatus, setTrwStatus] = useState<TrwStatus | null>(null);
@@ -1995,6 +2005,12 @@ function SettingsView() {
                   onApplied={setSettings}
                 />
                 <HookInstaller
+                  feature="claudeHooks"
+                  installed={settings.claudeHooksInstalled}
+                  tr={tr}
+                  onApplied={setSettings}
+                />
+                <HookInstaller
                   feature="statusline"
                   installed={settings.statuslineRelayEnabled}
                   tr={tr}
@@ -2179,6 +2195,22 @@ function SettingsView() {
         </select>
 
         <label className="setting-row">
+          <span>{tr("trayTitleMode")}</span>
+        </label>
+        <select
+          className="setting-select"
+          value={settings.trayTitleMode ?? "auto"}
+          onChange={(e) => update({ trayTitleMode: e.target.value as TrayTitleMode })}
+        >
+          {(["auto", "always", "icon_only"] as const).map((m) => (
+            <option key={m} value={m}>
+              {tr(`trayTitleMode.${m}`)}
+            </option>
+          ))}
+        </select>
+        <p className="setting-hint">{tr("trayTitleModeHint")}</p>
+
+        <label className="setting-row">
           <span>{tr("trayInfo")}</span>
         </label>
         <label className="tool-toggle">
@@ -2186,6 +2218,7 @@ function SettingsView() {
             type="checkbox"
             checked={settings.trayShowPercent}
             onChange={(e) => update({ trayShowPercent: e.target.checked })}
+            disabled={settings.trayTitleMode === "icon_only"}
           />
           <span>{tr("trayShowPercent")}</span>
         </label>
@@ -2194,6 +2227,7 @@ function SettingsView() {
             type="checkbox"
             checked={settings.trayShowReset}
             onChange={(e) => update({ trayShowReset: e.target.checked })}
+            disabled={settings.trayTitleMode === "icon_only"}
           />
           <span>{tr("trayShowReset")}</span>
         </label>
@@ -2830,7 +2864,7 @@ const TARGET_LABEL: Record<InboxTarget["kind"], string> = {
   none: "",
 };
 
-function formatAge(ms: number, lang: Lang): string {
+export function formatAge(ms: number, lang: Lang): string {
   const sec = Math.round((Date.now() - ms) / 1000);
   if (sec < 60) return t(lang, "inboxJustNow");
   const m = Math.floor(sec / 60);

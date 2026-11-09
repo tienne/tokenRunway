@@ -9,7 +9,7 @@ use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
 use objc2::{class, msg_send, sel};
 use objc2_foundation::{NSArray, NSEdgeInsets, NSPoint, NSRect, NSSize};
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
@@ -20,8 +20,12 @@ pub const LABEL: &str = "notch";
 const FALLBACK_NOTCH_WIDTH: f64 = 184.0;
 /// 접힌 섬이 노치 양옆으로 메뉴바를 덮는 폭.
 const WING: f64 = 84.0;
-const EXPANDED_WIDTH: f64 = 380.0;
-const EXPANDED_HEIGHT: f64 = 236.0;
+const EXPANDED_WIDTH: f64 = 420.0;
+/// 펼친 섬이 자랄 수 있는 최대 높이. 창은 이 크기로 고정하고, 실제로 클릭을 받는 높이는
+/// 프론트가 잰 내용 높이(`FIT_HEIGHT`)를 따른다 — 도구가 하나뿐인데 빈 검은 판이 내려오지 않게.
+const EXPANDED_MAX_HEIGHT: f64 = 440.0;
+/// 프론트가 아직 내용 높이를 알려주기 전에 쓰는 값.
+const DEFAULT_FIT_HEIGHT: u32 = 236;
 const POLL_MS: u64 = 40;
 /// 완료 알림이 오면 섬 아래로 한 줄을 펼쳐두는 시간과 그 줄 높이.
 const NOTICE_MS: i64 = 6_000;
@@ -48,6 +52,8 @@ struct Geom {
     expanded: NSRect,
     notch_width: f64,
     bar_height: f64,
+    /// 메뉴바가 있는 주 화면인지. 트레이 숫자를 숨길지 정할 때 쓴다.
+    on_primary: bool,
 }
 
 /// 프론트가 섬을 그릴 때 쓰는 치수(창 기준 pt).
@@ -66,7 +72,38 @@ static GEOM: Mutex<Option<Geom>> = Mutex::new(None);
 static POLL_RUNNING: AtomicBool = AtomicBool::new(false);
 static WATCHING: AtomicBool = AtomicBool::new(false);
 static NOTICE_UNTIL: AtomicI64 = AtomicI64::new(0);
+static FIT_HEIGHT: AtomicU32 = AtomicU32::new(DEFAULT_FIT_HEIGHT);
+/// 트레이에 마지막으로 알린 `Presence`. 바뀔 때만 트레이를 다시 그리게 한다.
+static LAST_PRESENCE: AtomicU8 = AtomicU8::new(u8::MAX);
 
+/// 노치 섬이 지금 어디에 떠 있는지. 트레이 타이틀이 숫자를 숨길지 이걸 보고 정한다.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Presence {
+    /// 창이 없다 — 노치 없는 화면, 덮개 닫음, 설정에서 끔.
+    Absent,
+    /// 노치 화면이 보조 화면이다(외부 모니터가 주 화면).
+    Secondary,
+    /// 메뉴바가 있는 주 화면이 노치 화면이다.
+    Primary,
+}
+
+/// 지금 섬 상태. 창 생성에 실패하면 `GEOM`을 비우므로 `GEOM`만 보면 된다.
+pub fn presence() -> Presence {
+    match *GEOM.lock().unwrap() {
+        None => Presence::Absent,
+        Some(g) if g.on_primary => Presence::Primary,
+        Some(_) => Presence::Secondary,
+    }
+}
+
+/// 섬 상태가 바뀌었으면 트레이 타이틀을 다시 정하게 한다. 화면 배치는 감시 스레드가
+/// 이미 5초마다 재므로 트레이 쪽에서 따로 폴링하지 않는다.
+fn publish_presence(app: &AppHandle) {
+    let now = presence() as u8;
+    if LAST_PRESENCE.swap(now, Ordering::SeqCst) != now {
+        crate::refresh_tray_title(app);
+    }
+}
 fn rect_contains(r: &NSRect, p: NSPoint) -> bool {
     p.x >= r.origin.x
         && p.x <= r.origin.x + r.size.width
@@ -83,7 +120,8 @@ fn rect(x: f64, y: f64, w: f64, h: f64) -> NSRect {
 fn measure() -> Option<Geom> {
     unsafe {
         let screens: Retained<NSArray<AnyObject>> = msg_send![class!(NSScreen), screens];
-        for screen in screens.iter() {
+        // `screens`의 0번이 메뉴바가 있는 주 화면이다(AppKit 문서 규약).
+        for (index, screen) in screens.iter().enumerate() {
             // safeAreaInsets·auxiliaryTop*Area는 macOS 12부터 있다. 없는 셀렉터를 부르면
             // 예외로 앱이 죽는다.
             let ok: bool = msg_send![&*screen, respondsToSelector: sel!(auxiliaryTopRightArea)];
@@ -104,20 +142,20 @@ fn measure() -> Option<Geom> {
             } else {
                 FALLBACK_NOTCH_WIDTH
             };
-            return Some(layout(frame, notch_width, insets.top));
+            return Some(layout(frame, notch_width, insets.top, index == 0));
         }
         None
     }
 }
 
-fn layout(screen: NSRect, notch_width: f64, bar_height: f64) -> Geom {
+fn layout(screen: NSRect, notch_width: f64, bar_height: f64, on_primary: bool) -> Geom {
     let top = screen.origin.y + screen.size.height;
     let cx = screen.origin.x + screen.size.width / 2.0;
     let island_w = notch_width + WING * 2.0;
     let win_w = island_w.max(EXPANDED_WIDTH);
     let exp_w = EXPANDED_WIDTH.max(island_w);
     Geom {
-        window: rect(cx - win_w / 2.0, top - EXPANDED_HEIGHT, win_w, EXPANDED_HEIGHT),
+        window: rect(cx - win_w / 2.0, top - EXPANDED_MAX_HEIGHT, win_w, EXPANDED_MAX_HEIGHT),
         island: rect(cx - island_w / 2.0, top - bar_height, island_w, bar_height),
         notice: rect(
             cx - exp_w / 2.0,
@@ -125,9 +163,10 @@ fn layout(screen: NSRect, notch_width: f64, bar_height: f64) -> Geom {
             exp_w,
             bar_height + NOTICE_HEIGHT,
         ),
-        expanded: rect(cx - exp_w / 2.0, top - EXPANDED_HEIGHT, exp_w, EXPANDED_HEIGHT),
+        expanded: rect(cx - exp_w / 2.0, top - EXPANDED_MAX_HEIGHT, exp_w, EXPANDED_MAX_HEIGHT),
         notch_width,
         bar_height,
+        on_primary,
     }
 }
 
@@ -224,53 +263,61 @@ fn place(win: &WebviewWindow, g: &Geom) {
 fn ensure(app: &AppHandle) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
-        // 생성과 닫기가 모두 메인 스레드에서 차례로 돌아서, 여기서 다시 확인하면
-        // 토글을 끈 직후 감시 스레드가 창을 되살리는 일이 없다.
-        let measured = if crate::settings::notch_enabled() { measure() } else { None };
-        let Some(g) = measured else {
-            *GEOM.lock().unwrap() = None;
-            if let Some(w) = handle.get_webview_window(LABEL) {
-                let _ = w.close();
-            }
-            return;
-        };
-        let prev = GEOM.lock().unwrap().replace(g);
-        if let Some(w) = handle.get_webview_window(LABEL) {
-            if prev != Some(g) {
-                place(&w, &g);
-            }
-            spawn_poll(handle.clone());
-            return;
-        }
-        let built = WebviewWindowBuilder::new(&handle, LABEL, WebviewUrl::App("index.html".into()))
-            .title("")
-            .inner_size(g.window.size.width, g.window.size.height)
-            .decorations(false)
-            .transparent(true)
-            .skip_taskbar(true)
-            .resizable(false)
-            .shadow(false)
-            .focused(false)
-            .accept_first_mouse(true)
-            .visible(false)
-            .build();
-        let w = match built {
-            Ok(w) => w,
-            Err(e) => {
-                eprintln!("[notch] window creation failed: {e}");
-                return;
-            }
-        };
-        if let Err(e) = make_panel(&w) {
-            eprintln!("[notch] panel conversion failed: {e}");
-            let _ = w.close();
-            return;
-        }
-        place(&w, &g);
-        let _ = w.set_ignore_cursor_events(true);
-        let _ = w.show();
-        spawn_poll(handle.clone());
+        place_or_build(&handle);
+        publish_presence(&handle);
     });
+}
+
+fn place_or_build(handle: &AppHandle) {
+    // 생성과 닫기가 모두 메인 스레드에서 차례로 돌아서, 여기서 다시 확인하면
+    // 토글을 끈 직후 감시 스레드가 창을 되살리는 일이 없다.
+    let measured = if crate::settings::notch_enabled() { measure() } else { None };
+    let Some(g) = measured else {
+        *GEOM.lock().unwrap() = None;
+        if let Some(w) = handle.get_webview_window(LABEL) {
+            let _ = w.close();
+        }
+        return;
+    };
+    let prev = GEOM.lock().unwrap().replace(g);
+    if let Some(w) = handle.get_webview_window(LABEL) {
+        if prev != Some(g) {
+            place(&w, &g);
+        }
+        spawn_poll(handle.clone());
+        return;
+    }
+    let built = WebviewWindowBuilder::new(handle, LABEL, WebviewUrl::App("index.html".into()))
+        .title("")
+        .inner_size(g.window.size.width, g.window.size.height)
+        .decorations(false)
+        .transparent(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .shadow(false)
+        .focused(false)
+        .accept_first_mouse(true)
+        .visible(false)
+        .build();
+    // 창을 못 만들면 `GEOM`을 비워 트레이가 섬이 떠 있다고 착각하지 않게 한다.
+    let w = match built {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("[notch] window creation failed: {e}");
+            *GEOM.lock().unwrap() = None;
+            return;
+        }
+    };
+    if let Err(e) = make_panel(&w) {
+        eprintln!("[notch] panel conversion failed: {e}");
+        *GEOM.lock().unwrap() = None;
+        let _ = w.close();
+        return;
+    }
+    place(&w, &g);
+    let _ = w.set_ignore_cursor_events(true);
+    let _ = w.show();
+    spawn_poll(handle.clone());
 }
 
 /// 토글을 끄면 창을 닫는다. 커서 폴링 스레드는 창이 사라진 걸 보고 스스로 끝난다.
@@ -281,6 +328,7 @@ pub fn close(app: &AppHandle) {
         if let Some(w) = handle.get_webview_window(LABEL) {
             let _ = w.close();
         }
+        publish_presence(&handle);
     });
 }
 
@@ -322,19 +370,26 @@ pub enum Mode {
     Full,
 }
 
+/// 펼친 섬이 실제로 덮는 영역. 위쪽은 화면 끝에 붙이고 높이만 내용에 맞춘다.
+fn fitted_expanded(g: &Geom, fit: f64) -> NSRect {
+    let top = g.expanded.origin.y + g.expanded.size.height;
+    let h = fit.clamp(g.bar_height, g.expanded.size.height);
+    rect(g.expanded.origin.x, top - h, g.expanded.size.width, h)
+}
+
 /// 지금 모드에서 클릭을 받는 영역.
-fn hit_rect(g: &Geom, mode: Mode) -> NSRect {
+fn hit_rect(g: &Geom, mode: Mode, fit: f64) -> NSRect {
     match mode {
         Mode::Collapsed => g.island,
         Mode::Notice => g.notice,
-        Mode::Full => g.expanded,
+        Mode::Full => fitted_expanded(g, fit),
     }
 }
 
 /// 커서 위치로 다음 모드를 정한다. 접힌 섬에 들어오면 펼치고, 펼친 영역을 벗어나야
 /// 접는다 — 같은 rect로 판정하면 펼치자마자 아래로 내려간 커서가 밖으로 잡혀 깜빡인다.
-fn next_mode(g: &Geom, mode: Mode, p: NSPoint, notice: bool) -> Mode {
-    if rect_contains(&hit_rect(g, mode), p) {
+fn next_mode(g: &Geom, mode: Mode, p: NSPoint, notice: bool, fit: f64) -> Mode {
+    if rect_contains(&hit_rect(g, mode, fit), p) {
         Mode::Full
     } else if notice {
         Mode::Notice
@@ -370,12 +425,13 @@ fn poll_until_closed(app: &AppHandle) {
         let Some(g) = *GEOM.lock().unwrap() else { return };
         let p: NSPoint = unsafe { msg_send![class!(NSEvent), mouseLocation] };
         let notice = chrono::Utc::now().timestamp_millis() < NOTICE_UNTIL.load(Ordering::Relaxed);
-        let next = next_mode(&g, mode, p, notice);
+        let fit = FIT_HEIGHT.load(Ordering::Relaxed) as f64;
+        let next = next_mode(&g, mode, p, notice, fit);
         if next != mode {
             mode = next;
             let _ = app.emit_to(LABEL, "notch-mode", mode);
         }
-        let ignore = !rect_contains(&hit_rect(&g, mode), p);
+        let ignore = !rect_contains(&hit_rect(&g, mode, fit), p);
         if ignore != ignoring {
             ignoring = ignore;
             let _ = win.set_ignore_cursor_events(ignore);
@@ -421,9 +477,20 @@ pub fn notch_layout() -> NotchLayout {
     layout_for_front()
 }
 
+/// 프론트가 펼친 섬의 내용 높이를 알려준다. 클릭을 받는 영역을 그 높이에 맞춘다.
+#[tauri::command]
+pub fn notch_fit(height: f64) {
+    if height.is_finite() && height > 0.0 {
+        let h = height.ceil().min(EXPANDED_MAX_HEIGHT) as u32;
+        FIT_HEIGHT.store(h, Ordering::Relaxed);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const FIT: f64 = DEFAULT_FIT_HEIGHT as f64;
 
     /// tao의 TaoWindow와 같은 모양(NSWindow + focusable)을 만들어 크기를 비교한다.
     /// 다르면 클래스 바꿔치기가 메모리를 깨뜨리므로 프로토타입의 전제가 무너진다.
@@ -437,31 +504,31 @@ mod tests {
 
     #[test]
     fn expands_on_the_island_and_collapses_only_outside_the_panel() {
-        let g = layout(rect(0.0, 0.0, 1512.0, 982.0), 200.0, 32.0);
+        let g = layout(rect(0.0, 0.0, 1512.0, 982.0), 200.0, 32.0, true);
         let on_island = NSPoint::new(756.0, 970.0);
         let below_island = NSPoint::new(756.0, 900.0);
         let far = NSPoint::new(100.0, 500.0);
-        assert_eq!(next_mode(&g, Mode::Collapsed, below_island, false), Mode::Collapsed);
-        assert_eq!(next_mode(&g, Mode::Collapsed, on_island, false), Mode::Full);
-        assert_eq!(next_mode(&g, Mode::Full, below_island, false), Mode::Full);
-        assert_eq!(next_mode(&g, Mode::Full, far, false), Mode::Collapsed);
+        assert_eq!(next_mode(&g, Mode::Collapsed, below_island, false, FIT), Mode::Collapsed);
+        assert_eq!(next_mode(&g, Mode::Collapsed, on_island, false, FIT), Mode::Full);
+        assert_eq!(next_mode(&g, Mode::Full, below_island, false, FIT), Mode::Full);
+        assert_eq!(next_mode(&g, Mode::Full, far, false, FIT), Mode::Collapsed);
     }
 
     #[test]
     fn notice_line_is_clickable_and_folds_back_when_it_expires() {
-        let g = layout(rect(0.0, 0.0, 1512.0, 982.0), 200.0, 32.0);
+        let g = layout(rect(0.0, 0.0, 1512.0, 982.0), 200.0, 32.0, true);
         let on_line = NSPoint::new(756.0, 982.0 - 32.0 - 10.0);
         let far = NSPoint::new(100.0, 500.0);
-        assert_eq!(next_mode(&g, Mode::Collapsed, far, true), Mode::Notice);
-        assert_eq!(next_mode(&g, Mode::Notice, on_line, true), Mode::Full);
+        assert_eq!(next_mode(&g, Mode::Collapsed, far, true, FIT), Mode::Notice);
+        assert_eq!(next_mode(&g, Mode::Notice, on_line, true, FIT), Mode::Full);
         // 알림 시간이 지나도 커서가 펼친 영역 안이면 그대로 둔다.
-        assert_eq!(next_mode(&g, Mode::Full, on_line, false), Mode::Full);
-        assert_eq!(next_mode(&g, Mode::Notice, far, false), Mode::Collapsed);
+        assert_eq!(next_mode(&g, Mode::Full, on_line, false, FIT), Mode::Full);
+        assert_eq!(next_mode(&g, Mode::Notice, far, false, FIT), Mode::Collapsed);
     }
 
     #[test]
     fn island_hugs_the_top_center_of_the_screen() {
-        let g = layout(rect(0.0, 0.0, 1512.0, 982.0), 200.0, 32.0);
+        let g = layout(rect(0.0, 0.0, 1512.0, 982.0), 200.0, 32.0, true);
         assert_eq!(g.island.size.width, 200.0 + WING * 2.0);
         assert_eq!(g.island.origin.y + g.island.size.height, 982.0);
         assert_eq!(g.island.origin.x + g.island.size.width / 2.0, 756.0);
@@ -470,9 +537,31 @@ mod tests {
 
     #[test]
     fn island_sits_on_a_secondary_screen_offset() {
-        let g = layout(rect(-1512.0, 300.0, 1512.0, 982.0), 184.0, 37.0);
+        let g = layout(rect(-1512.0, 300.0, 1512.0, 982.0), 184.0, 37.0, false);
         assert!(rect_contains(&g.island, NSPoint::new(-756.0, 300.0 + 982.0 - 10.0)));
         assert!(!rect_contains(&g.island, NSPoint::new(-756.0, 300.0 + 982.0 - 60.0)));
         assert!(rect_contains(&g.expanded, NSPoint::new(-756.0, 300.0 + 982.0 - 60.0)));
+    }
+
+    #[test]
+    fn expanded_hit_area_follows_the_content_height() {
+        let g = layout(rect(0.0, 0.0, 1512.0, 982.0), 200.0, 32.0, true);
+        let short = 120.0;
+        let inside = NSPoint::new(756.0, 982.0 - 100.0);
+        let below_content = NSPoint::new(756.0, 982.0 - 200.0);
+        assert_eq!(next_mode(&g, Mode::Full, inside, false, short), Mode::Full);
+        // 내용 아래 빈 자리는 펼친 창 안이어도 섬 밖이라 접히고 클릭이 통과해야 한다.
+        assert_eq!(next_mode(&g, Mode::Full, below_content, false, short), Mode::Collapsed);
+        // 최대 높이를 넘겨 알려와도 창 크기 안으로 자른다.
+        let huge = fitted_expanded(&g, 10_000.0);
+        assert_eq!(huge.size.height, EXPANDED_MAX_HEIGHT);
+        assert_eq!(huge.origin.y + huge.size.height, 982.0);
+    }
+
+    #[test]
+    fn window_is_tall_enough_for_the_largest_panel() {
+        let g = layout(rect(0.0, 0.0, 1512.0, 982.0), 200.0, 32.0, true);
+        assert_eq!(g.window.size.height, EXPANDED_MAX_HEIGHT);
+        assert!(g.window.size.width >= g.expanded.size.width);
     }
 }

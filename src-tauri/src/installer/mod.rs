@@ -8,6 +8,7 @@
 //! 두고 에이전트별 디렉토리에는 상대 심링크를 건다. 그러면 한 번 갱신하면 모든
 //! 에이전트에 반영되고, 에이전트를 늘려도 심링크만 추가하면 된다.
 
+pub mod claude_hooks;
 pub mod codex_hooks;
 pub mod statusline;
 pub mod template;
@@ -322,7 +323,7 @@ fn statusline_plans(install: bool) -> Result<Vec<statusline::StatuslinePlan>, St
         }
         let file = statusline::settings_file(&dir);
         let key = statusline::config_key(&dir);
-        let record = template::record_for(&app, &file);
+        let record = template::record_or_inherited(&app, &file, None);
         let plan = match &trw {
             Some(trw) => statusline::plan_install(&file, &key, trw, record)?,
             None => statusline::plan_uninstall(&file, &key, record, statusline::original_of(&app, &key))?,
@@ -345,4 +346,53 @@ pub fn apply_statusline(install: bool, fingerprint: &str) -> Result<(), String> 
         statusline::apply(plan, &app, install)?;
     }
     Ok(())
+}
+
+/// statusLine과 같은 config dir 목록을 훑는다 — 계정마다 settings.json이 따로 있다.
+fn claude_hook_plans(install: bool) -> Result<Vec<template::Plan>, String> {
+    let app = app_dir()?;
+    let trw = if install { Some(installed_cli()?) } else { None };
+    let mut plans = Vec::new();
+    for dir in crate::providers::claude_accounts::config_dir_candidates() {
+        if !dir.is_dir() {
+            continue;
+        }
+        let file = statusline::settings_file(&dir);
+        let record = template::record_or_inherited(&app, &file, Some(claude_hooks::TAG));
+        let plan = match &trw {
+            Some(trw) => claude_hooks::plan_install(&file, &statusline::config_key(&dir), trw, record)?,
+            None => claude_hooks::plan_uninstall(&file, record)?,
+        };
+        plans.push(plan);
+    }
+    Ok(plans)
+}
+
+/// 사용자 settings.json을 읽고 써서 blocking 풀에서 돈다.
+#[tauri::command]
+pub async fn preview_claude_hooks(install: bool) -> Result<HookPreview, String> {
+    tauri::async_runtime::spawn_blocking(move || Ok(preview_of(claude_hook_plans(install)?.iter())))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn apply_claude_hooks(
+    install: bool,
+    fingerprint: String,
+) -> Result<crate::settings::Settings, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let app = app_dir()?;
+        let plans = claude_hook_plans(install)?;
+        check_fingerprint(&fingerprint, fingerprint_of(plans.iter()))?;
+        for plan in &plans {
+            template::apply(plan, &app)?;
+        }
+        let mut s = crate::settings::get();
+        s.claude_hooks_installed = install;
+        crate::settings::set(s.clone());
+        Ok(s)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }

@@ -1,0 +1,136 @@
+/* 노치 펼친 화면의 .notch-sessions 안에 들어간다. 구분선과 바깥 여백은 그 칸이 갖고,
+   스크롤도 .notch-scroll 하나로 한다 — 높이 측정이 목록까지 함께 잡게. */
+.session-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.session-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 4px;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+
+button.session-row {
+  cursor: pointer;
+}
+
+button.session-row:hover,
+button.session-row:focus-visible {
+  background: #1c1c1e;
+  outline: none;
+}
+
+.session-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #636366;
+}
+
+.session-dot.working {
+  background: #64d2ff;
+}
+
+/* 입력 대기만 속 빈 고리 — 작업 중과 밝기가 비슷해 색이 안 보여도 모양으로 갈린다.
+   고리 선이 얇아도 검정 대비 14.9:1이라 비텍스트 기준(3:1)을 넉넉히 넘는다. */
+.session-dot.waiting {
+  background: transparent;
+  box-sizing: border-box;
+  border: 1.5px solid #ffd60a;
+}
+
+.session-dot.justDone {
+  background: #30d158;
+}
+
+/* 실패는 위험 빨강(#ff453a)을 쓰지 않는다 — 노치에서 그 색은 잔여율 경고 몫이라
+   세션 하나 실패한 게 한도 바닥난 것처럼 읽힌다. 보라 ×로 색과 모양을 둘 다 바꾼다.
+   대비는 검정 위 5.96:1, 호버 배경(#1c1c1e) 위 4.83:1. */
+.session-dot.failed {
+  position: relative;
+  background: transparent;
+  border-radius: 0;
+}
+
+.session-dot.failed::before,
+.session-dot.failed::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 9px;
+  height: 1.5px;
+  border-radius: 1px;
+  background: #bf5af2;
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.session-dot.failed::after {
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+.session-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-state,
+.session-age {
+  color: #a1a1a6;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.session-age {
+  font-variant-numeric: tabular-nums;
+}
+
+.session-state.waiting {
+  color: #ffd60a;
+}
+
+.session-state.failed {
+  color: #bf5af2;
+}
+
+/* 자리표시 줄은 실제 줄과 높이가 같아야 목록이 붙을 때 섬 높이가 안 튄다.
+   글자 줄 높이만큼 막대를 세워 맞춘다. */
+.session-row.skeleton {
+  grid-template-columns: auto 1fr;
+}
+
+.skeleton-bar {
+  height: 1lh;
+  max-width: 60%;
+  border-radius: 4px;
+  background: #1c1c1e;
+  animation: skeleton-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes skeleton-pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-bar {
+    animation: none;
+  }
+}

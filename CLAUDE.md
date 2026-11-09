@@ -12,14 +12,18 @@ JSONL 시계열로 소진 속도·ETA를 더한다(차별점). 사용자 로그�
 src-tauri/src/
 ├ lib.rs            앱 진입점: provider 등록, get_runway/get_stats command, tray, AlertManager
 ├ runway.rs         RunwayEngine — 샘플/공식사용률 → RunwayStatus 계산
-├ activity.rs       에이전트 활동 감지(도는 중/막 끝남/쉬는 중) — pet 반응용
+├ activity.rs       에이전트 활동 감지(도는 중/입력 대기/막 끝남/쉬는 중) — pet 반응 + 세션 목록
 ├ rollup.rs         일별 사용량·사용률 롤업 영속화(rollup.json) — 30일+ 히스토리용
 ├ atomicfile.rs     영속 파일 원자적 쓰기(tmp→rename) + 손상 파일 보존
 ├ inbox.rs          알림함 — trw로 들어온 완료 알림 큐·영속(inbox.json)
 ├ ipc.rs            trw 소켓 리스너(trw.sock) + 앱 꺼진 사이 스풀(pending/) 소비
 ├ landing.rs        알림 클릭 시 원래 세션으로 되돌리는 어댑터(Orca/Paseo/경로)
 ├ notify_os.rs      완료 알림의 OS 알림 발송 + 클릭 응답 수신
-├ installer.rs      trw CLI·스킬을 사용자 환경에 설치(심링크·복사)
+├ installer/        trw CLI·스킬 설치(mod.rs) + 사용자 설정 파일에 훅 넣고 빼기
+│  ├ template.rs    diff 미리보기·지문 확인·백업·설치 기록(hook-installs.json) 공용 틀
+│  ├ codex_hooks.rs Codex hooks.json
+│  ├ claude_hooks.rs Claude settings.json의 hooks
+│  └ statusline.rs  Claude settings.json의 statusLine
 ├ notch.rs          노치 양옆 섬 — NSPanel 바꿔치기, 노치 지오메트리, 커서 폴링 클릭 통과
 └ providers/
    ├ mod.rs         UsageProvider trait + 공용 타입 + find_recent_jsonl 헬퍼
@@ -30,7 +34,7 @@ src-tauri/src/
    └ antigravity.rs ~/.gemini/antigravity-cli 전송 로그
 src-tauri/trw/      `trw` CLI (별도 crate — 이유는 주의사항)
 src-tauri/skills/   번들로 배포하는 에이전트 스킬(trw-notify)
-src/                React UI (App.tsx 대시보드)
+src/                React UI (App.tsx 대시보드, Notch.tsx 노치 섬, SessionList.tsx 세션 목록)
 design/             아이콘 SVG 소스
 ```
 
@@ -42,6 +46,11 @@ design/             아이콘 SVG 소스
 2. `runway::compute`는 `collect_samples`(시계열) + `official_usage`(공식 사용률)를 조합
 3. 백그라운드 스레드(60초)가 `compute_all` + `check_alerts`로 임계치 경보 (창 닫혀도 동작),
    이어서 `record_utilizations`(사용률 이력) + `rollup::update`(일별 사용량)
+4. 활동은 별도 축이다 — Claude/Codex 훅이 `trw hook <도구> <이벤트>`로
+   `~/.token-runway/hooks/<도구>-<세션>.json`에 한 줄 상태를 남기고, pet과 노치가 1.5초마다
+   `get_activity`(도구별 대표)·`get_sessions`(세션별 목록)로 읽는다. 훅이 없거나 낡았으면
+   로그 꼬리 추론으로 넘어간다. 세션 줄을 누르면 `land_session`이 상태 파일의 랜딩 정보로
+   `landing.rs`를 탄다
 
 ## UsageProvider trait 규약 (`providers/mod.rs`)
 
@@ -278,9 +287,20 @@ trait UsageProvider {
   - **Codex**: `event_msg`의 `task_started`/`task_complete` — 턴 경계가 명시적
   - **Grok**: `sessionUpdate == "turn_completed"`. `hook_execution`·`session_recap`은 턴이
     끝난 뒤에도 붙어서 판정에서 뺀다
-  - **Claude Code**: 마지막 `assistant`/`user` 엔트리로 추론 — `stop_reason == "tool_use"`면
-    툴 실행 중, `user`면 응답 대기, 그 밖의 `assistant`면 턴 종료.
+  - **Claude Code**: 훅을 깔았으면(`claude_hooks_installed`) 세션마다 훅 상태가 먼저다.
+    이벤트 매핑은 공식 문서(https://code.claude.com/docs/en/hooks) 기준 —
+    `UserPromptSubmit`·`PreToolUse`·`PostToolUse(Failure)`→working,
+    `Notification`(`permission_prompt`·`elicitation_dialog`·`elicitation_url_dialog`·
+    `agent_needs_input`)→waiting, `Stop`→done, `StopFailure`→done+실패, `SessionStart`→idle,
+    `SessionEnd`→파일 삭제. `SubagentStop`은 끝남이 아니라 설치하지 않는다(서브에이전트가
+    끝나도 메인 턴은 돈다). `idle_prompt` 알림은 사람이 입력할 차례라는 뜻일 뿐 막혀 있는 게
+    아니라 상태를 바꾸지 않는다. 한 세션이라도 working이면 working, 없으면 waiting, 그다음
+    가장 최근 상태다.
+    훅이 없거나 낡았으면 JSONL 마지막 `assistant`/`user` 엔트리로 추론 — `stop_reason ==
+    "tool_use"`면 툴 실행 중, `user`면 응답 대기, 그 밖의 `assistant`면 턴 종료.
     `attachment`·`system`·`ai-title` 등 부수 엔트리는 건너뛴다
+  - **Codex 훅**도 같은 상태 파일·같은 판정 코드(`HOOK_TOOLS`)를 쓴다. 예전 trw가 남긴
+    파일은 pid가 없어 신선할 때(5분)만 믿는다
   - **Gemini**: `~/.gemini/tmp/<프로젝트>/chats/session-*.jsonl`의 마지막 엔트리
     (`user`/`gemini`/`error`). 다섯 도구 중 유일하게 **실패까지** 구분된다.
     provider가 읽는 `logs.json`은 사용자 메시지만 있어 활동 감지에 못 쓴다
@@ -288,7 +308,15 @@ trait UsageProvider {
     `JustDone`을 만들지 않는다 — 끝난 시점을 모르는데 손을 흔들면 엉뚱한 타이밍에 흔든다
   - 여러 도구가 동시에 돌면 프론트 `leadActivity`가 **가장 최근에 움직인 하나**를 고른다
     (pet은 한 마리라서). 매핑: `working`→`running` 포즈로 제자리,
-    `justDone`→`waving` + "다 됐어요" 말풍선, `idle`→기존 배회
+    `waiting`→`waving` + "확인이 필요해요" 말풍선(대기하는 동안 계속), `justDone`→`waving` +
+    "다 됐어요" 말풍선, `idle`→기존 배회
+  - **세션 목록** (`get_sessions` → `SessionList.tsx`, 노치 펼친 화면): 훅이 하나도 안
+    깔렸으면 `installed: false`로 목록 자리를 그리지 않는다. 꺼진 도구(`disabled_tools`)와
+    훅 토글이 꺼진 도구의 상태 파일은 읽지 않는다. 훅이 없거나 세션이 0개면 `SessionList`가
+    `null`을 돌려 `.notch-sessions`가 `:empty`로 접힌다 — 빈 안내 줄이나 래퍼를 넣으면 이 접힘이
+    깨진다. 목록은 `.notch-scroll` 안쪽 측정 대상 안에 있어 늘고 줄 때 `notch_fit` 높이에 잡힌다
+    입력 대기는 노치 활동 글자와 세션 점 모두 노란색(#ffd60a)에 속 빈 고리를 붙인다. 위험 색
+    (#ff453a)은 잔여율 경고 자리라 쓰지 않고, 작업 중(#64d2ff)과 밝기가 비슷해 모양으로도 가른다
   - 작업 중에도 `STROLL_GAP`(30~60초)마다 한 번씩 `STROLL_MS`(5~9초) 짧게 산책한다 —
     에이전트를 하루종일 돌리면 제자리 정지만으로는 pet이 얼어 있는 것처럼 보인다.
     산책 중엔 방향별 걷기 그림을 쓰고, 도착해도 쉬지 않고 계속 걷는다
@@ -404,7 +432,24 @@ bash scripts/build-trw.sh       # trw를 externalBin 자리에 놓기 (--debug�
 - **노치 펼침과 클릭 통과는 Rust 스레드가 정한다** — 창은 펼친 크기로 고정해두고 커서가
   섬(펼친 뒤엔 펼친 영역) 안일 때만 `set_ignore_cursor_events(false)`로 바꾼다. 프론트가
   hover를 보고 IPC로 알리면 그 왕복 사이 클릭이 뒤 창으로 샌다. 프론트는 `notch-mode`(collapsed/notice/full)만 받아 그린다.
-  노치 없는 화면에서는 창을 만들지 않고, 5초마다 화면 배치를 다시 재서 덮개를 다시 열면 되살린다
+  노치 없는 화면에서는 창을 만들지 않고, 5초마다 화면 배치를 다시 재서 덮개를 다시 열면 되살린다.
+  펼친 창은 최대 크기(`EXPANDED_WIDTH`×`EXPANDED_MAX_HEIGHT`)로 고정하고, 프론트가 잰 내용
+  높이를 `notch_fit`으로 받아 섬 높이와 클릭 영역을 그 높이에 맞춘다. 패널은 접혀 있어도
+  늘 렌더링해 둔다 — 펼치기 전에 높이를 재서 넘겨 둬야 펼친 순간부터 클릭 영역이 맞는다
+- **트레이 숫자는 노치 섬이 주 화면에 떠 있을 때만 숨긴다** (`tray_shows_figures`) —
+  설정 `tray_title_mode`가 `auto`(기본)면 이 규칙, `always`는 항상 숫자, `icon_only`는
+  항상 아이콘만이다. 주 화면은 `NSScreen.screens` 0번(메뉴바가 있는 화면)이다. 외장
+  모니터가 주 화면이고 노치 달린 내장 화면이 보조면 노치 섬은 보조 화면에만 뜨고, 눈이
+  가는 메뉴바엔 섬이 없으니 숫자를 그대로 둔다. 숫자가 두 군데 겹치는 건 해가 없지만
+  어느 쪽에도 안 보이면 경고를 놓치기 때문이다. 화면 판정은 `notch.rs`의 5초 배치 확인이
+  `Presence`(Absent/Secondary/Primary)가 바뀔 때만 `refresh_tray_title`을 불러 알린다 —
+  트레이 쪽이 따로 폴링하지 않는다. `set_title`도 직전과 같은 값이면 부르지 않는다.
+  빨간 위험 아이콘은 모드와 무관하게 늘 바뀐다 — 숫자를 숨겨도 위험은 보여야 한다
+- **노치 표시는 기본으로 켠다** (`notch_enabled` 기본 true, 예전 설정 파일도 true로 읽음) —
+  2026-11-09 NSPanel 게이트(아래 로드맵)를 통과해 포커스를 뺏지 않고 클릭도 통과하는 게
+  확인됐다. 노치 없는 화면에서는 창 자체를 만들지 않아 켜 두어도 손해가 없다. 노치 숫자는
+  잔여율이 경보 임계치 이하이거나 verdict가 `danger`면 위험 색(#ff453a, 검정 배경 대비
+  6.2:1)으로 칠한다 — 트레이 숫자가 숨겨지면 그 자리가 노치뿐이라서다
 - **노치 숫자만 대표 계정 폴백을 허용한다** (`Notch.tsx`의 `figureOf`) — 활성 계정이
   429 등으로 값을 못 받으면 값을 받은 다른 계정 중 가장 적게 남은 숫자를 흐리게 띄운다.
   노치는 한눈에 보는 자리라 "—"보다 낫고, 흐림으로 활성 값이 아님을 구분한다. 프론트
@@ -440,6 +485,28 @@ bash scripts/build-trw.sh       # trw를 externalBin 자리에 놓기 (--debug�
   `--strict`를 쓴다. 알림 payload에 셸 명령을 담지 않는 것도 같은 이유다 — 훅
   스크립트가 오염되면 그대로 실행기가 된다. `kind` 화이트리스트만 받고 명령은
   `landing.rs`가 조립한다
+- **긴 도구 실행은 5분 컷만으로 못 버틴다** — `PreToolUse` 뒤 10분짜리 빌드가 돌면 그동안
+  훅 이벤트가 없어 `STALE_MS`에 걸려 쉬는 중이 된다. 컷을 없애면 반대로 `kill`·터미널 닫기로
+  죽은 세션(SessionEnd도 Stop도 안 온다)이 영원히 working으로 남는다. 그래서 `trw`가 상태에
+  **세션 프로세스의 pid와 시작 시각**(`proc_pidinfo`)을 같이 남기고, 앱은 낡은 상태를 그
+  프로세스가 살아 있을 때만 믿는다. 시작 시각까지 맞춰야 재사용된 pid에 속지 않는다.
+  pid는 판정 창을 **늘리기만** 한다 — pid를 못 잡았거나 틀렸으면 예전 5분 규칙 그대로다.
+  살아 있어도 낡은 working이 거짓일 수 있는 두 경우를 transcript로 거른다:
+  Esc 중단(Stop이 안 온다 — transcript 끝 `[Request interrupted by user…]`로 idle),
+  훅 없이 transcript만 자랐다가 그것도 5분 넘게 멈춘 경우(idle)
+- **Claude 훅 stdout은 비워야 한다** — `UserPromptSubmit`·`SessionStart`의 stdout은
+  Claude 컨텍스트에 들어가고 `Stop`의 stdout JSON은 `decision`으로 해석된다. `trw hook
+  claude`는 아무것도 찍지 않고, 도구 입력·프롬프트는 상태 파일에 남기지 않는다(명령에
+  시크릿이 섞일 수 있다). 네트워크·소켓도 안 쓴다 — 매 도구 호출마다 돌아서다
+- **SessionEnd는 상태 파일을 지운다** — "끝남" 표시를 남겨도 목록에서 빼는 것 말고 쓸 데가
+  없다. 지우지 못하고 남은 파일은 pid 확인에서 걸러지고, `trw`가 쓸 때마다 24시간 넘은
+  파일을 치운다
+- **훅 설치 기록은 태그로 나눈다** — Claude 훅과 statusLine은 같은 `settings.json`을 고쳐서
+  `hook-installs.json` 키가 겹친다. Claude 훅은 `<경로>#claude-hooks`로 따로 남기고, 먼저
+  설치한 쪽의 `created_file`·빈 객체 기록을 뒤에 설치한 쪽이 물려받는다
+  (`record_or_inherited`). 그래야 어떤 순서로 넣고 빼도 마지막에 빠지는 쪽이 원래 파일을
+  바이트 그대로 되돌린다(`coexists_with_statusline_in_every_order` 테스트). 우리 그룹은
+  배열 끝에만 붙이고 matcher를 비운다 — 오르카나 사용자 훅의 순서·내용을 건드리지 않는다
 - 토큰 등 시크릿은 로그/커밋에 절대 노출 금지 (Keychain 직접 읽기)
 - `official_usage` 우선 — 로컬 토큰 합산보다 공식 사용률이 정확
 - 새 provider의 `window_secs`/`unit`이 다르면 UI는 자동 대응 (라벨 동적)
@@ -506,6 +573,10 @@ bash scripts/build-trw.sh       # trw를 externalBin 자리에 놓기 (--debug�
   않고 메뉴바 위 섬으로 간다. 방식은 tauri-nspanel이 아니라 objc2 직접 호출이다 — tao 창
   클래스를 NSPanel 하위 클래스(`TRWNotchPanel`)로 바꿔치기한다. 이미 tao가 쓰는 crate라
   의존성이 늘지 않고, 바꿔치기 전에 인스턴스 크기를 비교해 tao가 ivar를 바꾸면 멈춘다
+- [x] 노치 중심 UI — 노치 표시 기본 켬, 노치 섬이 주 화면에 뜨면 트레이 숫자를 숨김
+  (`tray_title_mode`로 자동/항상/아이콘만), 펼친 노치에 도구별 잔여율과 결론, 리셋까지
+  남은 시간, 주간 잔여율, 계정별 줄과 대시보드·히스토리·알림함·설정 바로가기를 넣었다.
+  세션 목록 칸(`.notch-sessions`)엔 `SessionList`가 들어가고 세션이 없으면 접힌다. 팝오버는 그대로 둔다
 - [ ] 플랜 배지 대비 — `.plan-badge`와 `.acct-plan`이 같은 파란 배경에 흰 글자라
   대비가 3.6:1이다. WCAG AA-large는 넘지만 normal(4.5:1)에는 못 미친다. 한쪽만
   어둡게 하면 두 배지가 달라 보여 함께 손봐야 한다
@@ -515,9 +586,12 @@ bash scripts/build-trw.sh       # trw를 externalBin 자리에 놓기 (--debug�
 - [ ] 사용률 이력에 계정 축 — 롤업이 도구명만 키로 써서 계정을 전환하면 같은 키에
   두 계정 이력이 이어 붙는다. 요금제 추천의 "최악의 주" 판정이 그만큼 어긋난다.
   히스토리 창 조회도 도구명 기준이라 키를 바꾸면 과거 이력이 끊긴다 — 마이그레이션 필요
-- [ ] pet 활동 감지 정확도 — Claude Code는 `Stop`/`PreToolUse` 훅으로 상태 파일을
-  떨어뜨리면 추측이 없어진다. 사용자 `settings.json`을 건드려야 하니 설정 토글로 얹을 것.
-  Antigravity의 완료 시점도 훅 말고는 방법이 없다
+- [x] pet 활동 감지 정확도 — Claude Code 훅(`trw hook claude`)이 세션별 상태 파일을
+  남기고 설정 토글로 `settings.json`에 넣고 뺀다. 권한 확인 대기(`waiting`)까지 구분하고
+  노치 펼친 화면에 세션 목록이 붙는다
+- [ ] Antigravity 완료 시점 — 완료 이벤트가 로그에 없어 훅 말고는 방법이 없다
+- [ ] 권한 승인 직후 상태 — 승인해도 다음 `PostToolUse`까지 waiting으로 남는다.
+  `PermissionRequest` 훅을 쓰면 당겨질 수 있지만 그 훅은 결정을 돌려받는 자리라 붙이지 않았다
 - [ ] 주간 ETA에 요일 가중 — `seven_day_eta_minutes`는 경과 시간 대비 선형 페이스라
   평일에 완만하고 주말에 몰아 쓰는 패턴에서 낙관적으로 어긋난다. 2026-08 실측(롤업):
   화 21% → 목 55% → 일 84% → 월 100%가 2주 연속(8/2, 8/10)이라, 목요일까지는 "리셋까지

@@ -381,13 +381,55 @@ fn load_manifest(app_dir: &Path) -> BTreeMap<String, Record> {
     }
 }
 
-pub fn record_for(app_dir: &Path, file: &Path) -> Option<Record> {
-    load_manifest(app_dir).remove(&file.to_string_lossy().to_string())
+/// 기록 키. 한 파일을 설치기 여럿이 고치면(settings.json의 statusLine과 hooks) 태그로 나눈다 —
+/// 키를 같이 쓰면 한쪽을 제거할 때 다른 쪽 기록까지 지워진다. 태그 없는 키는 예전 기록과 같다.
+fn record_key(file: &Path, tag: Option<&str>) -> String {
+    let path = file.to_string_lossy();
+    match tag {
+        Some(t) => format!("{path}#{t}"),
+        None => path.into_owned(),
+    }
 }
 
-fn save_record(app_dir: &Path, file: &Path, record: Option<&Record>) -> Result<(), String> {
+pub fn record_for(app_dir: &Path, file: &Path) -> Option<Record> {
+    load_manifest(app_dir).remove(&record_key(file, None))
+}
+
+/// 내 기록이 없으면 같은 파일을 먼저 고친 다른 설치기의 기록에서 파일 자체의 사정만 물려받는다.
+///
+/// 다른 설치기가 파일을 새로 만들었거나 빈 `{}` 안쪽 공백을 기억하고 있는데 그쪽이 먼저
+/// 제거되면, 나중에 제거하는 쪽이 그 사실을 몰라 `{}`를 남기거나 공백을 바꾼다.
+/// 멤버 경로(`created`)는 물려받지 않는다 — 그건 그 설치기만 걷어낼 수 있다.
+pub fn record_or_inherited(app_dir: &Path, file: &Path, tag: Option<&str>) -> Option<Record> {
+    let m = load_manifest(app_dir);
+    let own = record_key(file, tag);
+    if let Some(r) = m.get(&own) {
+        return Some(r.clone());
+    }
+    let base = record_key(file, None);
+    let prefix = format!("{base}#");
+    let sibling = m
+        .iter()
+        .find(|(k, _)| **k != own && (**k == base || k.starts_with(&prefix)))?
+        .1;
+    let mut inherited = Record {
+        created_file: sibling.created_file,
+        ..Record::default()
+    };
+    if let Some(inner) = sibling.empty_inner.get("") {
+        inherited.empty_inner.insert(String::new(), inner.clone());
+    }
+    Some(inherited)
+}
+
+fn save_record(
+    app_dir: &Path,
+    file: &Path,
+    tag: Option<&str>,
+    record: Option<&Record>,
+) -> Result<(), String> {
     let mut m = load_manifest(app_dir);
-    let key = file.to_string_lossy().to_string();
+    let key = record_key(file, tag);
     match record {
         Some(r) => {
             m.insert(key, r.clone());
@@ -468,6 +510,8 @@ pub struct Plan {
     pub before: Option<String>,
     pub after: Option<String>,
     pub record: Option<Record>,
+    /// 설치 기록 키의 태그. 같은 파일을 고치는 설치기가 하나뿐이면 None.
+    pub tag: Option<&'static str>,
     pub stamp: Stamp,
 }
 
@@ -515,7 +559,7 @@ pub fn apply(plan: &Plan, app_dir: &Path) -> Result<(), String> {
                 .map_err(|e| format!("{}: {e}", plan.path.display()))?,
         }
     }
-    save_record(app_dir, &plan.path, plan.record.as_ref())
+    save_record(app_dir, &plan.path, plan.tag, plan.record.as_ref())
 }
 
 /// 같은 초에 두 번 쓰면(설치 직후 제거) 첫 백업이 덮여 원래 파일을 잃는다. 번호를 붙여 피한다.
