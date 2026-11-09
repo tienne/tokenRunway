@@ -82,3 +82,29 @@ button.session-row:focus-visible {
 .session-state.waiting {
   color: #ffd60a;
 }
+
+/* 자리표시 줄은 실제 줄과 높이가 같아야 목록이 붙을 때 섬 높이가 안 튄다.
+   글자 줄 높이만큼 막대를 세워 맞춘다. */
+.session-row.skeleton {
+  grid-template-columns: auto 1fr;
+}
+
+.skeleton-bar {
+  height: 1lh;
+  max-width: 60%;
+  border-radius: 4px;
+  background: #1c1c1e;
+  animation: skeleton-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes skeleton-pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-bar {
+    animation: none;
+  }
+}

@@ -12,7 +12,7 @@ import {
   type RunwayStatus,
   type Settings,
 } from "./App";
-import { SessionList, useSessions } from "./SessionList";
+import { SessionList, SessionSkeleton, useSessions } from "./SessionList";
 import "./Notch.css";
 
 interface NotchLayout {
@@ -340,6 +340,7 @@ export function NotchView() {
               </ul>
               {/* 세션이 없거나 훅이 없으면 SessionList가 null이라 :empty로 접힌다. */}
               <section className="notch-sessions">
+                {sessions === undefined && <SessionSkeleton lang={lang} />}
                 {sessions && (
                   <SessionList
                     sessions={sessions}
