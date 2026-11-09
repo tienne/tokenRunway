@@ -405,6 +405,11 @@ bash scripts/build-trw.sh       # trw를 externalBin 자리에 놓기 (--debug�
   섬(펼친 뒤엔 펼친 영역) 안일 때만 `set_ignore_cursor_events(false)`로 바꾼다. 프론트가
   hover를 보고 IPC로 알리면 그 왕복 사이 클릭이 뒤 창으로 샌다. 프론트는 `notch-mode`(collapsed/notice/full)만 받아 그린다.
   노치 없는 화면에서는 창을 만들지 않고, 5초마다 화면 배치를 다시 재서 덮개를 다시 열면 되살린다
+- **노치 숫자만 대표 계정 폴백을 허용한다** (`Notch.tsx`의 `figureOf`) — 활성 계정이
+  429 등으로 값을 못 받으면 값을 받은 다른 계정 중 가장 적게 남은 숫자를 흐리게 띄운다.
+  노치는 한눈에 보는 자리라 "—"보다 낫고, 흐림으로 활성 값이 아님을 구분한다. 프론트
+  표시에서만 하는 일이라 `representative`(카드 헤더·트레이·경보·이력·요금제 추천)는
+  그대로 폴백이 없다. 펼치면 계정이 둘 이상인 도구는 계정별 줄을 함께 보여준다
 - **완료 알림 클릭은 `tauri-plugin-notification`으로 못 받는다** — 데스크톱 구현이
   title/body/icon/sound만 넘기고 `action_type_id`를 버린다(`desktop.rs`의 `show()`).
   그래서 그 밑에 깔린 `mac-notification-sys`를 직접 쓴다(notify-rust 의존이라 crate가
