@@ -10,7 +10,8 @@
 //! 도구별 신호 품질이 다르다 (실데이터로 확인, 2026-08-20):
 //! - Codex: `event_msg`의 `task_started`/`task_complete` — 턴 경계가 명시적
 //! - Grok: `sessionUpdate == "turn_completed"` — 완료 이벤트가 따로 있다
-//! - Claude Code: 마지막 엔트리 종류로 추론 (`assistant`+`tool_use`면 도는 중)
+//! - Claude Code: 훅(`trw hook claude`)을 깔았으면 세션별 이벤트, 아니면 마지막 엔트리 종류로
+//!   추론 (`assistant`+`tool_use`면 도는 중)
 //! - Gemini: 마지막 엔트리가 `user`/`gemini`/`error` — `error`로 실패까지 구분된다
 //! - Antigravity: 완료 이벤트가 없어 `streamGenerateContent` 신선도로만 추론
 
@@ -42,6 +43,8 @@ const MAX_DEPTH: usize = 5;
 pub enum ActivityState {
     /// 에이전트가 지금 응답·툴 실행 중.
     Working,
+    /// 사람이 답해야 진행된다(권한 요청 등). 지금은 Claude Code 훅에서만 나온다.
+    Waiting,
     /// 턴이 방금(`JUST_DONE_MS` 안에) 끝났다.
     JustDone,
     /// 아무것도 안 하는 중.
@@ -57,7 +60,7 @@ pub struct AgentActivity {
     pub state: ActivityState,
     /// 이 상태의 근거가 된 마지막 이벤트 시각(epoch ms).
     pub since_ms: i64,
-    /// 실패로 끝났는지. 현재 Gemini의 `error` 엔트리에서만 판별된다.
+    /// 실패로 끝났는지. Gemini의 `error` 엔트리와 Claude Code 훅의 StopFailure에서 판별된다.
     pub failed: bool,
 }
 
@@ -400,66 +403,411 @@ fn glog_tod_ms(line: &str) -> Option<i64> {
     Some(((h * 60 + m) * 60 + s) * 1000 + ms)
 }
 
-// --- Codex 훅 상태 ---
+// --- 훅 상태 (Claude Code / Codex) ---
 
-/// `trw hook codex`가 세션마다 남기는 상태 한 줄. 같은 모양을 `trw`가 쓴다.
-#[derive(serde::Deserialize)]
+/// `trw hook claude|codex`가 세션마다 남기는 상태 한 줄. 같은 모양을 `trw`가 쓴다.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 struct HookState {
     state: String,
     at_ms: i64,
+    #[serde(default)]
+    failed: bool,
+    #[serde(default)]
+    session: Option<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    target: Option<serde_json::Value>,
+    #[serde(default)]
+    transcript: Option<String>,
+    #[serde(default)]
+    config_dir: Option<String>,
+    #[serde(default)]
+    pid: Option<u32>,
+    #[serde(default)]
+    pid_start: Option<u64>,
 }
 
-/// 훅 상태 디렉토리의 세션별 상태들. 쓰는 중인 임시 파일(`.`으로 시작)은 건너뛴다.
-fn read_hook_states(dir: &Path) -> Vec<(String, i64)> {
+/// 훅을 거는 도구. `prefix`는 상태 파일 이름 앞부분(`trw`의 `write_hook_state`와 같다).
+#[derive(Clone, Copy)]
+struct HookTool {
+    name: &'static str,
+    prefix: &'static str,
+    installed: fn() -> bool,
+}
+
+const HOOK_TOOLS: &[HookTool] = &[
+    HookTool {
+        name: "Claude Code",
+        prefix: "claude",
+        installed: crate::settings::claude_hooks_installed,
+    },
+    HookTool {
+        name: "Codex",
+        prefix: "codex",
+        installed: crate::settings::codex_hooks_installed,
+    },
+];
+
+fn hooks_dir() -> Option<PathBuf> {
+    crate::settings::app_dir().map(|d| d.join("hooks"))
+}
+
+/// 훅 상태 디렉토리에서 `prefix-*.json`만 읽는다. 쓰는 중인 임시 파일(`.`으로 시작)은 건너뛴다.
+fn read_hook_states(dir: &Path, prefix: &str) -> Vec<HookState> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
+    let head = format!("{prefix}-");
     entries
         .flatten()
         .filter(|e| {
             let name = e.file_name();
             let name = name.to_string_lossy();
-            name.starts_with("codex-") && name.ends_with(".json")
+            name.starts_with(&head) && name.ends_with(".json")
         })
         .filter_map(|e| {
             let raw = std::fs::read_to_string(e.path()).ok()?;
-            let st: HookState = serde_json::from_str(raw.trim()).ok()?;
-            Some((st.state, st.at_ms))
+            serde_json::from_str(raw.trim()).ok()
         })
         .collect()
 }
 
-/// 훅 상태로 낸 Codex 활동. 신선한(`STALE_MS` 안) 상태가 없으면 None — rollout 판정으로 넘긴다.
-///
-/// 세션이 여럿이면 하나라도 도는 중이면 도는 중이다. rollout은 최근 파일 하나만 봐서
-/// 다른 세션이 끝난 순간 도는 세션을 놓치는데, 훅은 세션마다 파일이 따로라 안 놓친다.
-fn hook_activity(states: &[(String, i64)], now_ms: i64) -> Option<AgentActivity> {
-    let fresh: Vec<&(String, i64)> = states
-        .iter()
-        .filter(|(_, at)| now_ms - at <= STALE_MS)
-        .collect();
-    if let Some(at) = fresh
-        .iter()
-        .filter(|(s, _)| s == "working")
-        .map(|(_, at)| *at)
-        .max()
-    {
-        return Some(AgentActivity::new("Codex", ActivityState::Working, at));
-    }
-    let (state, at) = fresh.iter().max_by_key(|(_, at)| *at)?;
-    let state = match state.as_str() {
-        "done" => done_state(*at, now_ms),
-        _ => ActivityState::Idle,
-    };
-    Some(AgentActivity::new("Codex", state, *at))
+/// 세션 하나의 지금 상태. 훅이 남긴 상태에 세션 프로세스 생존과 transcript를 더해 정한다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionState {
+    Working,
+    Waiting,
+    Done,
+    Idle,
 }
 
-fn codex_hook_activity(now_ms: i64) -> Option<AgentActivity> {
-    if !crate::settings::codex_hooks_installed() {
+/// 상태를 정하는 데 필요한 바깥 사실. 테스트에서 주입하려고 묶었다.
+struct Evidence {
+    /// 세션 프로세스가 살아 있는지. pid를 모르면 None.
+    alive: Option<bool>,
+    /// transcript 마지막 수정 시각.
+    transcript_ms: Option<i64>,
+    /// transcript 마지막 엔트리가 사용자 중단(Esc)인지. 필요할 때만 읽는다.
+    interrupted: Box<dyn Fn() -> bool>,
+}
+
+/// 훅 이벤트 뒤 transcript가 이만큼 넘게 더 자랐으면 훅이 모르는 일이 있었다고 본다.
+/// 훅과 transcript 쓰기가 같은 순간에 일어나 생기는 시차는 넘기지 않게 여유를 둔다.
+const TRANSCRIPT_SLACK_MS: i64 = 1_000;
+
+/// 세션 상태를 정한다. None이면 죽은 세션이라 목록에서 뺀다.
+///
+/// 신선한(`STALE_MS` 안) 상태는 그대로 믿는다. 오래된 상태는 세션 프로세스가 살아 있을 때만
+/// 쓴다 — PreToolUse 뒤 10분짜리 빌드가 도는 동안엔 이벤트가 없어 5분 컷에 걸리는데,
+/// 컷을 없애면 강제 종료된 세션이 영원히 작업 중으로 남는다. pid가 이 둘을 가른다.
+/// pid는 기간을 늘리기만 하고 줄이지 않는다 — pid를 잘못 짚어도 예전 5분 규칙으로 돌아갈 뿐이다.
+///
+/// Esc로 턴을 끊으면 Stop 훅이 안 온다(공식 문서: 사용자 중단이면 Stop이 돌지 않는다).
+/// 그때 transcript 끝에 중단 표시가 붙으므로, 작업 중·대기 상태 뒤로 transcript가 자랐으면
+/// 그 표시를 확인해 쉬는 중으로 내린다.
+fn resolve(st: &HookState, now_ms: i64, ev: &Evidence) -> Option<SessionState> {
+    let fresh = now_ms - st.at_ms <= STALE_MS;
+    if !fresh && ev.alive != Some(true) {
         return None;
     }
-    let dir = crate::settings::app_dir()?.join("hooks");
-    hook_activity(&read_hook_states(&dir), now_ms)
+    let state = match st.state.as_str() {
+        "working" => SessionState::Working,
+        "waiting" => SessionState::Waiting,
+        "done" => SessionState::Done,
+        _ => SessionState::Idle,
+    };
+    let grew = ev
+        .transcript_ms
+        .filter(|t| *t > st.at_ms + TRANSCRIPT_SLACK_MS);
+    match state {
+        SessionState::Working | SessionState::Waiting if grew.is_some() && (ev.interrupted)() => {
+            Some(SessionState::Idle)
+        }
+        SessionState::Working if !fresh => match grew {
+            // 훅 없이 transcript만 자랐다 — 그것도 오래전이면 멈춘 것으로 본다.
+            Some(t) if now_ms - t > STALE_MS => Some(SessionState::Idle),
+            _ => Some(SessionState::Working),
+        },
+        // 오래된 완료는 그냥 쉬는 중이다. 막 끝남은 신선할 때만 의미가 있다.
+        SessionState::Done if !fresh => Some(SessionState::Idle),
+        s => Some(s),
+    }
+}
+
+/// 세션 하나를 보여줄 꼴로.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookSession {
+    pub tool: String,
+    pub session: String,
+    pub state: ActivityState,
+    pub failed: bool,
+    pub since_ms: i64,
+    /// cwd 마지막 마디 (오르카는 워크트리 이름).
+    pub project: Option<String>,
+    pub target: crate::inbox::Target,
+    pub config_dir: Option<String>,
+}
+
+fn activity_state(state: SessionState, at_ms: i64, now_ms: i64) -> ActivityState {
+    match state {
+        SessionState::Working => ActivityState::Working,
+        SessionState::Waiting => ActivityState::Waiting,
+        SessionState::Done => done_state(at_ms, now_ms),
+        SessionState::Idle => ActivityState::Idle,
+    }
+}
+
+fn last_segment(path: &str) -> Option<String> {
+    Path::new(path)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+}
+
+fn to_session(tool: &str, st: &HookState, state: SessionState, now_ms: i64) -> HookSession {
+    let target = st
+        .target
+        .clone()
+        .and_then(|t| serde_json::from_value(t).ok())
+        .unwrap_or(crate::inbox::Target::None);
+    HookSession {
+        tool: tool.to_string(),
+        session: st.session.clone().unwrap_or_default(),
+        state: activity_state(state, st.at_ms, now_ms),
+        failed: st.failed,
+        since_ms: st.at_ms,
+        project: st
+            .label
+            .clone()
+            .filter(|s| !s.is_empty())
+            .or_else(|| st.cwd.as_deref().and_then(last_segment)),
+        target,
+        config_dir: st.config_dir.clone(),
+    }
+}
+
+/// 살아 있는 세션들. 실제 프로세스와 transcript를 본다.
+fn live_sessions(tool: &HookTool, now_ms: i64) -> Vec<HookSession> {
+    let Some(dir) = hooks_dir() else {
+        return Vec::new();
+    };
+    read_hook_states(&dir, tool.prefix)
+        .iter()
+        .filter_map(|st| {
+            let transcript = st.transcript.clone().map(PathBuf::from);
+            let ev = Evidence {
+                alive: st.pid.map(|pid| proc_info::alive(pid, st.pid_start)),
+                transcript_ms: transcript.as_deref().and_then(mtime_ms),
+                interrupted: Box::new(move || {
+                    transcript.as_deref().is_some_and(ends_with_interrupt)
+                }),
+            };
+            resolve(st, now_ms, &ev).map(|state| to_session(tool.name, st, state, now_ms))
+        })
+        .collect()
+}
+
+/// 세션들을 도구 하나의 활동으로 합친다. 세션이 없으면 None — 로그 추론으로 넘긴다.
+///
+/// 하나라도 도는 중이면 도는 중이다. 최근 파일 하나만 보는 로그 추론은 다른 세션이 끝난
+/// 순간 도는 세션을 놓치는데, 훅은 세션마다 파일이 따로라 안 놓친다. 도는 게 없으면
+/// 사람을 기다리는 세션이 그다음이다.
+fn merge_sessions(tool: &str, sessions: &[HookSession]) -> Option<AgentActivity> {
+    let newest = |state: ActivityState| {
+        sessions
+            .iter()
+            .filter(|s| s.state == state)
+            .max_by_key(|s| s.since_ms)
+    };
+    let pick = newest(ActivityState::Working)
+        .or_else(|| newest(ActivityState::Waiting))
+        .or_else(|| sessions.iter().max_by_key(|s| s.since_ms))?;
+    Some(AgentActivity {
+        tool: tool.to_string(),
+        state: pick.state,
+        since_ms: pick.since_ms,
+        failed: pick.failed,
+    })
+}
+
+/// transcript 꼬리의 마지막 대화 엔트리가 사용자 중단 표시인지.
+/// 표시 문구는 실제 transcript에서 확인했다: `[Request interrupted by user]`와
+/// `[Request interrupted by user for tool use]`.
+fn ends_with_interrupt(path: &Path) -> bool {
+    let Some(mt) = mtime_ms(path) else {
+        return false;
+    };
+    let key = path.to_path_buf();
+    let cached = INTERRUPT_CACHE.lock().ok().and_then(|c| {
+        c.as_ref()?
+            .get(&key)
+            .filter(|(m, _)| *m == mt)
+            .map(|(_, v)| *v)
+    });
+    if let Some(hit) = cached {
+        return hit;
+    }
+    let v = last_entry_is_interrupt(&tail_lines(path));
+    if let Ok(mut guard) = INTERRUPT_CACHE.lock() {
+        let c = guard.get_or_insert_with(Default::default);
+        // 끝난 세션의 transcript가 계속 쌓이지 않게 크게 자라면 비운다.
+        if c.len() > 64 {
+            c.clear();
+        }
+        c.insert(key, (mt, v));
+    }
+    v
+}
+
+/// 같은 transcript를 1.5초마다 다시 읽지 않게 mtime이 그대로면 직전 판정을 쓴다.
+static INTERRUPT_CACHE: Mutex<Option<std::collections::HashMap<PathBuf, (i64, bool)>>> =
+    Mutex::new(None);
+
+fn last_entry_is_interrupt(lines: &[String]) -> bool {
+    const MARK: &str = "[Request interrupted by user";
+    for line in lines.iter().rev() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        match v.get("type").and_then(|t| t.as_str()) {
+            Some("user") => {
+                let content = v.get("message").and_then(|m| m.get("content"));
+                return match content {
+                    Some(serde_json::Value::String(s)) => s.starts_with(MARK),
+                    Some(serde_json::Value::Array(items)) => items.iter().any(|it| {
+                        it.get("type").and_then(|t| t.as_str()) == Some("text")
+                            && it
+                                .get("text")
+                                .and_then(|t| t.as_str())
+                                .is_some_and(|t| t.starts_with(MARK))
+                    }),
+                    _ => false,
+                };
+            }
+            Some("assistant") => return false,
+            _ => continue,
+        }
+    }
+    false
+}
+
+/// 세션 프로세스 생존 확인. `trw`의 `proc_info`와 같은 libSystem 호출이다 — 앱이 시작 시각까지
+/// 맞춰봐야 pid가 재사용된 다른 프로세스를 살아 있는 세션으로 착각하지 않는다.
+#[cfg(target_os = "macos")]
+mod proc_info {
+    const PROC_PIDTBSDINFO: i32 = 3;
+
+    /// `<sys/proc_info.h>`의 `proc_bsdinfo`와 같은 배치.
+    #[repr(C)]
+    struct ProcBsdInfo {
+        head: [u32; 12],
+        comm: [u8; 16],
+        name: [u8; 32],
+        tail: [u32; 6],
+        start_tvsec: u64,
+        start_tvusec: u64,
+    }
+
+    extern "C" {
+        fn proc_pidinfo(pid: i32, flavor: i32, arg: u64, buffer: *mut u8, size: i32) -> i32;
+    }
+
+    pub fn start_sec(pid: u32) -> Option<u64> {
+        let mut info = std::mem::MaybeUninit::<ProcBsdInfo>::zeroed();
+        let size = std::mem::size_of::<ProcBsdInfo>() as i32;
+        // SAFETY: 버퍼 크기를 그대로 넘기고, 커널이 채운 바이트 수가 구조체 크기와 같을 때만 읽는다.
+        let n = unsafe {
+            proc_pidinfo(pid as i32, PROC_PIDTBSDINFO, 0, info.as_mut_ptr().cast(), size)
+        };
+        (n == size).then(|| unsafe { info.assume_init() }.start_tvsec)
+    }
+
+    pub fn alive(pid: u32, start: Option<u64>) -> bool {
+        match (start_sec(pid), start) {
+            (Some(now), Some(then)) => now == then,
+            (Some(_), None) => true,
+            (None, _) => false,
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+mod proc_info {
+    pub fn alive(_pid: u32, _start: Option<u64>) -> bool {
+        false
+    }
+}
+
+fn hook_activity(tool: &HookTool, now_ms: i64) -> Option<AgentActivity> {
+    if !(tool.installed)() {
+        return None;
+    }
+    merge_sessions(tool.name, &live_sessions(tool, now_ms))
+}
+
+/// 세션 목록 응답. 훅이 하나도 안 깔려 있으면 `installed`가 false라 프론트가 목록을 숨긴다.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionList {
+    pub installed: bool,
+    pub sessions: Vec<HookSession>,
+}
+
+/// 훅이 깔린 도구의 살아 있는 세션. 최근에 움직인 순서.
+pub fn sessions() -> SessionList {
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let disabled = crate::settings::disabled_tools();
+    let mut installed = false;
+    let mut sessions = Vec::new();
+    for tool in HOOK_TOOLS {
+        if !(tool.installed)() {
+            continue;
+        }
+        installed = true;
+        if disabled.iter().any(|d| d == tool.name) {
+            continue;
+        }
+        sessions.extend(live_sessions(tool, now_ms));
+    }
+    sessions.sort_by_key(|s| std::cmp::Reverse(s.since_ms));
+    SessionList { installed, sessions }
+}
+
+/// 상태 파일 읽기와 프로세스 확인이 blocking이라 풀에서 돈다.
+#[tauri::command]
+pub async fn get_sessions() -> SessionList {
+    tauri::async_runtime::spawn_blocking(sessions)
+        .await
+        .unwrap_or(SessionList {
+            installed: false,
+            sessions: Vec::new(),
+        })
+}
+
+/// 세션 줄을 누르면 그 세션으로 데려간다. 랜딩 정보는 목록을 그린 뒤 바뀌었을 수 있어 다시 읽는다.
+#[tauri::command]
+pub async fn land_session(tool: String, session: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let ht = HOOK_TOOLS
+            .iter()
+            .find(|t| t.name == tool)
+            .ok_or("알 수 없는 도구입니다")?;
+        let dir = hooks_dir().ok_or("홈 디렉토리를 찾을 수 없습니다")?;
+        let st = read_hook_states(&dir, ht.prefix)
+            .into_iter()
+            .find(|s| s.session.as_deref() == Some(session.as_str()))
+            .ok_or("세션을 찾을 수 없습니다")?;
+        let target = st
+            .target
+            .and_then(|t| serde_json::from_value(t).ok())
+            .unwrap_or(crate::inbox::Target::None);
+        crate::landing::land(&target)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // --- 진입점 ---
@@ -500,8 +848,9 @@ pub fn detect_all() -> Vec<AgentActivity> {
         if disabled.iter().any(|d| d == tool) {
             continue;
         }
-        if *tool == "Codex" {
-            if let Some(a) = codex_hook_activity(now_ms) {
+        // 훅이 깔린 도구는 훅 상태가 먼저다. 살아 있는 세션이 없으면 로그 추론으로 넘긴다.
+        if let Some(ht) = HOOK_TOOLS.iter().find(|t| t.name == *tool) {
+            if let Some(a) = hook_activity(ht, now_ms) {
                 out.push(a);
                 continue;
             }
@@ -538,36 +887,142 @@ mod tests {
         ]
     }
 
+    fn hook(state: &str, at_ms: i64) -> HookState {
+        HookState {
+            state: state.to_string(),
+            at_ms,
+            failed: false,
+            session: Some(format!("s-{at_ms}")),
+            cwd: Some("/w/my-project".into()),
+            label: None,
+            target: None,
+            transcript: None,
+            config_dir: None,
+            pid: None,
+            pid_start: None,
+        }
+    }
+
+    fn ev(alive: Option<bool>, transcript_ms: Option<i64>, interrupted: bool) -> Evidence {
+        Evidence {
+            alive,
+            transcript_ms,
+            interrupted: Box::new(move || interrupted),
+        }
+    }
+
+    fn sessions_of(states: &[HookState], evidence: impl Fn() -> Evidence) -> Vec<HookSession> {
+        states
+            .iter()
+            .filter_map(|st| resolve(st, NOW, &evidence()).map(|s| to_session("Codex", st, s, NOW)))
+            .collect()
+    }
+
+    const SIX_MIN: i64 = 6 * 60 * 1000;
+
     #[test]
     fn fresh_working_hook_beats_completed_rollout() {
         // 다른 세션이 막 끝나 rollout은 완료지만 훅으로는 아직 도는 세션이 있다.
         let rollout = detect_codex(&codex_complete_rollout(NOW - 1_000), NOW, NOW).unwrap();
         assert_eq!(rollout.state, ActivityState::JustDone);
-        let states = vec![
-            ("done".to_string(), NOW - 1_000),
-            ("working".to_string(), NOW - 30_000),
-        ];
-        let a = hook_activity(&states, NOW).unwrap();
+        let states = vec![hook("done", NOW - 1_000), hook("working", NOW - 30_000)];
+        let a = merge_sessions("Codex", &sessions_of(&states, || ev(None, None, false))).unwrap();
         assert_eq!(a.state, ActivityState::Working);
         assert_eq!(a.since_ms, NOW - 30_000);
     }
 
     #[test]
-    fn stale_hook_falls_back_to_rollout() {
-        let six_min = 6 * 60 * 1000;
-        let states = vec![("working".to_string(), NOW - six_min)];
-        assert!(hook_activity(&states, NOW).is_none());
+    fn stale_hook_without_live_process_falls_back_to_rollout() {
+        let states = vec![hook("working", NOW - SIX_MIN)];
+        assert!(merge_sessions("Codex", &sessions_of(&states, || ev(None, None, false))).is_none());
+        // 강제 종료된 세션 — 프로세스가 없으면 목록에서 빠진다.
+        assert!(sessions_of(&states, || ev(Some(false), None, false)).is_empty());
+    }
+
+    #[test]
+    fn long_tool_stays_working_while_process_lives() {
+        // PreToolUse 뒤 10분짜리 빌드 — 이벤트도 transcript 변화도 없지만 세션은 살아 있다.
+        let st = hook("working", NOW - 10 * 60 * 1000);
+        assert_eq!(resolve(&st, NOW, &ev(Some(true), Some(st.at_ms), false)), Some(SessionState::Working));
+        // 같은 상황에 프로세스가 죽었으면 뺀다.
+        assert_eq!(resolve(&st, NOW, &ev(Some(false), Some(st.at_ms), false)), None);
+        // 훅 없이 transcript만 자랐다가 그것도 오래 멈췄으면 쉬는 중이다.
+        let grew_long_ago = st.at_ms + 60_000;
+        assert_eq!(resolve(&st, NOW, &ev(Some(true), Some(grew_long_ago), false)), Some(SessionState::Idle));
+    }
+
+    #[test]
+    fn esc_interrupt_turns_working_into_idle() {
+        // Esc로 끊으면 Stop이 안 오고 transcript 끝에 중단 표시만 붙는다.
+        let st = hook("working", NOW - 20_000);
+        assert_eq!(resolve(&st, NOW, &ev(Some(true), Some(NOW - 5_000), true)), Some(SessionState::Idle));
+        assert_eq!(resolve(&st, NOW, &ev(Some(true), Some(NOW - 5_000), false)), Some(SessionState::Working));
+        // 훅과 같은 순간의 transcript 쓰기는 중단 확인을 부르지 않는다.
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let c = calls.clone();
+        let near = Evidence {
+            alive: Some(true),
+            transcript_ms: Some(st.at_ms + 500),
+            interrupted: Box::new(move || {
+                c.set(c.get() + 1);
+                true
+            }),
+        };
+        assert_eq!(resolve(&st, NOW, &near), Some(SessionState::Working));
+        assert_eq!(calls.get(), 0);
+        let waiting = hook("waiting", NOW - 20_000);
+        assert_eq!(resolve(&waiting, NOW, &ev(Some(true), Some(NOW - 5_000), true)), Some(SessionState::Idle));
+    }
+
+    #[test]
+    fn waiting_outlives_the_stale_cut_and_beats_finished_sessions() {
+        let waiting = hook("waiting", NOW - SIX_MIN);
+        assert_eq!(resolve(&waiting, NOW, &ev(Some(true), None, false)), Some(SessionState::Waiting));
+        let states = vec![hook("waiting", NOW - 60_000), hook("done", NOW - 1_000)];
+        let a = merge_sessions("Claude Code", &sessions_of(&states, || ev(None, None, false))).unwrap();
+        assert_eq!(a.state, ActivityState::Waiting);
+        // 도는 세션이 있으면 그쪽이 먼저다.
+        let states = vec![hook("waiting", NOW - 1_000), hook("working", NOW - 60_000)];
+        let a = merge_sessions("Claude Code", &sessions_of(&states, || ev(None, None, false))).unwrap();
+        assert_eq!(a.state, ActivityState::Working);
     }
 
     #[test]
     fn newest_finished_hook_decides_state() {
-        let states = vec![
-            ("idle".to_string(), NOW - 60_000),
-            ("done".to_string(), NOW - 2_000),
-        ];
-        assert_eq!(hook_activity(&states, NOW).unwrap().state, ActivityState::JustDone);
-        let states = vec![("interrupted".to_string(), NOW - 2_000)];
-        assert_eq!(hook_activity(&states, NOW).unwrap().state, ActivityState::Idle);
+        let states = vec![hook("idle", NOW - 60_000), hook("done", NOW - 2_000)];
+        let merged = merge_sessions("Codex", &sessions_of(&states, || ev(None, None, false)));
+        assert_eq!(merged.unwrap().state, ActivityState::JustDone);
+        let states = vec![hook("interrupted", NOW - 2_000)];
+        let merged = merge_sessions("Codex", &sessions_of(&states, || ev(None, None, false)));
+        assert_eq!(merged.unwrap().state, ActivityState::Idle);
+        // 살아 있지만 오래전에 끝난 세션은 막 끝남이 아니라 쉬는 중이다.
+        let old = hook("done", NOW - SIX_MIN);
+        assert_eq!(resolve(&old, NOW, &ev(Some(true), None, false)), Some(SessionState::Idle));
+    }
+
+    #[test]
+    fn stop_failure_is_kept_as_failed() {
+        let mut st = hook("done", NOW - 1_000);
+        st.failed = true;
+        let a = merge_sessions("Claude Code", &sessions_of(&[st], || ev(None, None, false))).unwrap();
+        assert_eq!(a.state, ActivityState::JustDone);
+        assert!(a.failed);
+    }
+
+    #[test]
+    fn session_row_carries_project_and_landing() {
+        let mut st = hook("working", NOW - 1_000);
+        st.target = Some(serde_json::json!({
+            "kind": "orca", "worktreeId": "r::/w/feature-x", "worktreePath": "/w/feature-x", "tabId": "t1"
+        }));
+        st.label = Some("feature-x".into());
+        let row = to_session("Claude Code", &st, SessionState::Working, NOW);
+        assert_eq!(row.project.as_deref(), Some("feature-x"));
+        assert!(matches!(row.target, crate::inbox::Target::Orca { ref tab_id, .. } if tab_id.as_deref() == Some("t1")));
+        // 라벨이 없으면 cwd 마지막 마디.
+        let row = to_session("Claude Code", &hook("idle", NOW), SessionState::Idle, NOW);
+        assert_eq!(row.project.as_deref(), Some("my-project"));
+        assert!(matches!(row.target, crate::inbox::Target::None));
     }
 
     #[test]
@@ -580,11 +1035,50 @@ mod tests {
             format!("{{\"tool\":\"codex\",\"state\":\"working\",\"at_ms\":{NOW},\"session\":\"s1\",\"home\":\"/h\"}}\n"),
         )
         .unwrap();
+        std::fs::write(
+            dir.join("claude-c1.json"),
+            format!("{{\"tool\":\"claude\",\"state\":\"waiting\",\"at_ms\":{NOW},\"session\":\"c1\",\"pid\":42,\"pid_start\":7}}\n"),
+        )
+        .unwrap();
         std::fs::write(dir.join(".codex-s2.json.1.tmp"), "{").unwrap();
         std::fs::write(dir.join("codex-broken.json"), "{").unwrap();
-        let states = read_hook_states(&dir);
+        let codex = read_hook_states(&dir, "codex");
+        let claude = read_hook_states(&dir, "claude");
         let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(states, vec![("working".to_string(), NOW)]);
+        assert_eq!(codex.len(), 1);
+        assert_eq!((codex[0].state.as_str(), codex[0].at_ms), ("working", NOW));
+        assert_eq!(claude.len(), 1);
+        assert_eq!((claude[0].pid, claude[0].pid_start), (Some(42), Some(7)));
+    }
+
+    #[test]
+    fn interrupt_marker_is_read_from_the_last_turn_entry() {
+        let user = |content: &str| format!(r#"{{"type":"user","message":{{"content":{content}}}}}"#);
+        let lines = vec![
+            r#"{"type":"assistant","message":{"stop_reason":"tool_use"}}"#.to_string(),
+            user(r#"[{"type":"text","text":"[Request interrupted by user for tool use]"}]"#),
+            r#"{"type":"system","subtype":"x"}"#.to_string(),
+        ];
+        assert!(last_entry_is_interrupt(&lines));
+        assert!(last_entry_is_interrupt(&[user(r#""[Request interrupted by user]""#)]));
+        // 도구 결과 안에 같은 문구가 있어도(transcript를 grep한 결과 등) 중단이 아니다.
+        let tool_result = user(r#"[{"type":"tool_result","content":"[Request interrupted by user]"}]"#);
+        assert!(!last_entry_is_interrupt(&[tool_result]));
+        let resumed = vec![
+            user(r#""[Request interrupted by user]""#),
+            r#"{"type":"assistant","message":{"stop_reason":"end_turn"}}"#.to_string(),
+        ];
+        assert!(!last_entry_is_interrupt(&resumed));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn own_process_is_alive_and_wrong_start_is_not() {
+        let me = std::process::id();
+        let start = proc_info::start_sec(me).expect("자기 프로세스 시작 시각");
+        assert!(proc_info::alive(me, Some(start)));
+        assert!(!proc_info::alive(me, Some(start - 1)), "pid 재사용");
+        assert!(!proc_info::alive(u32::MAX / 2, None));
     }
 
     #[test]

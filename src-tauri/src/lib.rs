@@ -1782,6 +1782,8 @@ pub fn run() {
             notch::notch_fit,
             installer::preview_claude_hooks,
             installer::apply_claude_hooks,
+            activity::get_sessions,
+            activity::land_session,
             notch::notch_layout,
             notch::notch_dismiss
         ])
