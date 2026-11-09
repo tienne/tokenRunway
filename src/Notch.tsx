@@ -30,6 +30,29 @@ interface Notice {
   context: string | null;
 }
 
+type AccountStatus = RunwayStatus["accounts"][number];
+
+interface NotchFigure {
+  pct: number | null;
+  /** 활성 계정 값을 못 받아 다른 계정 값을 빌려 왔으면 그 계정. */
+  borrowed: AccountStatus | null;
+}
+
+/**
+ * 노치 왼쪽에 띄울 숫자. 카드·트레이·경보는 활성 계정 값만 쓰지만(폴백 없음), 노치는
+ * 한눈에 보는 자리라 빈칸보다 값을 받은 다른 계정 숫자가 낫다. 빌려 온 값은 흐리게
+ * 그려 활성 계정 값과 구분한다.
+ */
+function figureOf(s: RunwayStatus): NotchFigure {
+  if (s.percentRemaining != null) return { pct: s.percentRemaining, borrowed: null };
+  const other = (s.accounts ?? [])
+    .filter((a) => a.percentRemaining != null)
+    .sort((a, b) => (a.percentRemaining ?? 0) - (b.percentRemaining ?? 0))[0];
+  return other
+    ? { pct: other.percentRemaining, borrowed: other }
+    : { pct: null, borrowed: null };
+}
+
 /** 트레이와 같은 규칙 — 지정한 도구, 없으면 공식 잔여율 중 가장 적게 남은 도구. */
 function pickRepresentative(
   statuses: RunwayStatus[],
@@ -38,11 +61,12 @@ function pickRepresentative(
   if (trayTool) return statuses.find((s) => s.tool === trayTool) ?? null;
   return (
     statuses
-      .filter((s) => s.percentRemaining != null)
+      .filter((s) => figureOf(s).pct != null)
       .sort(
         (a, b) =>
           Number(a.isEstimate) - Number(b.isEstimate) ||
-          (a.percentRemaining ?? Infinity) - (b.percentRemaining ?? Infinity)
+          Number(figureOf(a).borrowed != null) - Number(figureOf(b).borrowed != null) ||
+          (figureOf(a).pct ?? Infinity) - (figureOf(b).pct ?? Infinity)
       )[0] ?? null
   );
 }
@@ -107,6 +131,7 @@ export function NotchView() {
   if (!layout || layout.barHeight <= 0) return null;
 
   const rep = pickRepresentative(statuses, trayTool);
+  const fig = rep ? figureOf(rep) : { pct: null, borrowed: null };
   const danger = rep?.verdict?.level === "danger";
   const open = mode !== "collapsed";
   const islandWidth = layout.notchWidth + layout.wing * 2;
@@ -143,10 +168,11 @@ export function NotchView() {
             gridTemplateColumns: `1fr ${layout.notchWidth}px 1fr`,
           }}
         >
-          <span className="notch-side notch-pct">
-            {rep?.percentRemaining != null
-              ? `${Math.round(rep.percentRemaining)}%`
-              : "—"}
+          <span
+            className={`notch-side notch-pct${fig.borrowed ? " borrowed" : ""}`}
+            title={fig.borrowed?.label}
+          >
+            {fig.pct != null ? `${Math.round(fig.pct)}%` : "—"}
           </span>
           <span />
           <span className={`notch-side notch-activity ${activity?.state ?? "idle"}`}>
@@ -187,6 +213,23 @@ export function NotchView() {
                   {formatResetsAt(s.resetsAt, lang) &&
                     ` · ${formatResetsAt(s.resetsAt, lang)}`}
                 </span>
+                {(s.accounts ?? []).length > 1 && (
+                  <ul className="notch-accts">
+                    {s.accounts.map((a) => (
+                      <li
+                        key={a.id}
+                        className={`notch-acct${a.isActive ? " active" : ""}`}
+                      >
+                        <span className="notch-acct-name">{a.label}</span>
+                        <span className="notch-acct-pct">
+                          {a.percentRemaining != null
+                            ? `${Math.round(a.percentRemaining)}%`
+                            : t(lang, a.note ?? "acctFailed", { tool: s.tool })}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </li>
             ))}
           </ul>

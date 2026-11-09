@@ -131,3 +131,47 @@
   color: #a1a1a6;
   font-size: 12px;
 }
+
+/* 활성 계정 값이 아니라 다른 계정 값을 빌려 온 숫자. 숫자를 흐리게 하면 검은 섬
+   위에서 안 읽혀서, 숫자는 그대로 두고 앞에 빈 고리를 붙여 구분한다. */
+.notch-pct.borrowed::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border: 1.5px solid #8e8e93;
+  border-radius: 50%;
+  flex: none;
+}
+
+.notch-accts {
+  grid-column: 1 / -1;
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: #d1d1d6;
+}
+
+.notch-acct {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.notch-acct-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notch-acct.active .notch-acct-name::before {
+  content: "● ";
+  color: #30d158;
+}
+
+.notch-acct-pct {
+  font-variant-numeric: tabular-nums;
+}
