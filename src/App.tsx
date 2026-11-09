@@ -956,6 +956,7 @@ interface Settings {
   petLastX: number | null;
   petLastY: number | null;
   petScale: number;
+  notchEnabled: boolean;
 }
 
 interface TrwStatus {
@@ -1648,6 +1649,7 @@ function SettingsView() {
     petLastX: null,
     petLastY: null,
     petScale: 1,
+    notchEnabled: false,
   });
   const [petError, setPetError] = useState<string | null>(null);
   const [trwStatus, setTrwStatus] = useState<TrwStatus | null>(null);
@@ -2088,6 +2090,18 @@ function SettingsView() {
         </label>
 
         <hr className="setting-divider" />
+
+        <label className="setting-row toggle-row">
+          <span>{tr("notch.enable")}</span>
+          <input
+            type="checkbox"
+            checked={settings.notchEnabled}
+            onChange={(e) => update({ notchEnabled: e.target.checked })}
+          />
+        </label>
+        {settings.notchEnabled && (
+          <p className="setting-hint">{tr("notch.enableHint")}</p>
+        )}
 
         <label className="setting-row toggle-row">
           <span>{tr("pet.enable")}</span>

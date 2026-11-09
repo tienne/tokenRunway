@@ -711,6 +711,7 @@ fn set_settings(app: AppHandle, mut settings: Settings) {
     let pet_scale = settings.pet_scale;
     settings::set(settings);
     refresh_localized_ui(&app);
+    notch::sync(&app);
     if let Some(win) = app.get_webview_window("pet") {
         let _ = if pet_enabled { win.show() } else { win.hide() };
         // 창을 먼저 키워야 프론트가 그 안에 큰 스프라이트를 그릴 수 있다.
@@ -1810,9 +1811,8 @@ pub fn run() {
             // 데스크톱 pet 오버레이 — 화면을 돌아다니는 항상-표시 창.
             create_pet_window(&app.handle().clone());
 
-            if std::env::var_os("TRW_NOTCH_PROTO").is_some() {
-                notch::ensure(app.handle());
-            }
+            // 노치 섬 — 설정에서 켠 경우에만, 노치 있는 화면에만 뜬다.
+            notch::sync(app.handle());
 
             // 백그라운드 경보 루프 시작 (창이 닫혀도 메뉴바 상주 상태로 동작)
             spawn_alert_loop(app.handle().clone());

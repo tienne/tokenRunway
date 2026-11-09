@@ -254,6 +254,26 @@ pub fn ensure(app: &AppHandle) {
     });
 }
 
+/// 토글을 끄면 창을 닫는다. 커서 폴링 스레드는 창이 사라진 걸 보고 스스로 끝난다.
+pub fn close(app: &AppHandle) {
+    *GEOM.lock().unwrap() = None;
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(w) = handle.get_webview_window(LABEL) {
+            let _ = w.close();
+        }
+    });
+}
+
+/// 설정에 맞춰 창을 띄우거나 닫는다.
+pub fn sync(app: &AppHandle) {
+    if crate::settings::notch_enabled() {
+        ensure(app);
+    } else {
+        close(app);
+    }
+}
+
 /// 커서가 섬 위에 있을 때만 창이 클릭을 받게 한다. 판정을 프론트 IPC로 왕복하면
 /// 그 사이 들어온 클릭이 뒤 창으로 새거나 섬에서 사라진다.
 fn spawn_poll(app: AppHandle) {
