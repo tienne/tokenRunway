@@ -58,8 +58,30 @@ button.session-row:focus-visible {
   background: #30d158;
 }
 
+/* 실패는 위험 빨강(#ff453a)을 쓰지 않는다 — 노치에서 그 색은 잔여율 경고 몫이라
+   세션 하나 실패한 게 한도 바닥난 것처럼 읽힌다. 보라 ×로 색과 모양을 둘 다 바꾼다.
+   대비는 검정 위 5.96:1, 호버 배경(#1c1c1e) 위 4.83:1. */
 .session-dot.failed {
-  background: #ff453a;
+  position: relative;
+  background: transparent;
+  border-radius: 0;
+}
+
+.session-dot.failed::before,
+.session-dot.failed::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 9px;
+  height: 1.5px;
+  border-radius: 1px;
+  background: #bf5af2;
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.session-dot.failed::after {
+  transform: translate(-50%, -50%) rotate(-45deg);
 }
 
 .session-name {
@@ -81,6 +103,10 @@ button.session-row:focus-visible {
 
 .session-state.waiting {
   color: #ffd60a;
+}
+
+.session-state.failed {
+  color: #bf5af2;
 }
 
 /* 자리표시 줄은 실제 줄과 높이가 같아야 목록이 붙을 때 섬 높이가 안 튄다.
