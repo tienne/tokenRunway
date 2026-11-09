@@ -23,6 +23,8 @@ const WING: f64 = 84.0;
 const EXPANDED_WIDTH: f64 = 380.0;
 const EXPANDED_HEIGHT: f64 = 236.0;
 const POLL_MS: u64 = 40;
+/// 모니터를 꽂거나 뺐는지 다시 재는 주기. Tauri에 디스플레이 변경 이벤트가 없다.
+const SCREEN_SYNC: Duration = Duration::from_secs(5);
 
 /// 메뉴바(NSMainMenuWindowLevel = 24)보다 위. pet 창(always_on_top = floating, 3)과
 /// 레벨이 갈려 서로 가리지 않는다.
@@ -57,6 +59,7 @@ pub struct NotchLayout {
 
 static GEOM: Mutex<Option<Geom>> = Mutex::new(None);
 static POLL_RUNNING: AtomicBool = AtomicBool::new(false);
+static WATCHING: AtomicBool = AtomicBool::new(false);
 
 fn rect_contains(r: &NSRect, p: NSPoint) -> bool {
     p.x >= r.origin.x
@@ -205,10 +208,13 @@ fn place(win: &WebviewWindow, g: &Geom) {
 }
 
 /// 노치 창을 만들거나 다시 배치한다. 노치 화면이 없으면 창을 닫는다.
-pub fn ensure(app: &AppHandle) {
+fn ensure(app: &AppHandle) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
-        let Some(g) = measure() else {
+        // 생성과 닫기가 모두 메인 스레드에서 차례로 돌아서, 여기서 다시 확인하면
+        // 토글을 끈 직후 감시 스레드가 창을 되살리는 일이 없다.
+        let measured = if crate::settings::notch_enabled() { measure() } else { None };
+        let Some(g) = measured else {
             *GEOM.lock().unwrap() = None;
             if let Some(w) = handle.get_webview_window(LABEL) {
                 let _ = w.close();
@@ -269,9 +275,29 @@ pub fn close(app: &AppHandle) {
 pub fn sync(app: &AppHandle) {
     if crate::settings::notch_enabled() {
         ensure(app);
+        spawn_watch(app.clone());
     } else {
         close(app);
     }
+}
+
+/// 켜져 있는 동안 화면 배치를 다시 잰다. 덮개를 닫고 외장 모니터만 쓰다가 다시 열면
+/// 노치 화면이 돌아오므로, 창이 없어도 감시는 계속한다. 배치가 그대로면 아무것도 안 한다.
+fn spawn_watch(app: AppHandle) {
+    if WATCHING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(move || loop {
+        while crate::settings::notch_enabled() {
+            std::thread::sleep(SCREEN_SYNC);
+            ensure(&app);
+        }
+        WATCHING.store(false, Ordering::SeqCst);
+        // 멈추는 사이 다시 켜졌는데 새 스레드가 swap에서 밀려났을 수 있다.
+        if !crate::settings::notch_enabled() || WATCHING.swap(true, Ordering::SeqCst) {
+            break;
+        }
+    });
 }
 
 /// 커서가 섬 위에 있을 때만 창이 클릭을 받게 한다. 판정을 프론트 IPC로 왕복하면
