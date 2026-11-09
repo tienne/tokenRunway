@@ -23,6 +23,9 @@ trw — Token Runway 알림 보내기
   trw hook codex <이벤트> --home <CODEX_HOME>
                        Codex 훅용 — SessionStart | UserPromptSubmit | Stop | Interrupt를
                        활동 상태 파일로 남긴다
+  trw hook claude <이벤트> [--config-dir <dir>]
+                       Claude Code 훅용 — 세션 상태(작업 중/입력 대기/끝남/쉼)를
+                       활동 상태 파일로 남긴다. 아무것도 찍지 않는다
   trw statusline       Claude Code statusLine용 — rate_limits만 앱에 넘기고 원래
                        statusLine 명령의 출력을 그대로 찍는다
 
@@ -475,33 +478,255 @@ fn cmd_hook_codex(args: &[String]) -> ExitCode {
     let line = serde_json::json!({
         "tool": "codex",
         "state": state,
-        "at_ms": now_ms(),
         "session": session,
         "home": home,
     });
-    let _ = write_hook_state(session.as_deref(), &line);
+    let _ = write_hook_state("codex", session.as_deref(), &input, line);
     ExitCode::SUCCESS
 }
 
-fn write_hook_state(session: Option<&str>, line: &serde_json::Value) -> Result<(), String> {
-    let dir = hooks_dir().ok_or("홈 디렉토리를 찾을 수 없습니다")?;
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+/// Claude Code 훅 — 세션마다 지금 상태를 JSONL 추론 대신 이벤트로 남긴다.
+///
+/// 상태 파일: `~/.token-runway/hooks/claude-<세션>.json`, JSON 한 줄. 앱
+/// `activity::read_hook_states`가 이 모양을 읽으니 바꿀 땐 둘을 같이 바꾼다.
+///
+/// stdout에 아무것도 찍지 않는다 — UserPromptSubmit·SessionStart의 stdout은 Claude
+/// 컨텍스트에 들어가고 Stop의 stdout JSON은 `decision`으로 해석된다.
+fn cmd_hook_claude(args: &[String]) -> ExitCode {
+    let Some(event) = args.first() else {
+        return ExitCode::SUCCESS;
+    };
+    let raw = read_stdin_limited();
+    let input: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+    let field = |k: &str| input.get(k).and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+    let session = field("session_id").map(|s| s.to_string());
+
+    let Some((state, failed)) = claude_state(event, &input) else {
+        if event == "SessionEnd" {
+            remove_hook_state("claude", session.as_deref());
+        }
+        return ExitCode::SUCCESS;
+    };
+    let config_dir = args
+        .iter()
+        .position(|a| a == "--config-dir")
+        .and_then(|i| args.get(i + 1).cloned())
+        .filter(|s| !s.is_empty())
+        .or_else(claude_config_dir);
+    let line = serde_json::json!({
+        "tool": "claude",
+        "state": state,
+        "failed": failed,
+        "event": event,
+        "session": session,
+        "transcript": field("transcript_path"),
+        "config_dir": config_dir,
+    });
+    let _ = write_hook_state("claude", session.as_deref(), &input, line);
+    ExitCode::SUCCESS
+}
+
+/// 훅 이벤트 → 세션 상태. None이면 상태를 바꾸지 않는다.
+///
+/// Notification은 사람이 답해야 하는 종류만 `waiting`으로 본다. `idle_prompt`는 턴이 끝나고
+/// 한참 뒤에 오는 알림이라 이미 `done`인 상태를 다시 흔들 이유가 없다.
+fn claude_state(event: &str, input: &serde_json::Value) -> Option<(&'static str, bool)> {
+    match event {
+        "SessionStart" => Some(("idle", false)),
+        "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => {
+            Some(("working", false))
+        }
+        "Notification" => {
+            let kind = input.get("notification_type").and_then(|v| v.as_str());
+            let needs_human = match kind {
+                Some(k) => matches!(
+                    k,
+                    "permission_prompt"
+                        | "elicitation_dialog"
+                        | "elicitation_url_dialog"
+                        | "agent_needs_input"
+                ),
+                // 종류 필드가 없던 버전 — 권한 요청 문구만 대기로 본다.
+                None => input
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|m| m.to_ascii_lowercase().contains("permission")),
+            };
+            needs_human.then_some(("waiting", false))
+        }
+        "Stop" => Some(("done", false)),
+        "StopFailure" => Some(("done", true)),
+        _ => None,
+    }
+}
+
+fn hook_state_path(tool: &str, session: Option<&str>) -> Option<PathBuf> {
     let safe: String = session
         .unwrap_or("unknown")
         .chars()
         .take(128)
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' })
         .collect();
-    let name = format!("codex-{safe}.json");
+    hooks_dir().map(|d| d.join(format!("{tool}-{safe}.json")))
+}
+
+/// 상태 한 줄에 시각과 세션 위치(cwd, 랜딩 정보, 세션 프로세스)를 붙여 원자적으로 쓴다.
+///
+/// 랜딩 탐색은 Paseo 디렉토리를 훑거나 오르카 CLI를 띄울 수 있어 이벤트마다 돌리기엔
+/// 무겁다. 같은 프로세스가 직전에 남긴 값이 있으면 환경이 같으니 그대로 쓴다.
+fn write_hook_state(
+    tool: &str,
+    session: Option<&str>,
+    input: &serde_json::Value,
+    mut line: serde_json::Value,
+) -> Result<(), String> {
+    let path = hook_state_path(tool, session).ok_or("홈 디렉토리를 찾을 수 없습니다")?;
+    let dir = path.parent().ok_or("상태 디렉토리가 없습니다")?.to_path_buf();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+    let cwd = input
+        .get("cwd")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let owner = session_process();
+    let prev: Option<serde_json::Value> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(raw.trim()).ok());
+    let reuse = prev.as_ref().filter(|p| {
+        owner.is_some()
+            && p.get("pid").and_then(|v| v.as_i64()) == owner.map(|o| o.0 as i64)
+            && p.get("target").is_some_and(|t| t.is_object())
+    });
+    let (target, label) = match reuse {
+        Some(p) => (p["target"].clone(), p.get("label").cloned().unwrap_or_default()),
+        None => {
+            // 훅이 세션 cwd에서 돈다는 보장이 없어 입력의 cwd로 맞춘다 — 랜딩이 cwd를 본다.
+            if let Some(cwd) = cwd.as_deref() {
+                let _ = std::env::set_current_dir(cwd);
+            }
+            let (t, l) = detect_target();
+            (t, l.map(serde_json::Value::String).unwrap_or_default())
+        }
+    };
+    if let Some(obj) = line.as_object_mut() {
+        obj.insert("at_ms".into(), now_ms().into());
+        obj.insert("cwd".into(), cwd.into());
+        obj.insert("target".into(), target);
+        obj.insert("label".into(), label);
+        obj.insert("pid".into(), owner.map(|o| o.0).into());
+        obj.insert("pid_start".into(), owner.map(|o| o.1).into());
+    }
+
     // 앱 atomicfile과 같은 규칙. 앱이 반쯤 쓰인 파일을 읽으면 상태를 놓친다.
+    let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
     let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
     std::fs::write(&tmp, format!("{line}\n")).map_err(|e| e.to_string())?;
-    if let Err(e) = std::fs::rename(&tmp, dir.join(&name)) {
+    if let Err(e) = std::fs::rename(&tmp, &path) {
         let _ = std::fs::remove_file(&tmp);
         return Err(e.to_string());
     }
     prune_hook_states(&dir);
     Ok(())
+}
+
+/// 세션이 끝나면 파일을 지운다. "끝남" 표시를 남겨도 앱이 할 일은 목록에서 빼는 것뿐이다.
+fn remove_hook_state(tool: &str, session: Option<&str>) {
+    if let Some(path) = hook_state_path(tool, session) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// 훅을 띄운 에이전트 프로세스의 (pid, 시작 시각 초).
+///
+/// 에이전트는 훅 명령을 셸로 감싸 띄우므로 바로 위 부모는 대개 `sh`다. 셸을 건너 올라가
+/// 처음 만나는 프로세스를 세션 주인으로 본다. 앱은 이 값으로 세션이 아직 살아 있는지
+/// 확인한다 — 오래 도는 도구 하나가 5분 넘게 이벤트 없이 가도 작업 중으로 남기고,
+/// 강제 종료된 세션은 바로 걷어낸다. 시작 시각은 pid 재사용을 가르려고 같이 둔다.
+fn session_process() -> Option<(u32, u64)> {
+    const SHELLS: &[&str] = &["sh", "bash", "zsh", "dash", "fish", "env", "trw"];
+    let mut pid = std::os::unix::process::parent_id();
+    for _ in 0..4 {
+        let info = proc_info::bsd_info(pid)?;
+        if !SHELLS.contains(&info.comm.as_str()) {
+            return Some((pid, info.start_sec));
+        }
+        if info.ppid <= 1 {
+            return None;
+        }
+        pid = info.ppid;
+    }
+    None
+}
+
+/// libSystem `proc_pidinfo`를 직접 부른다. libc crate는 이 작은 바이너리에 의존을 하나
+/// 더 얹을 뿐이라 쓰지 않는다. 구조체 배치는 `<sys/proc_info.h>`의 `proc_bsdinfo`와 같다.
+#[cfg(target_os = "macos")]
+mod proc_info {
+    const PROC_PIDTBSDINFO: i32 = 3;
+
+    #[repr(C)]
+    struct ProcBsdInfo {
+        flags: u32,
+        status: u32,
+        xstatus: u32,
+        pid: u32,
+        ppid: u32,
+        ids: [u32; 6],
+        rfu_1: u32,
+        comm: [u8; 16],
+        name: [u8; 32],
+        nfiles: u32,
+        pgid: u32,
+        pjobc: u32,
+        tdev: u32,
+        tpgid: u32,
+        nice: i32,
+        start_tvsec: u64,
+        start_tvusec: u64,
+    }
+
+    extern "C" {
+        fn proc_pidinfo(pid: i32, flavor: i32, arg: u64, buffer: *mut u8, size: i32) -> i32;
+    }
+
+    pub struct BsdInfo {
+        pub ppid: u32,
+        pub comm: String,
+        pub start_sec: u64,
+    }
+
+    pub fn bsd_info(pid: u32) -> Option<BsdInfo> {
+        let mut info = std::mem::MaybeUninit::<ProcBsdInfo>::zeroed();
+        let size = std::mem::size_of::<ProcBsdInfo>() as i32;
+        // SAFETY: 버퍼 크기를 그대로 넘기고, 커널이 채운 바이트 수가 구조체 크기와 같을 때만 읽는다.
+        let n = unsafe {
+            proc_pidinfo(pid as i32, PROC_PIDTBSDINFO, 0, info.as_mut_ptr().cast(), size)
+        };
+        if n != size {
+            return None;
+        }
+        let info = unsafe { info.assume_init() };
+        let end = info.comm.iter().position(|&b| b == 0).unwrap_or(info.comm.len());
+        Some(BsdInfo {
+            ppid: info.ppid,
+            comm: String::from_utf8_lossy(&info.comm[..end]).into_owned(),
+            start_sec: info.start_tvsec,
+        })
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+mod proc_info {
+    pub struct BsdInfo {
+        pub ppid: u32,
+        pub comm: String,
+        pub start_sec: u64,
+    }
+
+    pub fn bsd_info(_pid: u32) -> Option<BsdInfo> {
+        None
+    }
 }
 
 fn prune_hook_states(dir: &Path) {
@@ -769,6 +994,7 @@ fn main() -> ExitCode {
         Some("hook") => match args.get(1).map(|s| s.as_str()) {
             Some("stop") => cmd_hook_stop(),
             Some("codex") => cmd_hook_codex(&args[2..]),
+            Some("claude") => cmd_hook_claude(&args[2..]),
             // 훅 안에서 도는 명령이라 모르는 이벤트여도 세션을 깨지 않는다.
             _ => ExitCode::SUCCESS,
         },
@@ -786,6 +1012,34 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn proc_info_reads_own_parent() {
+        // 구조체 배치가 틀리면 크기 비교에서 None이 나거나 ppid가 엉뚱한 값이 된다.
+        let me = proc_info::bsd_info(std::process::id()).expect("자기 프로세스 정보");
+        assert_eq!(me.ppid, std::os::unix::process::parent_id());
+        assert!(me.start_sec > 1_600_000_000);
+        assert!(!me.comm.is_empty());
+    }
+
+    #[test]
+    fn claude_events_map_to_states() {
+        let none = serde_json::Value::Null;
+        assert_eq!(claude_state("SessionStart", &none), Some(("idle", false)));
+        assert_eq!(claude_state("UserPromptSubmit", &none), Some(("working", false)));
+        assert_eq!(claude_state("PreToolUse", &none), Some(("working", false)));
+        assert_eq!(claude_state("Stop", &none), Some(("done", false)));
+        assert_eq!(claude_state("StopFailure", &none), Some(("done", true)));
+        assert_eq!(claude_state("SubagentStop", &none), None);
+        assert_eq!(claude_state("SessionEnd", &none), None);
+        let perm = serde_json::json!({"notification_type": "permission_prompt"});
+        assert_eq!(claude_state("Notification", &perm), Some(("waiting", false)));
+        let idle = serde_json::json!({"notification_type": "idle_prompt"});
+        assert_eq!(claude_state("Notification", &idle), None);
+        let legacy = serde_json::json!({"message": "Claude needs your permission to use Bash"});
+        assert_eq!(claude_state("Notification", &legacy), Some(("waiting", false)));
+    }
 
     #[test]
     fn relay_payload_keeps_only_rate_limits() {
