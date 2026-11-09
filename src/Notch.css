@@ -12,14 +12,28 @@
 
 .notch-island {
   pointer-events: auto;
-  display: grid;
-  align-items: center;
+  display: flex;
+  flex-direction: column;
   background: #000;
   color: #f5f5f7;
   border-radius: 0 0 14px 14px;
+  overflow: hidden;
+  transition:
+    width 180ms ease,
+    height 180ms ease,
+    border-radius 180ms ease;
+}
+
+.notch-island.open {
+  border-radius: 0 0 20px 20px;
+}
+
+.notch-bar {
+  display: grid;
+  align-items: center;
+  flex: none;
   font-size: 12px;
   font-weight: 600;
-  overflow: hidden;
 }
 
 .notch-side {
@@ -31,10 +45,58 @@
   overflow: hidden;
 }
 
-.notch-right {
-  background: none;
-  border: 0;
-  color: inherit;
-  font: inherit;
-  cursor: default;
+.notch-pct {
+  font-variant-numeric: tabular-nums;
+}
+
+.notch-island.danger .notch-pct {
+  color: #ff453a;
+}
+
+.notch-activity.working {
+  color: #64d2ff;
+}
+
+.notch-activity.justDone {
+  color: #30d158;
+}
+
+.notch-tools {
+  list-style: none;
+  margin: 0;
+  padding: 6px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+.notch-tool {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  row-gap: 2px;
+  font-size: 12px;
+}
+
+.notch-tool-name {
+  font-weight: 600;
+}
+
+.notch-tool-pct {
+  font-variant-numeric: tabular-nums;
+}
+
+.notch-tool.danger .notch-tool-pct {
+  color: #ff453a;
+}
+
+.notch-tool-meta {
+  grid-column: 1 / -1;
+  color: #a1a1a6;
+  font-size: 11px;
+}
+
+.notch-empty {
+  color: #a1a1a6;
+  font-size: 12px;
 }
