@@ -946,6 +946,7 @@ export interface Settings {
   completionAlertsQuiet: boolean;
   wakeOnNotify: boolean;
   codexHooksInstalled: boolean;
+  claudeHooksInstalled: boolean;
   statuslineRelayEnabled: boolean;
   hapticsEnabled: boolean;
   hapticsOnTurnEnd: boolean;
@@ -1651,7 +1652,7 @@ function HookInstaller({
   tr,
   onApplied,
 }: {
-  feature: "codexHooks" | "statusline";
+  feature: "codexHooks" | "claudeHooks" | "statusline";
   installed: boolean;
   tr: (k: string, p?: Record<string, string | number>) => string;
   onApplied: (s: Settings) => void;
@@ -1659,7 +1660,7 @@ function HookInstaller({
   const [preview, setPreview] = useState<HookPreview | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const cmd = feature === "codexHooks" ? "codex_hooks" : "statusline";
+  const cmd = { codexHooks: "codex_hooks", claudeHooks: "claude_hooks", statusline: "statusline" }[feature];
   const install = !installed;
   const panelId = `hook-preview-${feature}`;
 
@@ -1760,6 +1761,7 @@ function SettingsView() {
     completionAlertsQuiet: false,
     wakeOnNotify: true,
     codexHooksInstalled: false,
+    claudeHooksInstalled: false,
     statuslineRelayEnabled: false,
     hapticsEnabled: true,
     hapticsOnTurnEnd: true,
@@ -1999,6 +2001,12 @@ function SettingsView() {
                 <HookInstaller
                   feature="codexHooks"
                   installed={settings.codexHooksInstalled}
+                  tr={tr}
+                  onApplied={setSettings}
+                />
+                <HookInstaller
+                  feature="claudeHooks"
+                  installed={settings.claudeHooksInstalled}
                   tr={tr}
                   onApplied={setSettings}
                 />
