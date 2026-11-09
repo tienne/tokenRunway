@@ -7,6 +7,7 @@ mod inbox;
 mod installer;
 mod ipc;
 mod landing;
+mod notch;
 mod notify_os;
 mod pet;
 mod providers;
@@ -710,6 +711,7 @@ fn set_settings(app: AppHandle, mut settings: Settings) {
     let pet_scale = settings.pet_scale;
     settings::set(settings);
     refresh_localized_ui(&app);
+    notch::sync(&app);
     if let Some(win) = app.get_webview_window("pet") {
         let _ = if pet_enabled { win.show() } else { win.hide() };
         // 창을 먼저 키워야 프론트가 그 안에 큰 스프라이트를 그릴 수 있다.
@@ -1015,6 +1017,13 @@ pub fn refresh_inbox_badge() {
 /// 앱이 뜰 때 한꺼번에 배너로 쏟아지면 몇 시간 전 일을 지금 끝난 것처럼 보여준다.
 const STALE_BANNER_MS: i64 = 10 * 60 * 1000;
 
+fn on_ipc_message(msg: ipc::IpcMessage) {
+    match msg {
+        ipc::IpcMessage::Notify(req) => on_notify_request(req),
+        ipc::IpcMessage::Statusline(relay) => providers::claude_relay::receive(relay),
+    }
+}
+
 fn on_notify_request(req: inbox::NotifyRequest) {
     if !settings::completion_alerts_enabled() {
         return;
@@ -1028,6 +1037,11 @@ fn on_notify_request(req: inbox::NotifyRequest) {
     if fresh && !item.quiet && settings::notifications_enabled() && !completion_quiet_now() {
         notify_os::show(&item);
         haptic::fire(haptic::Haptic::TaskDone);
+    }
+    if fresh && !item.quiet && !completion_quiet_now() {
+        if let Some(app) = APP_HANDLE.get() {
+            notch::announce(app, &item);
+        }
     }
     refresh_inbox_badge();
 }
@@ -1117,6 +1131,47 @@ async fn install_trw(app: AppHandle) -> Result<installer::InstallStatus, String>
 #[tauri::command]
 fn trw_status() -> installer::InstallStatus {
     installer::status()
+}
+
+/// 훅·statusLine 미리보기와 적용은 사용자 설정 파일을 읽고 써서 blocking 풀에서 돈다.
+#[tauri::command]
+async fn preview_codex_hooks(install: bool) -> Result<installer::HookPreview, String> {
+    tauri::async_runtime::spawn_blocking(move || installer::preview_codex_hooks(install))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn apply_codex_hooks(install: bool, fingerprint: String) -> Result<Settings, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        installer::apply_codex_hooks(install, &fingerprint)?;
+        let mut s = settings::get();
+        s.codex_hooks_installed = install;
+        settings::set(s.clone());
+        Ok(s)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn preview_statusline(install: bool) -> Result<installer::HookPreview, String> {
+    tauri::async_runtime::spawn_blocking(move || installer::preview_statusline(install))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn apply_statusline(install: bool, fingerprint: String) -> Result<Settings, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        installer::apply_statusline(install, &fingerprint)?;
+        let mut s = settings::get();
+        s.statusline_relay_enabled = install;
+        settings::set(s.clone());
+        Ok(s)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// 프론트에서 익명 이벤트 전송 (opt-in일 때만 실제 전송됨).
@@ -1676,7 +1731,13 @@ pub fn run() {
             inbox_remove,
             inbox_clear,
             install_trw,
-            trw_status
+            trw_status,
+            preview_codex_hooks,
+            apply_codex_hooks,
+            preview_statusline,
+            apply_statusline,
+            notch::notch_layout,
+            notch::notch_dismiss
         ])
         // pet 우클릭 메뉴와 트레이 메뉴 둘 다 이 하나의 전역 핸들러로 들어온다 — Tauri는
         // TrayIconBuilder::on_menu_event와 Builder::on_menu_event를 같은
@@ -1756,7 +1817,7 @@ pub fn run() {
             let _ = APP_HANDLE.set(app.handle().clone());
             notify_os::init(&app.config().identifier);
             // `trw` 소켓과 스풀을 띄운다. 앱이 꺼진 사이 쌓인 알림도 여기서 걷어온다.
-            ipc::start(on_notify_request);
+            ipc::start(on_ipc_message);
             refresh_inbox_badge();
 
             // 우클릭 메뉴 (열기/설정/종료). 언어 변경 시 set_settings에서 재생성.
@@ -1807,6 +1868,9 @@ pub fn run() {
 
             // 데스크톱 pet 오버레이 — 화면을 돌아다니는 항상-표시 창.
             create_pet_window(&app.handle().clone());
+
+            // 노치 섬 — 설정에서 켠 경우에만, 노치 있는 화면에만 뜬다.
+            notch::sync(app.handle());
 
             // 백그라운드 경보 루프 시작 (창이 닫혀도 메뉴바 상주 상태로 동작)
             spawn_alert_loop(app.handle().clone());

@@ -40,3 +40,6 @@ base64 = "0.22"
 ureq = { version = "2", features = ["json"] }
 sys-locale = "0.3"
 tauri-plugin-updater = "2"
+# 노치 창을 NSPanel로 바꾸고 화면·커서 위치를 읽는다. tao가 이미 쓰는 버전이라 crate가 늘지 않는다.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSGeometry", "objc2-core-foundation"] }

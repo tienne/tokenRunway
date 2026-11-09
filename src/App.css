@@ -1476,8 +1476,33 @@ h1 {
   word-break: break-all;
 }
 
+.hook-installer {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.hook-diff pre {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  max-height: 180px;
+  overflow: auto;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.04);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  line-height: 1.4;
+  white-space: pre;
+}
+
 @media (prefers-color-scheme: dark) {
   .trw-install {
     background: rgba(255, 255, 255, 0.05);
+  }
+  .hook-installer {
+    border-top-color: rgba(255, 255, 255, 0.08);
+  }
+  .hook-diff pre {
+    background: rgba(255, 255, 255, 0.06);
   }
 }

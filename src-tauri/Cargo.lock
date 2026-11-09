@@ -4321,6 +4321,8 @@ dependencies = [
  "dirs 5.0.1",
  "image",
  "mac-notification-sys",
+ "objc2",
+ "objc2-foundation",
  "serde",
  "serde_json",
  "sha2",

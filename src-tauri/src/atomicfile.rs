@@ -35,3 +35,41 @@ pub fn preserve_corrupt(path: &Path) {
     let backup = path.with_extension("corrupt");
     let _ = fs::rename(path, backup);
 }
+
+/// 사용자 소유 파일을 원자적으로 바꾼다.
+///
+/// dotfiles 저장소에 두고 심링크로 거는 사용자가 많다. 링크 자리에 rename하면 링크가
+/// 일반 파일로 바뀌어 저장소와 끊기므로 링크가 가리키는 실제 파일을 바꾼다. 권한도
+/// 원래 파일 것을 그대로 옮긴다.
+pub fn write_atomic_preserving(path: &Path, contents: &str) -> io::Result<()> {
+    let real = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if let Some(dir) = real.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let name = real
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let tmp = real.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
+    fs::write(&tmp, contents)?;
+    if let Ok(meta) = fs::metadata(&real) {
+        let _ = fs::set_permissions(&tmp, meta.permissions());
+    }
+    match fs::rename(&tmp, &real) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = fs::remove_file(&tmp);
+            Err(e)
+        }
+    }
+}
+
+/// 깨진 사용자 파일의 사본을 `.corrupt-<시각>`으로 남긴다. 원본은 옮기지 않는다 —
+/// 에이전트가 그 파일을 설정으로 읽고 있어서 치우면 설정을 통째로 잃는다.
+pub fn preserve_corrupt_copy(path: &Path) -> Option<std::path::PathBuf> {
+    let name = path.file_name()?.to_string_lossy().to_string();
+    let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let dst = path.with_file_name(format!("{name}.corrupt-{ts}"));
+    fs::copy(path, &dst).ok()?;
+    Some(dst)
+}

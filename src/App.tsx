@@ -19,6 +19,7 @@ import petGood from "./assets/pet/default/good.svg";
 import petWarn from "./assets/pet/default/warn.svg";
 import petDanger from "./assets/pet/default/danger.svg";
 import petSpriteSheet from "./assets/pet/default/sprite.webp";
+import { NotchView } from "./Notch";
 import "./App.css";
 
 type PetLevel = "idle" | "good" | "warn" | "danger";
@@ -84,7 +85,7 @@ const PET_BASE_SIZE = 96;
 const PET_TICK_MS = 50;
 /** 활동 상태 폴링 주기 — 잔여율(30초)과 달리 이 정도는 돼야 반응이 살아 있어 보인다.
  * get_activity는 네트워크·전체 파싱 없이 파일 꼬리만 읽어 이 주기를 견딘다. */
-const ACTIVITY_POLL_MS = 1500;
+export const ACTIVITY_POLL_MS = 1500;
 /** "다 됐어요" 말풍선이 떠 있는 시간(ms). */
 const DONE_FLASH_MS = 6000;
 /** 설 수 있는 영역을 다시 받는 주기(ms) — 모니터 연결·해제를 알려주는 이벤트가 없어
@@ -140,7 +141,7 @@ function worstPetLevel(statuses: RunwayStatus[]): PetLevel {
 /** 에이전트 활동 상태 — 잔여율(PetLevel)과 독립된 축. Rust `activity::ActivityState`와 짝. */
 type ActivityState = "working" | "justDone" | "idle";
 
-interface AgentActivity {
+export interface AgentActivity {
   tool: string;
   state: ActivityState;
   sinceMs: number;
@@ -149,7 +150,7 @@ interface AgentActivity {
 
 /** pet이 따라갈 도구 하나 — 도는 게 있으면 그중 가장 최근, 없으면 가장 최근에 끝난 것.
  * 여러 도구를 동시에 굴려도 pet은 하나뿐이라 제일 최근에 움직인 쪽을 대표로 보여준다. */
-function leadActivity(list: AgentActivity[]): AgentActivity | null {
+export function leadActivity(list: AgentActivity[]): AgentActivity | null {
   const pick = (state: ActivityState) =>
     list
       .filter((a) => a.state === state)
@@ -895,9 +896,10 @@ interface AccountStatus {
   sevenDayEtaMinutes: number | null;
   /** 상태 보조 설명. 백엔드가 항상 i18n 키를 준다 (자유 문자열이 아니다) */
   note: string | null;
+  resetCreditsAvailable: number | null;
 }
 
-interface RunwayStatus {
+export interface RunwayStatus {
   tool: string;
   available: boolean;
   unit: string; // "tokens" | "requests"
@@ -928,7 +930,7 @@ interface RunwayStatus {
   accounts: AccountStatus[];
 }
 
-interface Settings {
+export interface Settings {
   alertThreshold: number;
   etaAlertMinutes: number;
   resetAlertMinutes: number;
@@ -939,8 +941,11 @@ interface Settings {
   completionAlertsEnabled: boolean;
   completionAlertsQuiet: boolean;
   wakeOnNotify: boolean;
+  codexHooksInstalled: boolean;
+  statuslineRelayEnabled: boolean;
   hapticsEnabled: boolean;
   hapticsOnTurnEnd: boolean;
+  codexAppServerFallback: boolean;
   language: string | null;
   quietEnabled: boolean;
   quietStartHour: number;
@@ -955,6 +960,7 @@ interface Settings {
   petLastX: number | null;
   petLastY: number | null;
   petScale: number;
+  notchEnabled: boolean;
 }
 
 interface TrwStatus {
@@ -1003,7 +1009,7 @@ function joinUnits(lang: Lang, d: number, h: number, m: number): string {
   return parts.join(" ");
 }
 
-function formatEta(min: number | null, lang: Lang): string {
+export function formatEta(min: number | null, lang: Lang): string {
   if (min == null) return "—";
   if (min < 1) return t(lang, "lessThanMin");
   const total = Math.round(min);
@@ -1188,7 +1194,7 @@ function formatUpdated(ts: number, lang: Lang): string {
   return t(lang, "updatedAgo", { t: `${m}m` });
 }
 
-function formatResetsAt(iso: string | null, lang: Lang): string | null {
+export function formatResetsAt(iso: string | null, lang: Lang): string | null {
   if (!iso) return null;
   const d = new Date(iso);
   if (isNaN(d.getTime())) return null;
@@ -1272,6 +1278,11 @@ function AccountRows({
                 <span>
                   {t(lang, "acctWeekly", { n: a.sevenDayRemaining.toFixed(0) })}
                   {weeklyReset && ` · ${weeklyReset}`}
+                </span>
+              )}
+              {!!a.resetCreditsAvailable && (
+                <span>
+                  {t(lang, "acctResetCredits", { n: a.resetCreditsAvailable })}
                 </span>
               )}
             </div>
@@ -1618,6 +1629,116 @@ function Dashboard() {
   );
 }
 
+type HookPreview = {
+  files: { path: string; diff: string }[];
+  fingerprint: string;
+};
+
+/**
+ * 사용자 설정 파일을 고치는 설치·제거. 바로 쓰지 않고 diff를 먼저 보여준 뒤
+ * 확인을 받아야 쓴다. 미리보기 지문을 넘겨 그사이 파일이 바뀌었으면 Rust 쪽이 거절한다.
+ */
+function HookInstaller({
+  feature,
+  installed,
+  tr,
+  onApplied,
+}: {
+  feature: "codexHooks" | "statusline";
+  installed: boolean;
+  tr: (k: string, p?: Record<string, string | number>) => string;
+  onApplied: (s: Settings) => void;
+}) {
+  const [preview, setPreview] = useState<HookPreview | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const cmd = feature === "codexHooks" ? "codex_hooks" : "statusline";
+  const install = !installed;
+  const panelId = `hook-preview-${feature}`;
+
+  async function showPreview() {
+    setBusy(true);
+    setError(null);
+    try {
+      setPreview(await invoke<HookPreview>(`preview_${cmd}`, { install }));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirm() {
+    if (!preview) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await invoke<Settings>(`apply_${cmd}`, {
+        install,
+        fingerprint: preview.fingerprint,
+      });
+      setPreview(null);
+      onApplied(next);
+    } catch (e) {
+      setError(String(e));
+      setPreview(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="hook-installer">
+      <div className="trw-row">
+        <span>{tr(`${feature}Title`)}</span>
+        <button
+          className="link-btn"
+          onClick={preview ? () => setPreview(null) : showPreview}
+          disabled={busy}
+          aria-expanded={preview !== null}
+          aria-controls={panelId}
+        >
+          {preview
+            ? tr("hookCancel")
+            : installed
+              ? tr("hookRemoveBtn")
+              : tr("hookInstallBtn")}
+        </button>
+      </div>
+      <p className="setting-hint">
+        {tr(installed ? `${feature}On` : `${feature}Hint`)}
+      </p>
+      {installed && feature === "codexHooks" && (
+        <p className="setting-hint">{tr("codexHooksTrust")}</p>
+      )}
+      <div id={panelId} hidden={preview === null}>
+        {preview && (
+          <>
+            {preview.files.length === 0 ? (
+              <p className="setting-hint">{tr("hookNoChanges")}</p>
+            ) : (
+              preview.files.map((f) => (
+                <div key={f.path} className="hook-diff">
+                  <p className="setting-hint trw-path">{f.path}</p>
+                  <pre>{f.diff}</pre>
+                </div>
+              ))
+            )}
+            <p className="setting-hint">{tr("hookBackupNote")}</p>
+            <div className="trw-row">
+              <span />
+              <button className="link-btn" onClick={confirm} disabled={busy}>
+                {busy ? tr("hookApplying") : tr("hookConfirm")}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+      {error && <p className="perm-warn">⚠️ {tr("hookFailed", { e: error })}</p>}
+    </div>
+  );
+}
+
 /** 설정 전용 창 */
 function SettingsView() {
   const [settings, setSettings] = useState<Settings>({
@@ -1631,8 +1752,11 @@ function SettingsView() {
     completionAlertsEnabled: true,
     completionAlertsQuiet: false,
     wakeOnNotify: true,
+    codexHooksInstalled: false,
+    statuslineRelayEnabled: false,
     hapticsEnabled: true,
     hapticsOnTurnEnd: true,
+    codexAppServerFallback: true,
     language: null,
     quietEnabled: false,
     quietStartHour: 22,
@@ -1647,6 +1771,7 @@ function SettingsView() {
     petLastX: null,
     petLastY: null,
     petScale: 1,
+    notchEnabled: false,
   });
   const [petError, setPetError] = useState<string | null>(null);
   const [trwStatus, setTrwStatus] = useState<TrwStatus | null>(null);
@@ -1861,6 +1986,22 @@ function SettingsView() {
               <p className="setting-hint trw-path">{trwStatus.cliPath}</p>
             )}
             {trwError && <p className="perm-warn">⚠️ {trwError}</p>}
+            {trwStatus?.cliPath && (
+              <>
+                <HookInstaller
+                  feature="codexHooks"
+                  installed={settings.codexHooksInstalled}
+                  tr={tr}
+                  onApplied={setSettings}
+                />
+                <HookInstaller
+                  feature="statusline"
+                  installed={settings.statuslineRelayEnabled}
+                  tr={tr}
+                  onApplied={setSettings}
+                />
+              </>
+            )}
           </div>
         )}
 
@@ -1884,6 +2025,18 @@ function SettingsView() {
               onChange={(e) => update({ hapticsOnTurnEnd: e.target.checked })}
             />
           </label>
+        )}
+
+        <label className="setting-row toggle-row">
+          <span>{tr("codexAppServerFallback")}</span>
+          <input
+            type="checkbox"
+            checked={settings.codexAppServerFallback}
+            onChange={(e) => update({ codexAppServerFallback: e.target.checked })}
+          />
+        </label>
+        {settings.codexAppServerFallback && (
+          <p className="setting-hint">{tr("codexAppServerFallbackHint")}</p>
         )}
 
         <label className="setting-row toggle-row">
@@ -2087,6 +2240,18 @@ function SettingsView() {
         </label>
 
         <hr className="setting-divider" />
+
+        <label className="setting-row toggle-row">
+          <span>{tr("notch.enable")}</span>
+          <input
+            type="checkbox"
+            checked={settings.notchEnabled}
+            onChange={(e) => update({ notchEnabled: e.target.checked })}
+          />
+        </label>
+        {settings.notchEnabled && (
+          <p className="setting-hint">{tr("notch.enableHint")}</p>
+        )}
 
         <label className="setting-row toggle-row">
           <span>{tr("pet.enable")}</span>
@@ -2874,6 +3039,7 @@ function App() {
   if (label === "history") return <HistoryView />;
   if (label === "inbox") return <InboxView />;
   if (label === "pet") return <PetOverlay />;
+  if (label === "notch") return <NotchView />;
   return <Dashboard />;
 }
 

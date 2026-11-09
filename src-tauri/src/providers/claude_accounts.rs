@@ -20,7 +20,6 @@
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -54,6 +53,9 @@ pub struct ClaudeAccount {
     /// 조직 UUID로 활성을 못 가렸을 때의 폴백 기준이다. 그 디렉토리가 JSONL을
     /// 쌓는 자리라, 홈 config를 못 읽어도 이 계정을 세우면 카드가 안 빈다.
     from_default_dir: bool,
+    /// 이 계정 토큰이 들어 있던 Keychain 서비스 이름들. statusLine 릴레이가 보낸
+    /// config dir을 계정에 잇는 열쇠다. 중복 제거로 합쳐진 계정은 이름이 여럿이다.
+    pub keychain_services: Vec<String>,
 }
 
 /// 토큰을 든 구조체라 Debug를 파생하지 않는다.
@@ -70,6 +72,7 @@ impl fmt::Debug for ClaudeAccount {
             .field("rate_mult", &self.rate_mult)
             .field("is_active", &self.is_active)
             .field("from_default_dir", &self.from_default_dir)
+            .field("keychain_services", &self.keychain_services)
             .finish()
     }
 }
@@ -140,13 +143,27 @@ pub fn discover() -> Vec<ClaudeAccount> {
     // 같은 조직이 여러 소스에 걸쳐 나온다. 먼저 들어온 쪽이 이긴다.
     // 토큰 지문도 함께 보는 이유는 소스마다 프로필 유무가 달라서다 — 한쪽은 조직
     // UUID를, 다른 쪽은 토큰 지문을 id로 받으면 같은 계정이 두 줄로 남는다.
-    let mut seen_ids: HashSet<String> = HashSet::new();
-    let mut seen_tokens: HashSet<String> = HashSet::new();
-    out.retain(|a| {
-        let id_new = seen_ids.insert(a.id.clone());
-        let token_new = seen_tokens.insert(fingerprint(&a.token));
-        id_new && token_new
-    });
+    //
+    // 버리는 쪽의 Keychain 서비스 이름은 남는 쪽에 옮긴다. 같은 계정을 다른 config dir
+    // 에서 쓰면 릴레이가 그 dir로 오는데, 이름을 버리면 그 값을 계정에 못 잇는다.
+    let mut kept: Vec<ClaudeAccount> = Vec::with_capacity(out.len());
+    for acc in out {
+        let fp = fingerprint(&acc.token);
+        match kept
+            .iter_mut()
+            .find(|k| k.id == acc.id || fingerprint(&k.token) == fp)
+        {
+            Some(survivor) => {
+                for service in acc.keychain_services {
+                    if !survivor.keychain_services.contains(&service) {
+                        survivor.keychain_services.push(service);
+                    }
+                }
+            }
+            None => kept.push(acc),
+        }
+    }
+    let mut out = kept;
 
     ensure_active(&mut out);
     out.sort_by_key(|a| !a.is_active);
@@ -181,7 +198,8 @@ fn keychain_accounts(candidates: &[PathBuf], active_org: Option<&str>) -> Vec<Cl
             .iter()
             .find_map(|p| read_profile(p));
         let from_default = Some(&config_dir) == default_dir.as_ref();
-        if let Some(acc) = from_credentials(&raw, profile, active_org, from_default) {
+        if let Some(mut acc) = from_credentials(&raw, profile, active_org, from_default) {
+            acc.keychain_services.push(service);
             out.push(acc);
         }
     }
@@ -207,6 +225,22 @@ fn keychain_services(candidates: &[PathBuf]) -> Vec<(String, PathBuf)> {
         if let Some(hash) = dir_hash(dir) {
             out.push((format!("{KEYCHAIN_PREFIX}-{hash}"), dir.clone()));
         }
+    }
+    out
+}
+
+/// config dir 하나가 쓸 수 있는 Keychain 서비스 이름들. 기본 dir은 접미사 없는 레거시
+/// 이름과 해시 이름 둘 다다 — `CLAUDE_CONFIG_DIR`을 명시해 같은 경로를 잡으면 해시
+/// 이름 쪽에 저장된다.
+pub(crate) fn services_for_config_dir(dir: &str) -> Vec<String> {
+    let trimmed = dir.trim_end_matches('/');
+    let path = Path::new(if trimmed.is_empty() { dir } else { trimmed });
+    let mut out = Vec::new();
+    if default_config_dir().as_deref() == Some(path) {
+        out.push(KEYCHAIN_PREFIX.to_string());
+    }
+    if let Some(hash) = dir_hash(path) {
+        out.push(format!("{KEYCHAIN_PREFIX}-{hash}"));
     }
     out
 }
@@ -295,6 +329,7 @@ fn from_credentials(
         token: o.access_token,
         is_active,
         from_default_dir,
+        keychain_services: Vec::new(),
     })
 }
 
@@ -335,7 +370,7 @@ fn profile_paths(dir: &Path) -> Vec<PathBuf> {
 /// 후보 하나마다 Keychain 조회가 한 번씩 붙으므로 이름만 보고 담지 않는다. 실제로
 /// Claude가 쓰는 자리인지(프로필 파일이나 projects 디렉토리) 확인해 무관한 디렉토리를
 /// 미리 걸러낸다.
-fn config_dir_candidates() -> Vec<PathBuf> {
+pub(crate) fn config_dir_candidates() -> Vec<PathBuf> {
     let mut out = Vec::new();
     let Some(home) = dirs::home_dir() else {
         return out;
@@ -467,6 +502,24 @@ mod tests {
         // 접미사 없는 항목은 기본 config dir 것이라 항상 조회 대상이다.
         let services = keychain_services(&[]);
         assert_eq!(services[0].0, KEYCHAIN_PREFIX);
+    }
+
+    #[test]
+    fn relay_config_dir_maps_to_the_same_service_name() {
+        // 릴레이가 보낸 dir과 Keychain 조회가 같은 이름을 만들어야 계정에 이어진다.
+        let dir = "/Users/example/.claude-work";
+        let from_scan = keychain_services(&[PathBuf::from(dir)]);
+        let hashed = &from_scan[1].0;
+        assert_eq!(&services_for_config_dir(dir), &vec![hashed.clone()]);
+        assert_eq!(&services_for_config_dir(&format!("{dir}/")), &vec![hashed.clone()]);
+    }
+
+    #[test]
+    fn default_config_dir_also_maps_to_legacy_service() {
+        let home = dirs::home_dir().unwrap().join(".claude");
+        let services = services_for_config_dir(home.to_str().unwrap());
+        assert_eq!(services[0], KEYCHAIN_PREFIX);
+        assert_eq!(services.len(), 2);
     }
 
     #[test]
@@ -620,4 +673,14 @@ mod tests {
             Some("org-b".to_string())
         );
     }
+
+    #[test]
+    fn fingerprint_id_never_contains_token() {
+        use crate::providers::secret_check::assert_no_secret;
+        let token = "sk-ant-oat01-fake-9d8c7b";
+        let id = fingerprint(token);
+        assert_eq!(id.len(), 16);
+        assert_no_secret("토큰 지문 id", &id, &[token, &token[..12]]);
+    }
 }
+

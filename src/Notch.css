@@ -1,0 +1,177 @@
+.notch-root {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  pointer-events: none;
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.notch-island {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  background: #000;
+  color: #f5f5f7;
+  border-radius: 0 0 14px 14px;
+  overflow: hidden;
+  transition:
+    width 180ms ease,
+    height 180ms ease,
+    border-radius 180ms ease;
+}
+
+.notch-island.open {
+  border-radius: 0 0 20px 20px;
+}
+
+.notch-bar {
+  display: grid;
+  align-items: center;
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.notch-side {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.notch-pct {
+  font-variant-numeric: tabular-nums;
+}
+
+.notch-island.danger .notch-pct {
+  color: #ff453a;
+}
+
+.notch-activity.working {
+  color: #64d2ff;
+}
+
+.notch-activity.justDone {
+  color: #30d158;
+}
+
+.notch-notice {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.notch-notice:hover .notch-notice-title {
+  text-decoration: underline;
+}
+
+.notch-notice-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notch-notice-context {
+  flex: none;
+  color: #a1a1a6;
+  font-size: 11px;
+}
+
+.notch-tools {
+  list-style: none;
+  margin: 0;
+  padding: 6px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+.notch-tool {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  row-gap: 2px;
+  font-size: 12px;
+}
+
+.notch-tool-name {
+  font-weight: 600;
+}
+
+.notch-tool-pct {
+  font-variant-numeric: tabular-nums;
+}
+
+.notch-tool.danger .notch-tool-pct {
+  color: #ff453a;
+}
+
+.notch-tool-meta {
+  grid-column: 1 / -1;
+  color: #a1a1a6;
+  font-size: 11px;
+}
+
+.notch-empty {
+  color: #a1a1a6;
+  font-size: 12px;
+}
+
+/* 활성 계정 값이 아니라 다른 계정 값을 빌려 온 숫자. 숫자를 흐리게 하면 검은 섬
+   위에서 안 읽혀서, 숫자는 그대로 두고 앞에 빈 고리를 붙여 구분한다. */
+.notch-pct.borrowed::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border: 1.5px solid #8e8e93;
+  border-radius: 50%;
+  flex: none;
+}
+
+.notch-accts {
+  grid-column: 1 / -1;
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: #d1d1d6;
+}
+
+.notch-acct {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.notch-acct-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notch-acct.active .notch-acct-name::before {
+  content: "● ";
+  color: #30d158;
+}
+
+.notch-acct-pct {
+  font-variant-numeric: tabular-nums;
+}
