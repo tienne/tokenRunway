@@ -59,6 +59,12 @@ fn path(keys: &[&str]) -> Vec<String> {
     keys.iter().map(|k| k.to_string()).collect()
 }
 
+fn file_label(file: &Path) -> String {
+    file.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| file.display().to_string())
+}
+
 /// `parent` 객체에 `key` 멤버가 없으면 `empty`로 만든다. 있는데 모양이 다르면 멈춘다.
 fn ensure_member(
     text: &str,
@@ -67,11 +73,12 @@ fn ensure_member(
     want_array: bool,
     unit: &str,
     record: &mut Record,
+    label: &str,
 ) -> Result<String, String> {
     let root = template::parse(text)?;
-    let node = find(&root, parent).ok_or("hooks.json 구조를 찾지 못했습니다")?;
+    let node = find(&root, parent).ok_or(format!("{label} 구조를 찾지 못했습니다"))?;
     if !matches!(node.kind, Kind::Object(_)) {
-        return Err(format!("hooks.json의 {} 가 객체가 아닙니다", parent.join(".")));
+        return Err(format!("{label}의 {} 가 객체가 아닙니다", parent.join(".")));
     }
     if let Some((_, m)) = node.member(key) {
         let ok = match m.value.kind {
@@ -82,7 +89,7 @@ fn ensure_member(
         return if ok {
             Ok(text.to_string())
         } else {
-            Err(format!("hooks.json의 {key} 모양이 예상과 달라 건드리지 않았습니다"))
+            Err(format!("{label}의 {key} 모양이 예상과 달라 건드리지 않았습니다"))
         };
     }
     let empty = if want_array { J::Arr(vec![]) } else { J::Obj(vec![]) };
@@ -102,6 +109,19 @@ pub fn plan_install(
     trw: &Path,
     record: Option<Record>,
 ) -> Result<Plan, String> {
+    plan_install_groups(file, EVENTS, |event| command(trw, event, home), record, None)
+}
+
+/// `hooks.<이벤트>` 배열마다 우리 그룹 하나를 끝에 붙인다. Codex `hooks.json`과 Claude
+/// `settings.json`이 같은 모양(`hooks.<이벤트>: [{hooks: [{type, command, timeout}]}]`)이라 같이 쓴다.
+pub(super) fn plan_install_groups(
+    file: &Path,
+    events: &[&str],
+    command_for: impl Fn(&str) -> String,
+    record: Option<Record>,
+    tag: Option<&'static str>,
+) -> Result<Plan, String> {
+    let label = file_label(file);
     let Loaded { text, stamp } = template::load(file)?;
     let before = text.clone();
     let mut record = record.unwrap_or_default();
@@ -113,16 +133,16 @@ pub fn plan_install(
         }
     };
     let unit = template::detect_unit(&text);
-    text = ensure_member(&text, &[], "hooks", false, &unit, &mut record)?;
-    for event in EVENTS {
+    text = ensure_member(&text, &[], "hooks", false, &unit, &mut record, &label)?;
+    for event in events {
         let hooks = path(&["hooks"]);
-        text = ensure_member(&text, &hooks, event, true, &unit, &mut record)?;
+        text = ensure_member(&text, &hooks, event, true, &unit, &mut record, &label)?;
         let arr_path = path(&["hooks", event]);
-        let cmd = command(trw, event, home);
+        let cmd = command_for(event);
         let root = template::parse(&text)?;
-        let arr = find(&root, &arr_path).ok_or("hooks.json 구조를 찾지 못했습니다")?;
+        let arr = find(&root, &arr_path).ok_or(format!("{label} 구조를 찾지 못했습니다"))?;
         let Kind::Array(items) = &arr.kind else {
-            return Err(format!("hooks.json의 {event} 가 배열이 아닙니다"));
+            return Err(format!("{label}의 {event} 가 배열이 아닙니다"));
         };
         match items.iter().find(|n| is_ours(&text[n.start..n.end])) {
             // 이미 있으면 명령이 같을 때 그대로 둔다. trw 경로가 바뀌었으면 그 자리에서 바꾼다.
@@ -146,11 +166,21 @@ pub fn plan_install(
         before,
         after: Some(text),
         record: Some(record),
+        tag,
         stamp,
     })
 }
 
 pub fn plan_uninstall(file: &Path, record: Option<Record>) -> Result<Plan, String> {
+    plan_uninstall_groups(file, record, None)
+}
+
+pub(super) fn plan_uninstall_groups(
+    file: &Path,
+    record: Option<Record>,
+    tag: Option<&'static str>,
+) -> Result<Plan, String> {
+    let label = file_label(file);
     let Loaded { text, stamp } = template::load(file)?;
     let before = text.clone();
     let record = record.unwrap_or_default();
@@ -160,6 +190,7 @@ pub fn plan_uninstall(file: &Path, record: Option<Record>) -> Result<Plan, Strin
             before: None,
             after: None,
             record: None,
+            tag,
             stamp,
         });
     };
@@ -167,7 +198,7 @@ pub fn plan_uninstall(file: &Path, record: Option<Record>) -> Result<Plan, Strin
         let root = template::parse(&text)?;
         if let Some((event, idx)) = find_our_group(&root, &text) {
             let arr_path = path(&["hooks", &event]);
-            let arr = find(&root, &arr_path).ok_or("hooks.json 구조를 찾지 못했습니다")?;
+            let arr = find(&root, &arr_path).ok_or(format!("{label} 구조를 찾지 못했습니다"))?;
             text = template::remove_child(&text, arr, idx, record.inner(&arr_path));
             continue;
         }
@@ -198,6 +229,7 @@ pub fn plan_uninstall(file: &Path, record: Option<Record>) -> Result<Plan, Strin
         before,
         after,
         record: None,
+        tag,
         stamp,
     })
 }

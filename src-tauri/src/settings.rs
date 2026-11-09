@@ -80,6 +80,10 @@ pub struct Settings {
     /// rollout보다 먼저 본다 — 훅을 지운 뒤 남은 상태 파일이 판정을 흔들지 않게.
     #[serde(default)]
     pub codex_hooks_installed: bool,
+    /// Claude Code 훅(`trw hook claude`)을 깔았는지. 꺼져 있으면 상태 파일을 아예 읽지 않는다 —
+    /// 훅을 지운 뒤 남은 파일이 활동 판정과 세션 목록을 흔들지 않게.
+    #[serde(default)]
+    pub claude_hooks_installed: bool,
     /// Claude statusLine 릴레이(`trw statusline`)를 받을지. 기본 꺼짐 — 사용자 settings.json의
     /// statusLine을 바꿔야 해서 직접 켠 경우에만 쓴다. 꺼져 있으면 들어온 값도 버린다.
     #[serde(default)]
@@ -204,6 +208,7 @@ impl Default for Settings {
             haptics_on_turn_end: default_haptics_enabled(),
             wake_on_notify: default_completion_alerts(),
             codex_hooks_installed: false,
+            claude_hooks_installed: false,
             statusline_relay_enabled: false,
         }
     }
@@ -297,6 +302,14 @@ pub fn codex_hooks_installed() -> bool {
     SETTINGS
         .lock()
         .map(|s| s.codex_hooks_installed)
+        .unwrap_or(false)
+}
+
+/// Claude 훅 상태 파일을 활동 감지와 세션 목록에 쓸지.
+pub fn claude_hooks_installed() -> bool {
+    SETTINGS
+        .lock()
+        .map(|s| s.claude_hooks_installed)
         .unwrap_or(false)
 }
 

@@ -1780,6 +1780,8 @@ pub fn run() {
             preview_statusline,
             apply_statusline,
             notch::notch_fit,
+            installer::preview_claude_hooks,
+            installer::apply_claude_hooks,
             notch::notch_layout,
             notch::notch_dismiss
         ])
