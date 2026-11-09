@@ -961,7 +961,10 @@ export interface Settings {
   petLastY: number | null;
   petScale: number;
   notchEnabled: boolean;
+  trayTitleMode: TrayTitleMode;
 }
+
+export type TrayTitleMode = "auto" | "always" | "icon_only";
 
 interface TrwStatus {
   cliPath: string | null;
@@ -1772,6 +1775,7 @@ function SettingsView() {
     petLastY: null,
     petScale: 1,
     notchEnabled: true,
+    trayTitleMode: "auto",
   });
   const [petError, setPetError] = useState<string | null>(null);
   const [trwStatus, setTrwStatus] = useState<TrwStatus | null>(null);
@@ -2179,6 +2183,22 @@ function SettingsView() {
         </select>
 
         <label className="setting-row">
+          <span>{tr("trayTitleMode")}</span>
+        </label>
+        <select
+          className="setting-select"
+          value={settings.trayTitleMode ?? "auto"}
+          onChange={(e) => update({ trayTitleMode: e.target.value as TrayTitleMode })}
+        >
+          {(["auto", "always", "icon_only"] as const).map((m) => (
+            <option key={m} value={m}>
+              {tr(`trayTitleMode.${m}`)}
+            </option>
+          ))}
+        </select>
+        <p className="setting-hint">{tr("trayTitleModeHint")}</p>
+
+        <label className="setting-row">
           <span>{tr("trayInfo")}</span>
         </label>
         <label className="tool-toggle">
@@ -2186,6 +2206,7 @@ function SettingsView() {
             type="checkbox"
             checked={settings.trayShowPercent}
             onChange={(e) => update({ trayShowPercent: e.target.checked })}
+            disabled={settings.trayTitleMode === "icon_only"}
           />
           <span>{tr("trayShowPercent")}</span>
         </label>
@@ -2194,6 +2215,7 @@ function SettingsView() {
             type="checkbox"
             checked={settings.trayShowReset}
             onChange={(e) => update({ trayShowReset: e.target.checked })}
+            disabled={settings.trayTitleMode === "icon_only"}
           />
           <span>{tr("trayShowReset")}</span>
         </label>
