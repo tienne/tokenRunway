@@ -20,6 +20,7 @@ import petWarn from "./assets/pet/default/warn.svg";
 import petDanger from "./assets/pet/default/danger.svg";
 import petSpriteSheet from "./assets/pet/default/sprite.webp";
 import { NotchView } from "./Notch";
+import { ICONS, Icon } from "./icons";
 import "./App.css";
 
 type PetLevel = "idle" | "good" | "warn" | "danger";
@@ -1401,7 +1402,7 @@ function Dashboard() {
   return (
     <main className="container">
       <header>
-        <h1>🛬 Token Runway</h1>
+        <h1>Token Runway</h1>
         <div className="header-actions">
           <button onClick={refresh} className="refresh">
             {t(lang, "refresh")}
@@ -1411,7 +1412,7 @@ function Dashboard() {
             className="icon-btn bell"
             title={t(lang, "inbox")}
           >
-            🔔
+            <Icon d={ICONS.inbox} size={15} />
             {unread > 0 && <span className="bell-badge">{unread}</span>}
           </button>
           <button
@@ -1419,14 +1420,14 @@ function Dashboard() {
             className="icon-btn"
             title={t(lang, "history")}
           >
-            📅
+            <Icon d={ICONS.history} size={15} />
           </button>
           <button
             onClick={() => invoke("open_settings_window")}
             className="icon-btn"
             title={t(lang, "settings")}
           >
-            ⚙️
+            <Icon d={ICONS.settings} size={15} />
           </button>
         </div>
       </header>
@@ -1564,7 +1565,7 @@ function Dashboard() {
 
           {s.cacheHitRate != null && (
             <p className="cache-hit">
-              ⚡ {t(lang, "cacheHit", { n: s.cacheHitRate.toFixed(0) })}
+              {t(lang, "cacheHit", { n: s.cacheHitRate.toFixed(0) })}
             </p>
           )}
 
@@ -1742,7 +1743,7 @@ function HookInstaller({
           </>
         )}
       </div>
-      {error && <p className="perm-warn">⚠️ {tr("hookFailed", { e: error })}</p>}
+      {error && <p className="perm-warn">{tr("hookFailed", { e: error })}</p>}
     </div>
   );
 }
@@ -1934,7 +1935,7 @@ function SettingsView() {
         </label>
         {settings.notificationsEnabled && permGranted === false && (
           <p className="perm-warn">
-            ⚠️ {tr("permWarn")}{" "}
+            {tr("permWarn")}{" "}
             <button className="link-btn" onClick={askPermission}>
               {tr("reqPerm")}
             </button>
@@ -1995,7 +1996,7 @@ function SettingsView() {
             {trwStatus?.cliPath && (
               <p className="setting-hint trw-path">{trwStatus.cliPath}</p>
             )}
-            {trwError && <p className="perm-warn">⚠️ {trwError}</p>}
+            {trwError && <p className="perm-warn">{trwError}</p>}
             {trwStatus?.cliPath && (
               <>
                 <HookInstaller
@@ -2351,7 +2352,7 @@ function SettingsView() {
               </button>
             </div>
             {petError && (
-              <p className="perm-warn">⚠️ {tr(petErrorKey(petError))}</p>
+              <p className="perm-warn">{tr(petErrorKey(petError))}</p>
             )}
           </div>
         )}
@@ -2607,7 +2608,7 @@ function TierBar({
         )}
         {tier.recommended && (
           <span className="plan-tag plan-tag-rec">
-            ★ {t(lang, managed ? "planEquivTag" : "planRecommended")}
+            {t(lang, managed ? "planEquivTag" : "planRecommended")}
           </span>
         )}
       </span>
@@ -2852,9 +2853,9 @@ interface InboxItem {
 }
 
 const LEVEL_ICON: Record<InboxLevel, string> = {
-  done: "✅",
-  blocked: "⏸",
-  failed: "⚠️",
+  done: ICONS.check,
+  blocked: ICONS.pause,
+  failed: ICONS.cross,
 };
 
 const TARGET_LABEL: Record<InboxTarget["kind"], string> = {
@@ -2926,7 +2927,7 @@ function InboxView() {
     <main className="container inbox">
       <header>
         <h1>
-          🔔 {t(lang, "inbox")}
+          {t(lang, "inbox")}
           {unread > 0 && <span className="inbox-count">{unread}</span>}
         </h1>
         <div className="header-actions">
@@ -2944,7 +2945,7 @@ function InboxView() {
               title={t(lang, "inboxClear")}
               onClick={() => invoke("inbox_clear").then(load)}
             >
-              🗑
+              <Icon d={ICONS.trash} size={15} />
             </button>
           )}
         </div>
@@ -2963,8 +2964,11 @@ function InboxView() {
               <button className="inbox-main" onClick={() => land(it)}>
                 <span className="inbox-row1">
                   <span className="inbox-dot">{it.read ? "" : "●"}</span>
-                  <span className="inbox-level" title={t(lang, `inboxLevel.${it.level}`)}>
-                    {LEVEL_ICON[it.level]}
+                  <span
+                    className={`inbox-level ${it.level}`}
+                    title={t(lang, `inboxLevel.${it.level}`)}
+                  >
+                    <Icon d={LEVEL_ICON[it.level]} size={12} />
                   </span>
                   <span className="inbox-src">
                     {src && <b>{src}</b>}

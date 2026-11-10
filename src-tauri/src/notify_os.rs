@@ -26,11 +26,12 @@ pub fn init(bundle_id: &str) {
     }
 }
 
-fn level_prefix(level: Level) -> &'static str {
+/// OS 알림엔 색이 없어 막힘과 실패만 표시를 붙인다. 완료는 평소 상태라 제목만으로 충분하다.
+fn level_prefix(level: Level) -> Option<&'static str> {
     match level {
-        Level::Done => "✅",
-        Level::Blocked => "⏸",
-        Level::Failed => "⚠️",
+        Level::Done => None,
+        Level::Blocked => Some("⏸"),
+        Level::Failed => Some("⚠️"),
     }
 }
 
@@ -42,7 +43,10 @@ fn has_landing(target: &Target) -> bool {
 ///
 /// 클릭 대기가 블로킹이라 항상 별도 스레드에서 돈다. 호출자는 기다리지 않는다.
 pub fn show(item: &InboxItem) {
-    let title = format!("{} {}", level_prefix(item.level), item.title);
+    let title = match level_prefix(item.level) {
+        Some(p) => format!("{p} {}", item.title),
+        None => item.title.clone(),
+    };
     let subtitle = item.context.clone();
     let body = item.body.clone().unwrap_or_default();
     let target = item.target.clone();

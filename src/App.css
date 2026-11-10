@@ -93,11 +93,15 @@ h1 {
 }
 
 .icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 14px;
-  padding: 3px 6px;
+  padding: 4px 6px;
   border: none;
   border-radius: 6px;
   background: transparent;
+  color: inherit;
   cursor: pointer;
 }
 
@@ -1375,6 +1379,38 @@ h1 {
   width: 7px;
   color: #ff3b30;
   font-size: 9px;
+}
+
+/* 이모지 대신 선 아이콘에 색을 입힌다. 흰 배경 위 대비 4.5:1 이상이 되게 어두운 쪽 색을 쓴다. */
+.inbox-level {
+  display: inline-flex;
+  flex: none;
+}
+
+.inbox-level.done {
+  color: #248a3d;
+}
+
+.inbox-level.blocked {
+  color: #a05a00;
+}
+
+.inbox-level.failed {
+  color: #8944ab;
+}
+
+@media (prefers-color-scheme: dark) {
+  .inbox-level.done {
+    color: #30d158;
+  }
+
+  .inbox-level.blocked {
+    color: #ffd60a;
+  }
+
+  .inbox-level.failed {
+    color: #bf5af2;
+  }
 }
 
 .inbox-src {

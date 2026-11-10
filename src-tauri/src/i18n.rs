@@ -144,15 +144,15 @@ impl Lang {
     /// 소진/ETA 경보 제목 — 도구명을 앞세워 알림센터에서 구분되게.
     pub fn alert_title(self, tool: &str) -> String {
         match self {
-            Lang::Ko => format!("🛬 {tool} 경보"),
-            Lang::En => format!("🛬 {tool} Alert"),
+            Lang::Ko => format!("{tool} 경보"),
+            Lang::En => format!("{tool} Alert"),
         }
     }
     /// 리셋 임박 제목 — 도구명 + 종류.
     pub fn reset_title(self, tool: &str) -> String {
         match self {
-            Lang::Ko => format!("🛬 {tool} 리셋 임박"),
-            Lang::En => format!("🛬 {tool} Reset Soon"),
+            Lang::Ko => format!("{tool} 리셋 임박"),
+            Lang::En => format!("{tool} Reset Soon"),
         }
     }
     /// 잔여율 경보 본문 (도구명은 제목에 있으므로 상황만).
