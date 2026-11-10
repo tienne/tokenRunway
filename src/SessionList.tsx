@@ -53,16 +53,19 @@ export function SessionSkeleton({ lang }: { lang: Lang }) {
   }, []);
   if (!shown) return null;
   return (
-    <ul className="session-list" aria-busy="true" aria-label={t(lang, "sessions.title")}>
-      {[0, 1].map((i) => (
-        <li key={i}>
-          <div className="session-row skeleton">
-            <span className="session-dot" aria-hidden />
-            <span className="skeleton-bar" aria-hidden />
-          </div>
-        </li>
-      ))}
-    </ul>
+    <>
+      <h3 className="session-heading">{t(lang, "sessions.title")}</h3>
+      <ul className="session-list" aria-busy="true" aria-label={t(lang, "sessions.title")}>
+        {[0, 1].map((i) => (
+          <li key={i}>
+            <div className="session-row skeleton">
+              <span className="session-dot" aria-hidden />
+              <span className="skeleton-bar" aria-hidden />
+            </div>
+          </li>
+        ))}
+      </ul>
+    </>
   );
 }
 
@@ -78,33 +81,39 @@ export function SessionList({
   // 빈 목록도 아무것도 그리지 않아야 노치의 세션 칸이 :empty로 접힌다.
   if (sessions.length === 0) return null;
   return (
-    <ul className="session-list" aria-label={t(lang, "sessions.title")}>
-      {sessions.map((s) => {
-        const state = s.state === "justDone" && s.failed ? "failed" : s.state;
-        // 갈 데가 없는 세션은 눌러도 아무 일이 없으니 버튼으로 만들지 않는다.
-        const landable = s.target.kind !== "none";
-        const body = (
-          <>
-            <span className={`session-dot ${state}`} aria-hidden />
-            <span className="session-name">{s.project ?? s.tool}</span>
-            <span className={`session-state ${state}`}>{t(lang, `sessions.${state}`)}</span>
-            <span className="session-age">{formatAge(s.sinceMs, lang)}</span>
-          </>
-        );
-        return (
-          <li key={`${s.tool}:${s.session}`}>
-            {landable ? (
-              <button className="session-row" title={s.tool} onClick={() => onLand(s)}>
-                {body}
-              </button>
-            ) : (
-              <div className="session-row" title={s.tool}>
-                {body}
-              </div>
-            )}
-          </li>
-        );
-      })}
-    </ul>
+    <>
+      <h3 className="session-heading">
+        {t(lang, "sessions.title")}
+        <span className="session-count">{sessions.length}</span>
+      </h3>
+      <ul className="session-list" aria-label={t(lang, "sessions.title")}>
+        {sessions.map((s) => {
+          const state = s.state === "justDone" && s.failed ? "failed" : s.state;
+          // 갈 데가 없는 세션은 눌러도 아무 일이 없으니 버튼으로 만들지 않는다.
+          const landable = s.target.kind !== "none";
+          const body = (
+            <>
+              <span className={`session-dot ${state}`} aria-hidden />
+              <span className="session-name">{s.project ?? s.tool}</span>
+              <span className={`session-state ${state}`}>{t(lang, `sessions.${state}`)}</span>
+              <span className="session-age">{formatAge(s.sinceMs, lang)}</span>
+            </>
+          );
+          return (
+            <li key={`${s.tool}:${s.session}`}>
+              {landable ? (
+                <button className="session-row" title={s.tool} onClick={() => onLand(s)}>
+                  {body}
+                </button>
+              ) : (
+                <div className="session-row" title={s.tool}>
+                  {body}
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </>
   );
 }

@@ -1,24 +1,39 @@
-/* 노치 펼친 화면의 .notch-sessions 안에 들어간다. 구분선과 바깥 여백은 그 칸이 갖고,
+/* 노치 펼친 화면의 .notch-sessions 카드 안에 들어간다. 카드 배경과 바깥 여백은 그 칸이 갖고,
    스크롤도 .notch-scroll 하나로 한다 — 높이 측정이 목록까지 함께 잡게. */
+.session-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 6px 8px;
+  color: #8e939c;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.session-count {
+  color: #7c818a;
+  font-variant-numeric: tabular-nums;
+}
+
 .session-list {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
 }
 
 .session-row {
   width: 100%;
   display: grid;
-  grid-template-columns: auto 1fr auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
-  padding: 3px 4px;
+  padding: 6px;
   background: none;
   border: 0;
-  border-radius: 6px;
+  border-radius: 9px;
   color: inherit;
   font: inherit;
   font-size: 12px;
@@ -31,15 +46,15 @@ button.session-row {
 
 button.session-row:hover,
 button.session-row:focus-visible {
-  background: #1c1c1e;
+  background: rgba(255, 255, 255, 0.05);
   outline: none;
 }
 
 .session-dot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  background: #636366;
+  background: #6b7079;
 }
 
 .session-dot.working {
@@ -47,7 +62,7 @@ button.session-row:focus-visible {
 }
 
 /* 입력 대기만 속 빈 고리 — 작업 중과 밝기가 비슷해 색이 안 보여도 모양으로 갈린다.
-   고리 선이 얇아도 검정 대비 14.9:1이라 비텍스트 기준(3:1)을 넉넉히 넘는다. */
+   고리 선이 얇아도 카드 대비 12.9:1이라 비텍스트 기준(3:1)을 넉넉히 넘는다. */
 .session-dot.waiting {
   background: transparent;
   box-sizing: border-box;
@@ -60,7 +75,7 @@ button.session-row:focus-visible {
 
 /* 실패는 위험 빨강(#ff453a)을 쓰지 않는다 — 노치에서 그 색은 잔여율 경고 몫이라
    세션 하나 실패한 게 한도 바닥난 것처럼 읽힌다. 보라 ×로 색과 모양을 둘 다 바꾼다.
-   대비는 검정 위 5.96:1, 호버 배경(#1c1c1e) 위 4.83:1. */
+   대비는 카드(#141518) 위 5.18:1, 호버 배경 위 4.62:1. */
 .session-dot.failed {
   position: relative;
   background: transparent;
@@ -85,6 +100,7 @@ button.session-row:focus-visible {
 }
 
 .session-name {
+  color: #f5f6f8;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -92,7 +108,7 @@ button.session-row:focus-visible {
 
 .session-state,
 .session-age {
-  color: #a1a1a6;
+  color: #8e939c;
   font-size: 11px;
   white-space: nowrap;
 }
@@ -112,14 +128,14 @@ button.session-row:focus-visible {
 /* 자리표시 줄은 실제 줄과 높이가 같아야 목록이 붙을 때 섬 높이가 안 튄다.
    글자 줄 높이만큼 막대를 세워 맞춘다. */
 .session-row.skeleton {
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto minmax(0, 1fr);
 }
 
 .skeleton-bar {
   height: 1lh;
   max-width: 60%;
   border-radius: 4px;
-  background: #1c1c1e;
+  background: rgba(255, 255, 255, 0.06);
   animation: skeleton-pulse 1.2s ease-in-out infinite;
 }
 

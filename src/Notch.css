@@ -1,4 +1,18 @@
+/* 색은 coucou 노치 섬 톤을 따른다 — 순검정 섬 위에 살짝 뜬 카드(#141518), 그 안의 알약(#0e0f11).
+   보조 글자(#8e939c)와 흐린 글자(#7c818a)는 카드 위 대비 5.9:1, 4.7:1로 AA를 넘긴다.
+   coucou의 #6b7079는 3.7:1이라 쓰지 않는다. */
 .notch-root {
+  --card: #141518;
+  --card-line: rgba(255, 255, 255, 0.035);
+  --pill: #0e0f11;
+  --fg: #f5f6f8;
+  --fg-2: #c5c8cd;
+  --sub: #8e939c;
+  --muted: #7c818a;
+  --track: rgba(255, 255, 255, 0.08);
+  --hover: rgba(255, 255, 255, 0.05);
+  --danger: #ff453a;
+
   position: fixed;
   inset: 0;
   display: flex;
@@ -10,22 +24,28 @@
   user-select: none;
 }
 
+/* 접힐 때는 감속 곡선으로 빨리 닫고, 펼칠 때는 살짝 튀어나오는 곡선으로 연다.
+   transition은 도착하는 상태 쪽 선언이 먹어서 .open에 여는 곡선을 둔다. */
 .notch-island {
   pointer-events: auto;
   display: flex;
   flex-direction: column;
   background: #000;
-  color: #f5f5f7;
+  color: var(--fg);
   border-radius: 0 0 14px 14px;
   overflow: hidden;
   transition:
-    width 180ms ease,
-    height 180ms ease,
-    border-radius 180ms ease;
+    width 340ms cubic-bezier(0.45, 0, 0.2, 1),
+    height 340ms cubic-bezier(0.45, 0, 0.2, 1),
+    border-radius 340ms cubic-bezier(0.45, 0, 0.2, 1);
 }
 
 .notch-island.open {
-  border-radius: 0 0 20px 20px;
+  border-radius: 0 0 22px 22px;
+  transition:
+    width 460ms cubic-bezier(0.34, 1.25, 0.64, 1),
+    height 460ms cubic-bezier(0.34, 1.25, 0.64, 1),
+    border-radius 460ms cubic-bezier(0.34, 1.25, 0.64, 1);
 }
 
 .notch-bar {
@@ -50,7 +70,7 @@
 }
 
 .notch-island.danger .notch-pct {
-  color: #ff453a;
+  color: var(--danger);
 }
 
 .notch-activity.working {
@@ -78,171 +98,6 @@
   border-radius: 50%;
 }
 
-.notch-notice {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 16px;
-  background: none;
-  border: 0;
-  color: inherit;
-  font: inherit;
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.notch-notice:hover .notch-notice-title {
-  text-decoration: underline;
-}
-
-.notch-notice-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.notch-notice-context {
-  flex: none;
-  color: #a1a1a6;
-  font-size: 11px;
-}
-
-/* 펼친 패널. 접혀 있을 때도 그려두고 섬이 잘라 가린다 — 높이를 미리 재 두려는 것이다.
-   폭은 펼친 폭으로 고정해 접힌 폭에서 줄바꿈이 달라져 높이가 틀리지 않게 한다. */
-.notch-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  align-self: center;
-  display: flex;
-  flex-direction: column;
-}
-
-.notch-scroll {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-}
-
-.notch-tools {
-  list-style: none;
-  margin: 0;
-  padding: 6px 16px 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.notch-tool {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 12px;
-}
-
-.notch-tool-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.notch-tool-name {
-  font-weight: 600;
-}
-
-.notch-plan {
-  margin-left: 6px;
-  color: #a1a1a6;
-  font-size: 10px;
-  font-weight: 500;
-}
-
-.notch-tool-pct {
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-}
-
-/* #ff453a는 검은 섬 위에서 대비 6.2:1 — WCAG AA(4.5:1)를 넘는다. */
-.notch-tool.danger .notch-tool-pct,
-.notch-acct-pct.danger {
-  color: #ff453a;
-}
-
-.notch-verdict {
-  margin: 0;
-  color: #d1d1d6;
-  font-size: 11px;
-  line-height: 1.35;
-}
-
-.notch-verdict.danger {
-  color: #ff453a;
-}
-
-.notch-tool-meta {
-  margin: 0;
-  color: #a1a1a6;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
-
-/* 세션 목록 자리. 아직 채우는 쪽이 없으면 비어 있어 통째로 접힌다. */
-.notch-sessions {
-  margin: 10px 16px 0;
-  padding-top: 8px;
-  border-top: 1px solid #2c2c2e;
-}
-
-.notch-sessions:empty {
-  display: none;
-}
-
-.notch-actions {
-  flex: none;
-  display: flex;
-  gap: 4px;
-  padding: 10px 12px 12px;
-}
-
-.notch-actions button {
-  flex: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  padding: 5px 0;
-  background: #1c1c1e;
-  border: 0;
-  border-radius: 6px;
-  color: #f5f5f7;
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.notch-actions button:hover {
-  background: #2c2c2e;
-}
-
-.notch-badge {
-  min-width: 16px;
-  padding: 0 4px;
-  border-radius: 8px;
-  background: #ff453a;
-  color: #000;
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 16px;
-  font-variant-numeric: tabular-nums;
-}
-
-.notch-empty {
-  color: #a1a1a6;
-  font-size: 12px;
-}
-
 /* 활성 계정 값이 아니라 다른 계정 값을 빌려 온 숫자. 숫자를 흐리게 하면 검은 섬
    위에서 안 읽혀서, 숫자는 그대로 두고 앞에 빈 고리를 붙여 구분한다. */
 .notch-pct.borrowed::before {
@@ -254,35 +109,422 @@
   flex: none;
 }
 
-.notch-accts {
-  grid-column: 1 / -1;
-  list-style: none;
-  margin: 2px 0 0;
-  padding: 0;
+/* 높이는 Rust의 NOTICE_HEIGHT(30)와 맞물려 있어 패딩을 위아래로 주지 않는다. */
+.notch-notice {
+  flex: none;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 12px;
-  color: #d1d1d6;
-}
-
-.notch-acct {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   gap: 8px;
+  margin: 0 10px;
+  padding: 0 10px;
+  background: none;
+  border: 0;
+  border-radius: 10px;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease;
 }
 
-.notch-acct-name {
+.notch-notice:hover,
+.notch-notice:focus-visible {
+  background: var(--hover);
+  outline: none;
+}
+
+.notch-notice-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.notch-notice-context {
+  flex: none;
+  color: var(--sub);
+  font-size: 11px;
+}
+
+/* 펼친 패널. 접혀 있을 때도 그려두고 섬이 잘라 가린다 — 높이를 미리 재 두려는 것이다.
+   폭은 펼친 폭으로 고정해 접힌 폭에서 줄바꿈이 달라져 높이가 틀리지 않게 한다.
+   transform은 offsetHeight에 안 잡혀 등장 효과로 써도 측정이 흔들리지 않는다. */
+.notch-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  opacity: 0;
+  transform: scale(0.97);
+  transform-origin: top center;
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.notch-island.full .notch-body {
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity 220ms ease 160ms,
+    transform 320ms cubic-bezier(0.34, 1.25, 0.64, 1) 160ms;
+}
+
+.notch-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.notch-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.notch-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 3px;
+}
+
+/* 가려진 쪽 끝만 흐린다. 스크롤이 없으면 클래스가 안 붙어 마지막 줄이 흐려지지 않는다. */
+.notch-scroll.fade-bottom {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+}
+
+.notch-scroll.fade-top {
+  -webkit-mask-image: linear-gradient(to top, #000 calc(100% - 20px), transparent);
+  mask-image: linear-gradient(to top, #000 calc(100% - 20px), transparent);
+}
+
+.notch-scroll.fade-top.fade-bottom {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    #000 20px,
+    #000 calc(100% - 28px),
+    transparent
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    #000 20px,
+    #000 calc(100% - 28px),
+    transparent
+  );
+}
+
+/* 측정 대상이라 바깥 여백은 margin이 아니라 이 안의 padding과 gap으로만 준다. */
+.notch-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 8px 14px 2px;
+}
+
+.notch-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.notch-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px 15px;
+  background: var(--card);
+  border: 1px solid var(--card-line);
+  border-radius: 16px;
+}
+
+/* 위험한 도구 카드만 아래쪽에 붉은 기운을 깐다. 색 자체는 경고 몫이라 다른 상태엔 안 쓴다. */
+.notch-card.danger {
+  background:
+    radial-gradient(
+      ellipse 70% 90% at 50% 130%,
+      rgba(255, 69, 58, 0.2),
+      rgba(255, 69, 58, 0) 70%
+    ),
+    var(--card);
+}
+
+.notch-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.notch-card-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.notch-plan {
+  padding: 1px 7px;
+  background: var(--pill);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+  color: var(--sub);
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex: none;
+}
+
+.notch-card-pct {
+  flex: none;
+  margin-left: auto;
+  display: flex;
+  align-items: baseline;
+  gap: 1px;
+  color: var(--fg-2);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.notch-card-pct strong {
+  color: var(--fg);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+.notch-card-pct small {
+  margin-left: 4px;
+  color: var(--sub);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+/* #ff453a는 카드(#141518) 위 대비 5.4:1 — WCAG AA(4.5:1)를 넘는다. */
+.notch-card.danger .notch-card-pct strong {
+  color: var(--danger);
+}
+
+.notch-gauge {
+  display: grid;
+  /* 라벨 칸은 영어 "Monthly"까지 들어가게 잡는다. 칸을 auto로 두면 게이지 줄마다 막대 시작점이 달라진다. */
+  grid-template-columns: 46px minmax(0, 1fr) 34px auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+}
+
+.notch-gauge-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--sub);
+  white-space: nowrap;
+}
+
+.notch-gauge-track {
+  position: relative;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--track);
+  overflow: hidden;
+}
+
+.notch-gauge-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 2px;
+  background: var(--fg-2);
+  transition: width 300ms ease;
+}
+
+.notch-gauge.danger .notch-gauge-fill,
+.notch-gauge-track.danger .notch-gauge-fill {
+  background: var(--danger);
+}
+
+.notch-gauge-pct {
+  color: var(--fg-2);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.notch-gauge-reset {
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.notch-verdict {
+  margin: 0;
+  color: var(--sub);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.notch-verdict.danger {
+  color: var(--danger);
+}
+
+.notch-accts {
+  list-style: none;
+  margin: 0;
+  padding: 11px 0 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--fg-2);
+}
+
+.notch-acct {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 56px 34px;
+  align-items: center;
+  gap: 10px;
+}
+
+/* flex로 두면 글자가 익명 flex 아이템이 돼 말줄임이 안 먹는다. 블록으로 두고 점만 인라인으로 붙인다. */
+.notch-acct-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 활성 계정 표시. 자리를 늘 잡아둬야 계정 이름 시작점이 줄마다 맞는다. */
+.notch-acct-name::before {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-right: 7px;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+
 .notch-acct.active .notch-acct-name::before {
-  content: "● ";
-  color: #30d158;
+  background: #30d158;
 }
 
 .notch-acct-pct {
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.notch-acct-pct.danger {
+  color: var(--danger);
+}
+
+.notch-acct-note {
+  grid-column: 2 / -1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--sub);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.notch-empty {
+  padding: 10px 12px;
+  color: var(--sub);
+  font-size: 12px;
+}
+
+/* 세션 목록 카드. 세션이 없거나 훅이 없으면 안이 비어 통째로 접힌다. */
+.notch-sessions {
+  padding: 12px 10px 10px;
+  background: var(--card);
+  border: 1px solid var(--card-line);
+  border-radius: 16px;
+}
+
+.notch-sessions:empty {
+  display: none;
+}
+
+.notch-actions {
+  flex: none;
+  display: flex;
+  gap: 8px;
+  padding: 12px 14px 14px;
+}
+
+.notch-actions button {
+  flex: 1 1 auto;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 0;
+  border-radius: 999px;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
+}
+
+.notch-actions button:hover,
+.notch-actions button:focus-visible {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--fg);
+  outline: none;
+}
+
+.notch-actions button:active {
+  transform: scale(0.96);
+}
+
+.notch-actions svg {
+  flex: none;
+}
+
+.notch-badge {
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--danger);
+  color: #000;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notch-island,
+  .notch-island.open,
+  .notch-body,
+  .notch-island.full .notch-body,
+  .notch-gauge-fill,
+  .notch-actions button {
+    transition: none;
+  }
+
+  .notch-body {
+    transform: none;
+  }
 }

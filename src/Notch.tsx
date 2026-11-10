@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { t, resolveLang, type Lang } from "./i18n";
+import { ICONS, Icon } from "./icons";
 import {
   ACTIVITY_POLL_MS,
   formatCountdown,
@@ -89,7 +90,45 @@ function minutesUntil(iso: string | null): number | null {
   return Number.isFinite(ms) && ms > 0 ? ms / 60_000 : null;
 }
 
-function ToolRow({
+/** 게이지 줄 라벨 — 좁은 칸이라 "세션 (5h)" 대신 "5h"처럼 짧게 쓴다. */
+function windowShort(hours: number, lang: Lang): string {
+  if (hours >= 24 * 28) return t(lang, "windowMonth");
+  if (hours >= 24 * 7) return t(lang, "windowWeek");
+  if (hours >= 24) return t(lang, "windowDay");
+  return `${Number.isInteger(hours) ? hours : hours.toFixed(1)}h`;
+}
+
+function Gauge({
+  label,
+  pct,
+  danger,
+  resetIn,
+  lang,
+}: {
+  label: string;
+  pct: number | null;
+  danger: boolean;
+  resetIn: number | null;
+  lang: Lang;
+}) {
+  return (
+    <div className={`notch-gauge${danger ? " danger" : ""}`}>
+      <span className="notch-gauge-label">{label}</span>
+      <span className="notch-gauge-track" aria-hidden>
+        <span
+          className="notch-gauge-fill"
+          style={{ width: `${Math.max(0, Math.min(100, pct ?? 0))}%` }}
+        />
+      </span>
+      <span className="notch-gauge-pct">{pct != null ? `${Math.round(pct)}%` : "—"}</span>
+      <span className="notch-gauge-reset">
+        {resetIn != null && t(lang, "notch.resetIn", { t: formatCountdown(resetIn, lang) })}
+      </span>
+    </div>
+  );
+}
+
+function ToolCard({
   s,
   lang,
   threshold,
@@ -99,58 +138,83 @@ function ToolRow({
   threshold: number;
 }) {
   const danger = isDanger(s.percentRemaining, s.verdict, threshold);
-  const resetIn = minutesUntil(s.resetsAt);
+  const active = (s.accounts ?? []).find((a) => a.isActive) ?? null;
   // 주간 윈도우 도구(Grok)는 5h·7d 슬롯에 같은 값이 들어 있어 주간 줄을 따로 띄우지 않는다.
   const weekly =
     s.sevenDayRemaining != null && s.windowHours < 24 * 7 ? s.sevenDayRemaining : null;
-  const meta = [
-    resetIn != null && t(lang, "notch.resetIn", { t: formatCountdown(resetIn, lang) }),
-    weekly != null && t(lang, "weekly", { n: weekly.toFixed(0) }),
-  ].filter(Boolean);
+  const verdict = s.verdict
+    ? t(lang, s.verdict.key, {
+        eta: formatDuration(s.verdict.etaMinutes, lang),
+        reset: formatCountdown(s.verdict.resetMinutes, lang),
+      })
+    : s.etaMinutes != null
+      ? t(lang, "notch.eta", { t: formatEta(s.etaMinutes, lang) })
+      : null;
   return (
-    <li className={`notch-tool${danger ? " danger" : ""}`}>
-      <div className="notch-tool-head">
-        <span className="notch-tool-name">
-          {s.tool}
-          {s.plan && <span className="notch-plan">{s.plan}</span>}
-        </span>
-        <span className="notch-tool-pct">
-          {s.percentRemaining != null
-            ? `${Math.round(s.percentRemaining)}% ${t(lang, "remaining")}`
-            : "—"}
+    <li className={`notch-card${danger ? " danger" : ""}`}>
+      <div className="notch-card-head">
+        <span className="notch-card-name">{s.tool}</span>
+        {s.plan && <span className="notch-plan">{s.plan}</span>}
+        <span className="notch-card-pct">
+          {s.percentRemaining != null ? (
+            <>
+              <strong>{Math.round(s.percentRemaining)}</strong>%
+              <small>{t(lang, "remaining")}</small>
+            </>
+          ) : (
+            "—"
+          )}
         </span>
       </div>
-      {s.verdict ? (
-        <p className={`notch-verdict ${s.verdict.level}`}>
-          {t(lang, s.verdict.key, {
-            eta: formatDuration(s.verdict.etaMinutes, lang),
-            reset: formatCountdown(s.verdict.resetMinutes, lang),
-          })}
-        </p>
-      ) : (
-        s.etaMinutes != null && (
-          <p className="notch-verdict">
-            {t(lang, "notch.eta", { t: formatEta(s.etaMinutes, lang) })}
-          </p>
-        )
+      <Gauge
+        label={windowShort(s.windowHours, lang)}
+        pct={s.percentRemaining}
+        danger={s.percentRemaining != null && s.percentRemaining <= threshold}
+        resetIn={minutesUntil(s.resetsAt)}
+        lang={lang}
+      />
+      {weekly != null && (
+        <Gauge
+          label={t(lang, "windowWeek")}
+          pct={weekly}
+          danger={weekly <= threshold}
+          resetIn={minutesUntil(active?.sevenDayResetsAt ?? null)}
+          lang={lang}
+        />
       )}
-      {meta.length > 0 && <p className="notch-tool-meta">{meta.join(" · ")}</p>}
+      {verdict && <p className={`notch-verdict ${s.verdict?.level ?? ""}`}>{verdict}</p>}
       {(s.accounts ?? []).length > 1 && (
         <ul className="notch-accts">
-          {s.accounts.map((a) => (
-            <li key={a.id} className={`notch-acct${a.isActive ? " active" : ""}`}>
-              <span className="notch-acct-name">{a.label}</span>
-              <span
-                className={`notch-acct-pct${
-                  a.percentRemaining != null && a.percentRemaining <= threshold ? " danger" : ""
-                }`}
-              >
-                {a.percentRemaining != null
-                  ? `${Math.round(a.percentRemaining)}%`
-                  : t(lang, a.note ?? "acctFailed", { tool: s.tool })}
-              </span>
-            </li>
-          ))}
+          {s.accounts.map((a) => {
+            const low = a.percentRemaining != null && a.percentRemaining <= threshold;
+            return (
+              <li key={a.id} className={`notch-acct${a.isActive ? " active" : ""}`}>
+                <span className="notch-acct-name" title={a.label}>
+                  {a.label}
+                </span>
+                {a.percentRemaining != null ? (
+                  <>
+                    <span className={`notch-gauge-track mini${low ? " danger" : ""}`} aria-hidden>
+                      <span
+                        className="notch-gauge-fill"
+                        style={{ width: `${Math.max(0, Math.min(100, a.percentRemaining))}%` }}
+                      />
+                    </span>
+                    <span className={`notch-acct-pct${low ? " danger" : ""}`}>
+                      {Math.round(a.percentRemaining)}%
+                    </span>
+                  </>
+                ) : (
+                  <span
+                    className="notch-acct-note"
+                    title={t(lang, a.note ?? "acctFailed", { tool: s.tool })}
+                  >
+                    {t(lang, a.note ?? "acctFailed", { tool: s.tool })}
+                  </span>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </li>
@@ -173,6 +237,9 @@ export function NotchView() {
   const [bodyHeight, setBodyHeight] = useState(0);
   const scrollInnerRef = useRef<HTMLDivElement>(null);
   const actionsRef = useRef<HTMLElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // 최대 높이를 넘겨 스크롤이 생겼을 때만 가려진 쪽 끝을 흐리게 해 더 있다는 걸 알린다.
+  const [edges, setEdges] = useState({ top: false, bottom: false });
   const sessions = useSessions(mode === "full");
 
   useEffect(() => {
@@ -236,6 +303,26 @@ export function NotchView() {
     return () => ro.disconnect();
   }, [layout]);
 
+  useEffect(() => {
+    const el = scrollRef.current;
+    const inner = scrollInnerRef.current;
+    if (!el || !inner) return;
+    const update = () => {
+      const top = el.scrollTop > 1;
+      const bottom = el.scrollTop + el.clientHeight < el.scrollHeight - 1;
+      setEdges((prev) => (prev.top === top && prev.bottom === bottom ? prev : { top, bottom }));
+    };
+    update();
+    el.addEventListener("scroll", update, { passive: true });
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    ro.observe(inner);
+    return () => {
+      el.removeEventListener("scroll", update);
+      ro.disconnect();
+    };
+  }, [layout]);
+
   const fullHeight = layout
     ? Math.min(
         layout.barHeight + (notice ? layout.noticeHeight : 0) + bodyHeight,
@@ -285,7 +372,9 @@ export function NotchView() {
   return (
     <div className="notch-root">
       <div
-        className={`notch-island${open ? " open" : ""}${danger ? " danger" : ""}`}
+        className={`notch-island${open ? " open" : ""}${mode === "full" ? " full" : ""}${
+          danger ? " danger" : ""
+        }`}
         style={{
           width: open ? layout.expandedWidth : islandWidth,
           height,
@@ -330,12 +419,15 @@ export function NotchView() {
           style={{ width: layout.expandedWidth }}
           aria-hidden={mode !== "full"}
         >
-          <div className="notch-scroll">
-            <div ref={scrollInnerRef}>
-              <ul className="notch-tools">
+          <div
+            className={`notch-scroll${edges.top ? " fade-top" : ""}${edges.bottom ? " fade-bottom" : ""}`}
+            ref={scrollRef}
+          >
+            <div className="notch-content" ref={scrollInnerRef}>
+              <ul className="notch-cards">
                 {tools.length === 0 && <li className="notch-empty">{t(lang, "noTools")}</li>}
                 {tools.map((s) => (
-                  <ToolRow key={s.tool} s={s} lang={lang} threshold={threshold} />
+                  <ToolCard key={s.tool} s={s} lang={lang} threshold={threshold} />
                 ))}
               </ul>
               {/* 세션이 없거나 훅이 없으면 SessionList가 null이라 :empty로 접힌다. */}
@@ -357,16 +449,20 @@ export function NotchView() {
           </div>
           <nav className="notch-actions" ref={actionsRef}>
             <button onClick={() => invoke("open_main_window").catch(() => {})}>
+              <Icon d={ICONS.dashboard} />
               {t(lang, "notch.dashboard")}
             </button>
             <button onClick={() => invoke("open_history_window").catch(() => {})}>
+              <Icon d={ICONS.history} />
               {t(lang, "history")}
             </button>
             <button onClick={() => invoke("open_inbox_window").catch(() => {})}>
+              <Icon d={ICONS.inbox} />
               {t(lang, "inbox")}
               {unread > 0 && <span className="notch-badge">{unread}</span>}
             </button>
             <button onClick={() => invoke("open_settings_window").catch(() => {})}>
+              <Icon d={ICONS.settings} />
               {t(lang, "settings")}
             </button>
           </nav>

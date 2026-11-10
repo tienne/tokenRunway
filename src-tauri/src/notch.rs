@@ -23,7 +23,7 @@ const WING: f64 = 84.0;
 const EXPANDED_WIDTH: f64 = 420.0;
 /// 펼친 섬이 자랄 수 있는 최대 높이. 창은 이 크기로 고정하고, 실제로 클릭을 받는 높이는
 /// 프론트가 잰 내용 높이(`FIT_HEIGHT`)를 따른다 — 도구가 하나뿐인데 빈 검은 판이 내려오지 않게.
-const EXPANDED_MAX_HEIGHT: f64 = 440.0;
+const EXPANDED_MAX_HEIGHT: f64 = 560.0;
 /// 프론트가 아직 내용 높이를 알려주기 전에 쓰는 값.
 const DEFAULT_FIT_HEIGHT: u32 = 236;
 const POLL_MS: u64 = 40;
