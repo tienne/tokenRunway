@@ -1422,6 +1422,11 @@ fn alert_targets(s: &RunwayStatus) -> Vec<AlertTarget> {
     s.accounts
         .iter()
         .filter_map(|a| {
+            // 마지막으로 받아둔 값은 지금 상태가 아니다. 그걸로 울리면 이미 리셋된
+            // 계정에 소진 경보가 뜰 수 있다. 키 모양은 그대로라 재무장 상태는 남는다.
+            if a.observed_at_ms.is_some() {
+                return None;
+            }
             // 활성 계정은 카드가 쓰는 ETA와 verdict를 그대로 쓴다. 계정별 페이스
             // 추정으로 갈아끼우면 같은 계정인데 카드 본문과 알림의 숫자가 달라진다.
             // 나머지 계정은 로컬 시계열이 없어 페이스 추정뿐이다. 그 값은 리셋 전에

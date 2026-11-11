@@ -10,8 +10,9 @@ pub mod claude_relay;
 pub mod codex;
 pub mod gemini;
 pub mod grok;
+pub mod last_usage;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, UNIX_EPOCH};
@@ -41,7 +42,7 @@ pub struct UsageSample {
 /// 도구가 제공하는 공식(권위) 사용률. Claude Code는 OAuth `/api/oauth/usage`에서 받는다.
 ///
 /// 로컬 토큰 합산보다 정확하므로 percent 계산에 우선 사용한다.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OfficialUsage {
     /// 5시간 윈도우 사용률 (%).
@@ -92,6 +93,18 @@ pub struct AccountUsage {
     pub window_secs: Option<i64>,
     /// 남은 무료 리셋 횟수. Codex app-server 폴백으로 받은 계정에만 있다.
     pub reset_credits_available: Option<u32>,
+    /// `usage`가 지금 받은 값이 아니라 마지막으로 받아둔 값이면 그 관측 시각(epoch ms).
+    ///
+    /// 조회가 막힌 계정의 줄을 비우지 않으려고 [`last_usage`]에서 꺼낸 값이다.
+    /// 지난 값이라 카드 대표로 세우지 않는다.
+    pub observed_at_ms: Option<i64>,
+}
+
+impl AccountUsage {
+    /// 지금 받은 사용률이 있는지. 마지막으로 받아둔 값은 여기서 빠진다.
+    pub fn has_live_usage(&self) -> bool {
+        self.usage.is_some() && self.observed_at_ms.is_none()
+    }
 }
 
 /// 카드 대표로 세울 계정 — 지금 쓰는 계정.
@@ -106,7 +119,7 @@ pub struct AccountUsage {
 /// 위에 적은 그 상황이 다시 생긴다. 아무것도 안 내놓고 `status_note`가 사유를
 /// 알리는 쪽이 맞다 — 다른 계정 값은 계정 줄에 그대로 남아 정보를 잃지 않는다.
 pub fn representative(accounts: &[AccountUsage]) -> Option<&AccountUsage> {
-    accounts.iter().find(|a| a.is_active && a.usage.is_some())
+    accounts.iter().find(|a| a.is_active && a.has_live_usage())
 }
 
 /// 계정 하나의 잔여 상태 — 카드를 펼쳤을 때 한 줄로 그려진다.
@@ -134,6 +147,9 @@ pub struct AccountStatus {
     pub note: Option<String>,
     /// 남은 무료 리셋 횟수. 0이거나 모르면 UI가 줄을 숨긴다.
     pub reset_credits_available: Option<u32>,
+    /// 지금 받은 값이 아니라 마지막으로 받아둔 값이면 그 관측 시각(epoch ms).
+    /// UI가 줄을 흐리게 그리고 "N시간 전 값"을 붙인다.
+    pub observed_at_ms: Option<i64>,
 }
 
 /// 효율 인사이트 한 건 — i18n 키 + 레벨(색 구분용).

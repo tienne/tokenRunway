@@ -429,6 +429,12 @@
   color: var(--danger);
 }
 
+/* 지난 관측값. 이름은 그대로 두고 숫자와 게이지만 흐린다. */
+.notch-acct.stale .notch-acct-pct,
+.notch-acct.stale .notch-gauge-track {
+  opacity: 0.45;
+}
+
 .notch-acct-note {
   grid-column: 2 / -1;
   min-width: 0;

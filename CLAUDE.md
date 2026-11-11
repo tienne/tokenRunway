@@ -29,6 +29,7 @@ src-tauri/src/
    ├ mod.rs         UsageProvider trait + 공용 타입 + find_recent_jsonl 헬퍼
    ├ claude_code.rs Keychain OAuth + ~/.claude JSONL
    ├ claude_accounts.rs Claude 계정 발견(Keychain 해시 규칙 + 오르카 저장소)
+   ├ last_usage.rs  계정별 마지막으로 받은 사용률 보관(last-usage.json)
    ├ codex.rs       ~/.codex JSONL (token_count + rate_limits)
    ├ gemini.rs      ~/.gemini 로그 요청 수
    └ antigravity.rs ~/.gemini/antigravity-cli 전송 로그
@@ -138,6 +139,13 @@ trait UsageProvider {
     나머지 계정만 쓴다
   - 사용률 180초 캐시는 계정별로 나눠 잡는다(`USAGE_CACHE`는 계정 id 맵). 계정 목록
     자체는 60초 캐시 — Keychain 훑기를 폴링마다 할 만큼 싸지 않다
+  - **안 쓰는 계정은 몇 시간 뒤 401이 난다** — CLI가 그 계정 토큰을 갱신하지 않아서다.
+    - **마지막 값 보관** (`last_usage.rs`) — 받은 사용률을 계정마다
+      `~/.token-runway/last-usage.json`(키 `<도구>#<id>`, 30일 보관)에 남긴다. 401·429로
+      못 받으면 이 값을 `AccountUsage.observed_at_ms`와 함께 흐리게 "N시간 전 값"으로
+      띄운다. 리셋 시각이 지난 윈도우는 사용률 0으로 넘긴다(`roll_forward`). 이 값은
+      대표 계정, 트레이, 경보, 사용률 이력, ETA 어디에도 안 들어간다 — 지금 값이 아니라서다.
+      노치 `figureOf`의 폴백도 이 값은 건너뛴다
 
 ### Codex (`codex.rs`) — 정확, 더 쉬움
 - **시계열**: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, `event_msg`/`token_count`의

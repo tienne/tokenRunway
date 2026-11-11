@@ -8,6 +8,7 @@ import {
   formatCountdown,
   formatDuration,
   formatEta,
+  formatObservedAgo,
   leadActivity,
   type AgentActivity,
   type RunwayStatus,
@@ -53,8 +54,9 @@ interface NotchFigure {
  */
 function figureOf(s: RunwayStatus): NotchFigure {
   if (s.percentRemaining != null) return { pct: s.percentRemaining, borrowed: null };
+  // 지난 관측값은 빌려 오지 않는다. 한눈에 보는 숫자가 몇 시간 전 값이면 지금 상황으로 읽힌다.
   const other = (s.accounts ?? [])
-    .filter((a) => a.percentRemaining != null)
+    .filter((a) => a.percentRemaining != null && a.observedAtMs == null)
     .sort((a, b) => (a.percentRemaining ?? 0) - (b.percentRemaining ?? 0))[0];
   return other
     ? { pct: other.percentRemaining, borrowed: other }
@@ -186,11 +188,20 @@ function ToolCard({
       {(s.accounts ?? []).length > 1 && (
         <ul className="notch-accts">
           {s.accounts.map((a) => {
-            const low = a.percentRemaining != null && a.percentRemaining <= threshold;
+            const stale =
+              a.observedAtMs != null ? formatObservedAgo(a.observedAtMs, lang) : null;
+            // 지난 값은 위험 색을 쓰지 않는다 — 지금 바닥났다는 근거가 아니다.
+            const low =
+              !stale && a.percentRemaining != null && a.percentRemaining <= threshold;
             return (
-              <li key={a.id} className={`notch-acct${a.isActive ? " active" : ""}`}>
-                <span className="notch-acct-name" title={a.label}>
+              <li
+                key={a.id}
+                className={`notch-acct${a.isActive ? " active" : ""}${stale ? " stale" : ""}`}
+                title={stale ?? undefined}
+              >
+                <span className="notch-acct-name" title={stale ? undefined : a.label}>
                   {a.label}
+                  {stale && <span className="sr-only"> ({stale})</span>}
                 </span>
                 {a.percentRemaining != null ? (
                   <>

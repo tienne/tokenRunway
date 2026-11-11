@@ -487,6 +487,16 @@ h1 {
   background: var(--danger-fill);
 }
 
+/* 지금 못 받아 지난 관측값을 보여주는 계정. 실시간 값과 헷갈리지 않게 숫자와 바를 흐린다. */
+.acct-row.stale .acct-pct,
+.acct-row.stale .acct-bar {
+  opacity: 0.45;
+}
+
+.acct-stale {
+  font-style: italic;
+}
+
 .acct-meta {
   display: flex;
   flex-wrap: wrap;
