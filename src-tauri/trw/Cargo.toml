@@ -1,6 +1,6 @@
 [package]
 name = "trw"
-version = "0.6.0"
+version = "0.6.1"
 description = "Token Runway 알림 보내기 CLI"
 authors = ["tienne"]
 edition = "2021"
