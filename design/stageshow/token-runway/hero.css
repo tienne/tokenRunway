@@ -1,0 +1,49 @@
+.trw-shot {
+  .ss-stage {
+    overflow: hidden;
+    background: #0a0a0a;
+    --ss-canvas: #0a0a0a;
+    --ss-surface: #171717;
+    --ss-chrome: #1e1e1e;
+    --ss-raised: #262626;
+    --ss-text-strong: #f0f0f0;
+    --ss-text: #d0d0d0;
+    --ss-text-faint: #acacac;
+    --ss-accent: #ff3d00;
+    --ss-accent-2: #ff3d00;
+    --ss-accent-text: #ff8a66;
+    --ss-accent-soft: #352018;
+    --ss-warning-text: #e6b765;
+  }
+  .trw-window {
+    position: absolute;
+    top: 32px;
+    left: 32px;
+    width: 600px;
+    box-shadow: inset 0 1px 0 #ffffff12, 0 0 0 1px #ffffff12;
+  }
+  .trw-nav { padding: 14px 10px; display: grid; gap: 6px; font-size: 13px; }
+  .trw-selected { color: #ff8a66; }
+  .trw-body { padding: 22px 66px 30px 26px; min-height: 450px; font-size: 13px; color: var(--ss-text-strong); }
+  .trw-heading { font-size: 20px; font-weight: 700; margin-bottom: 22px; line-height: 1.3; }
+  .trw-kicker { font-size: 12px; line-height: 1.4; color: var(--ss-text-faint); }
+  .trw-value { font-size: 46px; font-weight: 700; letter-spacing: -1.5px; line-height: 1.2; margin: 8px 0 16px; }
+  .trw-value > span { font-size: 13px; font-weight: 400; letter-spacing: 0; margin-left: 7px; color: var(--ss-text-faint); }
+  .trw-pairs { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; padding: 20px 0; }
+  .trw-pairs > div { display: grid; gap: 6px; }
+  .trw-pairs strong { font-size: 20px; font-weight: 600; line-height: 1.3; }
+  .trw-pairs span { font-size: 11px; color: var(--ss-text-faint); line-height: 1.4; }
+  .trw-section { font-size: 12px; font-weight: 600; color: var(--ss-text-faint); margin: 12px 0; line-height: 1.4; }
+  .trw-project { display: flex; gap: 12px; align-items: center; font-weight: 600; font-size: 15px; }
+  .trw-meta { font-size: 11px; color: var(--ss-text-faint); line-height: 1.4; margin-top: 8px; }
+  .trw-thread { margin: 20px 0 24px; font-size: 13px; }
+  .trw-request-label { display: block; font-size: 11px; color: var(--ss-text-faint); margin-bottom: 0; }
+  .trw-axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--ss-text-faint); margin-top: 8px; }
+  .trw-settings .ss-row__subtitle { color: var(--ss-text-faint); }
+  .trw-answer { font-size: 14px; line-height: 1.6; font-weight: 600; }
+  .trw-action { margin-top: 16px; }
+  .trw-settings { font-size: 13px; }
+  .trw-settings > .ss-row { border-bottom: 1px solid #ffffff12; }
+  .ss-stage[data-layout='compact'] .trw-window { top: 16px; left: 16px; width: 326px; }
+  .ss-stage[data-layout='compact'] .trw-body { padding: 0; }
+}

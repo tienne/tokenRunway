@@ -1,0 +1,60 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><title>Token Runway · 디자인 검토 · 샘플 데이터</title><div id="root"></div><script type="module">
+import React from '/node_modules/.vite/deps/react.js';
+import ReactDOM from '/node_modules/.vite/deps/react-dom_client.js';
+import {mockIPC,mockWindows} from '/node_modules/@tauri-apps/api/mocks.js';
+import {emit} from '/node_modules/@tauri-apps/api/event.js';
+mockWindows('main');window.testEmit=emit;const settings={
+    alertThreshold: 20,
+    etaAlertMinutes: 30,
+    resetAlertMinutes: 0,
+    pollSeconds: 30,
+    disabledTools: [],
+    trayTool: null,
+    notificationsEnabled: true,
+    completionAlertsEnabled: true,
+    completionAlertsQuiet: false,
+    wakeOnNotify: true,
+    codexHooksInstalled: false,
+    claudeHooksInstalled: false,
+    statuslineRelayEnabled: false,
+    hapticsEnabled: true,
+    hapticsOnTurnEnd: true,
+    codexAppServerFallback: true,
+    claudeCliRefresh: true,
+    language: null,
+    quietEnabled: false,
+    quietStartHour: 22,
+    quietEndHour: 8,
+    analyticsEnabled: false,
+    hideInactive: false,
+    trayShowPercent: true,
+    trayShowReset: true,
+    petEnabled: true,
+    petBundles: [],
+    activePetBundleId: null,
+    petLastX: null,
+    petLastY: null,
+    petScale: 1,
+    notchEnabled: true,
+    trayTitleMode: "auto",
+  };settings.language='ko';
+let selected=new URLSearchParams(location.search).get('page') || 'dashboard';
+const runway={tool:'Codex',available:true,unit:'tokens',windowHours:5,windowUsage:320000,dailyUsage:640000,dailyCount:24,dailyCost:0,cacheHitRate:null,insights:[],planHint:null,models:[],sparkline:[3,5,2,7],limit:1000000,percentRemaining:68,burnRatePerMin:1200,burnTrend:'flat',etaMinutes:120,resetsAt:null,sevenDayRemaining:null,sevenDayEtaMinutes:null,weeklyDays:[],verdict:null,isEstimate:false,plan:'Pro',note:null,accounts:[]};
+const stats=[{tool:'Codex',unit:'tokens',weeklyDays:[],days:Array.from({length:7},(_,d)=>({date:`11-${d+1}`,usage:[12000,24000,9000,31000,18000,27000,19000][d],count:10,cost:0})),totalUsage:140000,totalCost:0,avgUsage:20000,peakUsage:31000,peakDate:'11-04',models:[{model:'주 모델',usage:100000,cost:0,count:30}],hourly:Array.from({length:24},(_,h)=>h*100),thisWeekUsage:100000,lastWeekUsage:80000,thisWeekCost:0,lastWeekCost:0,planAdvice:null}];
+const items=[{id:'1',title:'네 화면을 하나의 작업 공간으로 묶었습니다.',body:'메뉴를 오가도 필터와 스크롤 위치가 유지됩니다. 메뉴바와 노치에서도 같은 창으로 연결됩니다.',prompt:'대시보드, 히스토리, 알림, 설정을 하나의 창에서 볼 수 있게 해 주세요.',level:'done',context:'feature / notifications',createdMs:Date.now(),read:false,projectPath:'/repo/tokenRunway',target:{kind:'orca',worktreeId:'1',worktreePath:'/worktrees/notifications',tabId:null}},{id:'2',title:'기존 알림도 새 디자인으로 바꿀까요?',body:null,level:'waiting',context:'fix / notification-detail',createdMs:Date.now()-480000,read:false,projectPath:'/repo/tokenRunway',questions:[{question:'기존 알림에도 적용할까요?',options:[{label:'모든 알림에 적용',description:'이전 알림도 같은 형태로 볼 수 있어요.'},{label:'새 알림부터 적용'}],multiSelect:false}],target:{kind:'orca',worktreeId:'2',worktreePath:'/worktrees/notification-detail',tabId:null}}];
+mockIPC(async(cmd,args)=>{
+if(cmd==='get_workspace_page')return selected;
+if(cmd==='get_settings')return settings;
+if(cmd==='get_inbox')return items;
+if(cmd==='get_runway')return [runway];
+if(cmd==='get_stats')return stats;
+if(cmd==='navigate_workspace'){selected=args.page;await emit('workspace-navigate',selected);return;}
+if(cmd==='get_update_status')return {available:null,installing:false};
+if(cmd==='get_available_tools')return [];
+if(cmd==='trw_status')return {cliPath:'/dev/trw',skills:['trw-notify'],agents:['codex']};
+if(cmd==='plugin:notification|is_permission_granted')return true;
+if(cmd==='plugin:autostart|is_enabled')return false;
+return null;
+},{shouldMockEvents:true});
+const {default:App}=await import('/src/App.tsx');ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+</script></html>
