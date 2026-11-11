@@ -29,6 +29,8 @@ src-tauri/src/
    ├ mod.rs         UsageProvider trait + 공용 타입 + find_recent_jsonl 헬퍼
    ├ claude_code.rs Keychain OAuth + ~/.claude JSONL
    ├ claude_accounts.rs Claude 계정 발견(Keychain 해시 규칙 + 오르카 저장소)
+   ├ claude_cli_refresh.rs 토큰 만료 계정을 `claude -p /usage`로 CLI가 갱신하게 함
+   ├ last_usage.rs  계정별 마지막으로 받은 사용률 보관(last-usage.json)
    ├ codex.rs       ~/.codex JSONL (token_count + rate_limits)
    ├ gemini.rs      ~/.gemini 로그 요청 수
    └ antigravity.rs ~/.gemini/antigravity-cli 전송 로그
@@ -138,6 +140,34 @@ trait UsageProvider {
     나머지 계정만 쓴다
   - 사용률 180초 캐시는 계정별로 나눠 잡는다(`USAGE_CACHE`는 계정 id 맵). 계정 목록
     자체는 60초 캐시 — Keychain 훑기를 폴링마다 할 만큼 싸지 않다
+  - **안 쓰는 계정은 몇 시간 뒤 401이 난다** — CLI가 그 계정 토큰을 갱신하지 않아서다.
+    그래서 두 겹으로 버틴다
+    - **마지막 값 보관** (`last_usage.rs`) — 받은 사용률을 계정마다
+      `~/.token-runway/last-usage.json`(키 `<도구>#<id>`, 30일 보관)에 남긴다. 401·429로
+      못 받으면 이 값을 `AccountUsage.observed_at_ms`와 함께 흐리게 "N시간 전 값"으로
+      띄운다. 리셋 시각이 지난 윈도우는 사용률 0으로 넘긴다(`roll_forward`). 이 값은
+      대표 계정, 트레이, 경보, 사용률 이력, ETA 어디에도 안 들어간다 — 지금 값이 아니라서다.
+      노치 `figureOf`의 폴백도 이 값은 건너뛴다
+    - **CLI 갱신** (`claude_cli_refresh.rs`, 설정 `claude_cli_refresh`, 기본 켜짐) — 401이
+      난 계정만 그 config dir로 `claude -p /usage`를 백그라운드에서 한 번 돌린다. CLI의
+      사용량 조회 경로가 만료 토큰을 먼저 갱신하고 Keychain에 다시 쓴다. 성공하면 계정
+      목록 캐시 시각을 되돌리고 그 계정 사용률 캐시를 지워 다음 폴링이 새 토큰으로 묻는다.
+      **우리는 refresh token을 쓰지 않는다** — CLI가 쥔 토큰과 어긋나지 않게
+      - 플래그: `--no-session-persistence`(없으면 `projects`에 세션 JSONL이 남아 활동
+        감지가 도는 세션으로 본다), `--settings '{"disableAllHooks":true}'`(우리 훅까지
+        상태 파일을 남긴다), `--strict-mcp-config`(MCP를 안 띄운다). **`--bare`는 못 쓴다** —
+        OAuth와 Keychain을 아예 안 읽어 갱신이 안 일어난다
+      - 환경: `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_OAUTH_TOKEN`,
+        `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`을 지운다(남으면 API 키 경로를 타거나
+        엉뚱한 계정을 갱신한다). 접미사 없는 레거시 Keychain 항목의 계정은
+        `CLAUDE_CONFIG_DIR`을 **아예 지운** 채로 띄운다 — `~/.claude`를 명시하면 CLI가 해시가
+        붙은 이름을 읽는다(`CliHome::Default`). 오르카 저장소에서만 찾은 계정은 config dir을
+        몰라 갱신하지 못한다
+      - 한 번에 하나만 돌고(`IN_FLIGHT`) 같은 계정은 30분 안에 다시 띄우지 않는다. 20초
+        안에 안 끝나면 죽인다. 출력은 버린다
+      - 실측: `/usage`는 모델을 부르지 않는다(`num_turns` 0, 비용 0, 10초 안팎). 갱신 경로는
+        CLI 2.1.322 코드로만 확인했다 — 확인할 때 만료된 계정이 없었다. 동시에 도는 세션과의
+        갱신 경합은 CLI가 자체 잠금 파일로 푼다(Codex처럼 도는 홈을 건너뛰지 않는 이유)
 
 ### Codex (`codex.rs`) — 정확, 더 쉬움
 - **시계열**: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, `event_msg`/`token_count`의
@@ -436,15 +466,26 @@ bash scripts/build-trw.sh       # trw를 externalBin 자리에 놓기 (--debug�
   펼친 창은 최대 크기(`EXPANDED_WIDTH`×`EXPANDED_MAX_HEIGHT`)로 고정하고, 프론트가 잰 내용
   높이를 `notch_fit`으로 받아 섬 높이와 클릭 영역을 그 높이에 맞춘다. 패널은 접혀 있어도
   늘 렌더링해 둔다 — 펼치기 전에 높이를 재서 넘겨 둬야 펼친 순간부터 클릭 영역이 맞는다
-- **트레이 숫자는 노치 섬이 주 화면에 떠 있을 때만 숨긴다** (`tray_shows_figures`) —
-  설정 `tray_title_mode`가 `auto`(기본)면 이 규칙, `always`는 항상 숫자, `icon_only`는
-  항상 아이콘만이다. 주 화면은 `NSScreen.screens` 0번(메뉴바가 있는 화면)이다. 외장
+- **트레이는 노치 섬이 주 화면에 떠 있을 때만 숨긴다** (`tray_visible`, `tray_shows_figures`) —
+  설정 `tray_title_mode`가 `auto`(기본)면 이 경우 아이콘까지 통째로 뺀다(`set_visible(false)`).
+  섬이 숫자와 위험 색, 바로가기를 다 들고 있어서다. `always`는 항상 숫자, `icon_only`는
+  항상 아이콘만 남긴다. 트레이가 빠지면 메뉴의 업데이트 확인과 종료도 같이 사라지니
+  설정 창 맨 아래(`check_update_now`, `quit_app`)에 같은 버튼을 둔다. Dock 우클릭 종료와
+  ⌘Q도 그대로 된다. 주 화면은 `NSScreen.screens` 0번(메뉴바가 있는 화면)이다. 외장
   모니터가 주 화면이고 노치 달린 내장 화면이 보조면 노치 섬은 보조 화면에만 뜨고, 눈이
   가는 메뉴바엔 섬이 없으니 숫자를 그대로 둔다. 숫자가 두 군데 겹치는 건 해가 없지만
   어느 쪽에도 안 보이면 경고를 놓치기 때문이다. 화면 판정은 `notch.rs`의 5초 배치 확인이
   `Presence`(Absent/Secondary/Primary)가 바뀔 때만 `refresh_tray_title`을 불러 알린다 —
-  트레이 쪽이 따로 폴링하지 않는다. `set_title`도 직전과 같은 값이면 부르지 않는다.
-  빨간 위험 아이콘은 모드와 무관하게 늘 바뀐다 — 숫자를 숨겨도 위험은 보여야 한다
+  트레이 쪽이 따로 폴링하지 않는다. `set_title`과 `set_visible`도 직전과 같은 값이면 부르지 않는다.
+  빨간 위험 아이콘은 모드와 무관하게 늘 바뀐다 — 숫자를 숨겨도 위험은 보여야 한다.
+  아이콘이 빠진 동안엔 노치 숫자의 위험 색이 그 자리를 맡는다
+- **대시보드와 설정, 히스토리, 알림함 창은 펼친 노치 섬 오른쪽에 띄운다** (`notch::place_beside`) —
+  트레이가 숨으면 `TrayBottomCenter`가 기댈 아이콘 좌표가 없다. 노치 바로 밑에 두면 펼친 섬이
+  창 위를 덮어서 섬 오른쪽 끝 + `BESIDE_GAP`에 붙이고 화면 오른쪽 끝을 넘으면 안쪽으로 당긴다.
+  섬은 가운데 정렬이라 왼쪽으로 뒤집을 일은 없다. **숨어 있던 창만 옮긴다** — 이미 떠 있는 창은
+  사용자가 옮겨둔 자리일 수 있어서 앞으로만 가져온다. 트레이 클릭과 트레이 메뉴 "열기"는
+  예전처럼 아이콘 아래다(`toggle_popover`의 `from_tray`). 노치가 없으면 원래 자리 그대로다.
+  새 창은 `.visible(false)`로 만들고 자리를 잡은 뒤 보여준다 — 먼저 보이면 기본 위치에서 한 번 깜빡인다
 - **노치 표시는 기본으로 켠다** (`notch_enabled` 기본 true, 예전 설정 파일도 true로 읽음) —
   2026-11-09 NSPanel 게이트(아래 로드맵)를 통과해 포커스를 뺏지 않고 클릭도 통과하는 게
   확인됐다. 노치 없는 화면에서는 창 자체를 만들지 않아 켜 두어도 손해가 없다. 노치 숫자는
@@ -573,10 +614,11 @@ bash scripts/build-trw.sh       # trw를 externalBin 자리에 놓기 (--debug�
   않고 메뉴바 위 섬으로 간다. 방식은 tauri-nspanel이 아니라 objc2 직접 호출이다 — tao 창
   클래스를 NSPanel 하위 클래스(`TRWNotchPanel`)로 바꿔치기한다. 이미 tao가 쓰는 crate라
   의존성이 늘지 않고, 바꿔치기 전에 인스턴스 크기를 비교해 tao가 ivar를 바꾸면 멈춘다
-- [x] 노치 중심 UI — 노치 표시 기본 켬, 노치 섬이 주 화면에 뜨면 트레이 숫자를 숨김
+- [x] 노치 중심 UI — 노치 표시 기본 켬, 노치 섬이 주 화면에 뜨면 트레이 아이콘을 숨김
   (`tray_title_mode`로 자동/항상/아이콘만), 펼친 노치에 도구별 잔여율과 결론, 리셋까지
   남은 시간, 주간 잔여율, 계정별 줄과 대시보드·히스토리·알림함·설정 바로가기를 넣었다.
-  세션 목록 칸(`.notch-sessions`)엔 `SessionList`가 들어가고 세션이 없으면 접힌다. 팝오버는 그대로 둔다
+  세션 목록 칸(`.notch-sessions`)엔 `SessionList`가 들어가고 세션이 없으면 접힌다. 팝오버는 그대로 두고
+  노치에서 열면 섬 오른쪽에 띄운다. 다른 창들도 같은 자리에 뜬다
 - [ ] 플랜 배지 대비 — `.plan-badge`와 `.acct-plan`이 같은 파란 배경에 흰 글자라
   대비가 3.6:1이다. WCAG AA-large는 넘지만 normal(4.5:1)에는 못 미친다. 한쪽만
   어둡게 하면 두 배지가 달라 보여 함께 손봐야 한다

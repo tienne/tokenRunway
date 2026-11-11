@@ -97,8 +97,8 @@ impl Lang {
     }
     pub fn update_available_body(self) -> &'static str {
         match self {
-            Lang::Ko => "트레이 메뉴 '업데이트 확인'에서 설치하세요.",
-            Lang::En => "Install it from the tray menu — 'Check for Updates'.",
+            Lang::Ko => "설정이나 트레이 메뉴의 '업데이트 확인'에서 설치하세요.",
+            Lang::En => "Install it from 'Check for Updates' in Settings or the tray menu.",
         }
     }
     pub fn update_installing(self) -> &'static str {

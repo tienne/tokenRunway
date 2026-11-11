@@ -902,6 +902,8 @@ interface AccountStatus {
   /** 상태 보조 설명. 백엔드가 항상 i18n 키를 준다 (자유 문자열이 아니다) */
   note: string | null;
   resetCreditsAvailable: number | null;
+  /** 지금 못 받아 지난 관측값을 대신 보여줄 때 그 관측 시각(epoch ms). 실시간 값이면 null */
+  observedAtMs: number | null;
 }
 
 export interface RunwayStatus {
@@ -952,6 +954,7 @@ export interface Settings {
   hapticsEnabled: boolean;
   hapticsOnTurnEnd: boolean;
   codexAppServerFallback: boolean;
+  claudeCliRefresh: boolean;
   language: string | null;
   quietEnabled: boolean;
   quietStartHour: number;
@@ -1127,7 +1130,7 @@ function WeeklyBars({
             <path
               d={line}
               fill="none"
-              stroke="#0a84ff"
+              style={{ stroke: "var(--accent)" }}
               strokeWidth="1.5"
               strokeLinejoin="round"
               vectorEffect="non-scaling-stroke"
@@ -1212,6 +1215,18 @@ export function formatResetsAt(iso: string | null, lang: Lang): string | null {
   return t(lang, "afterReset", { t: formatCountdown(diffMin, lang) });
 }
 
+/** "3시간 전 값"처럼 지난 관측값의 나이. 가장 큰 단위 하나만 쓴다 — 계정 줄이 좁아서다. */
+export function formatObservedAgo(observedAtMs: number, lang: Lang): string {
+  const min = Math.max(1, Math.floor((Date.now() - observedAtMs) / 60000));
+  const age =
+    min < 60
+      ? t(lang, "unit.m", { n: min })
+      : min < 48 * 60
+        ? t(lang, "unit.h", { n: Math.floor(min / 60) })
+        : t(lang, "unit.d", { n: Math.floor(min / 1440) });
+  return t(lang, "acctStale", { t: age });
+}
+
 /** 잔여율 구간별 색 — 계정 줄의 미니 바에 쓴다 */
 function pctLevel(pct: number): string {
   if (pct <= 20) return "danger";
@@ -1243,11 +1258,15 @@ function AccountRows({
       {accounts.map((a) => {
         const reset = formatResetsAt(a.resetsAt, lang);
         const weeklyReset = formatResetsAt(a.sevenDayResetsAt, lang);
+        const stale =
+          a.observedAtMs != null ? formatObservedAgo(a.observedAtMs, lang) : null;
         return (
           <div
-            className={`acct-row${a.isActive ? " active" : ""}`}
+            className={`acct-row${a.isActive ? " active" : ""}${stale ? " stale" : ""}`}
             key={a.id}
             aria-current={a.isActive ? "true" : undefined}
+            // 지난 값을 보여주는 동안에도 지금 못 받는 사유는 알려준다.
+            title={stale && a.note ? t(lang, a.note, { tool }) : undefined}
           >
             <div className="acct-line">
               <span
@@ -1282,6 +1301,7 @@ function AccountRows({
               </div>
             )}
             <div className="acct-meta">
+              {stale && <span className="acct-stale">{stale}</span>}
               {reset && <span>⏱ {reset}</span>}
               {a.sevenDayRemaining != null && (
                 <span>
@@ -1767,6 +1787,7 @@ function SettingsView() {
     hapticsEnabled: true,
     hapticsOnTurnEnd: true,
     codexAppServerFallback: true,
+    claudeCliRefresh: true,
     language: null,
     quietEnabled: false,
     quietStartHour: 22,
@@ -2054,6 +2075,18 @@ function SettingsView() {
         </label>
         {settings.codexAppServerFallback && (
           <p className="setting-hint">{tr("codexAppServerFallbackHint")}</p>
+        )}
+
+        <label className="setting-row toggle-row">
+          <span>{tr("claudeCliRefresh")}</span>
+          <input
+            type="checkbox"
+            checked={settings.claudeCliRefresh}
+            onChange={(e) => update({ claudeCliRefresh: e.target.checked })}
+          />
+        </label>
+        {settings.claudeCliRefresh && (
+          <p className="setting-hint">{tr("claudeCliRefreshHint")}</p>
         )}
 
         <label className="setting-row toggle-row">
@@ -2378,6 +2411,19 @@ function SettingsView() {
         )}
 
         <p className="setting-hint">{tr("settingsHint")}</p>
+
+        <div className="trw-row settings-app">
+          <span>{tr("appVersionRow")}</span>
+          <span className="settings-app-actions">
+            <button className="link-btn" onClick={() => invoke("check_update_now")}>
+              {tr("checkUpdate")}
+            </button>
+            <button className="link-btn" onClick={() => invoke("quit_app")}>
+              {tr("quitApp")}
+            </button>
+          </span>
+        </div>
+        <p className="setting-hint">{tr("appActionsHint")}</p>
       </section>
     </main>
   );
@@ -2507,15 +2553,15 @@ function TrendChart({
         >
           <defs>
             <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#0a84ff" stopOpacity="0.35" />
-              <stop offset="100%" stopColor="#0a84ff" stopOpacity="0" />
+              <stop offset="0%" style={{ stopColor: "var(--accent)" }} stopOpacity="0.35" />
+              <stop offset="100%" style={{ stopColor: "var(--accent)" }} stopOpacity="0" />
             </linearGradient>
           </defs>
           <path d={area} fill="url(#trendFill)" />
           <path
             d={line}
             fill="none"
-            stroke="#0a84ff"
+            style={{ stroke: "var(--accent)" }}
             strokeWidth="1.5"
             strokeLinejoin="round"
             vectorEffect="non-scaling-stroke"

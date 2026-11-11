@@ -25,6 +25,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use super::claude_cli_refresh::CliHome;
+
 /// 활성 계정이 쓰는 Keychain 서비스 접두어. 뒤에 config dir 해시가 붙기도 한다.
 const KEYCHAIN_PREFIX: &str = "Claude Code-credentials";
 
@@ -56,6 +58,9 @@ pub struct ClaudeAccount {
     /// 이 계정 토큰이 들어 있던 Keychain 서비스 이름들. statusLine 릴레이가 보낸
     /// config dir을 계정에 잇는 열쇠다. 중복 제거로 합쳐진 계정은 이름이 여럿이다.
     pub keychain_services: Vec<String>,
+    /// 이 계정 토큰을 CLI가 갱신하게 할 때 띄울 환경. Keychain에서 온 계정만 있다 —
+    /// 오르카 저장소에서만 찾은 계정은 config dir을 몰라 CLI로 갱신하지 못한다.
+    pub cli_homes: Vec<CliHome>,
 }
 
 /// 토큰을 든 구조체라 Debug를 파생하지 않는다.
@@ -73,6 +78,7 @@ impl fmt::Debug for ClaudeAccount {
             .field("is_active", &self.is_active)
             .field("from_default_dir", &self.from_default_dir)
             .field("keychain_services", &self.keychain_services)
+            .field("cli_homes", &self.cli_homes)
             .finish()
     }
 }
@@ -159,6 +165,11 @@ pub fn discover() -> Vec<ClaudeAccount> {
                         survivor.keychain_services.push(service);
                     }
                 }
+                for home in acc.cli_homes {
+                    if !survivor.cli_homes.contains(&home) {
+                        survivor.cli_homes.push(home);
+                    }
+                }
             }
             None => kept.push(acc),
         }
@@ -199,6 +210,12 @@ fn keychain_accounts(candidates: &[PathBuf], active_org: Option<&str>) -> Vec<Cl
             .find_map(|p| read_profile(p));
         let from_default = Some(&config_dir) == default_dir.as_ref();
         if let Some(mut acc) = from_credentials(&raw, profile, active_org, from_default) {
+            // 접미사 없는 이름은 `CLAUDE_CONFIG_DIR`이 없을 때만 CLI가 읽는다.
+            acc.cli_homes.push(if service == KEYCHAIN_PREFIX {
+                CliHome::Default
+            } else {
+                CliHome::ConfigDir(config_dir)
+            });
             acc.keychain_services.push(service);
             out.push(acc);
         }
@@ -330,6 +347,7 @@ fn from_credentials(
         is_active,
         from_default_dir,
         keychain_services: Vec::new(),
+        cli_homes: Vec::new(),
     })
 }
 

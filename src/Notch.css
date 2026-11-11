@@ -429,6 +429,12 @@
   color: var(--danger);
 }
 
+/* 지난 관측값. 이름은 그대로 두고 숫자와 게이지만 흐린다. */
+.notch-acct.stale .notch-acct-pct,
+.notch-acct.stale .notch-gauge-track {
+  opacity: 0.45;
+}
+
 .notch-acct-note {
   grid-column: 2 / -1;
   min-width: 0;
@@ -437,6 +443,20 @@
   color: var(--sub);
   text-align: right;
   white-space: nowrap;
+}
+
+/* 안 쓰는 계정의 리셋 시각. 이름 시작점(점 5px + 여백 7px)에 맞춰 둘째 줄로 내린다. */
+.notch-acct-resets {
+  grid-column: 1 / -1;
+  margin-top: -4px;
+  padding-left: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  color: var(--sub);
+  font-variant-numeric: tabular-nums;
 }
 
 .notch-empty {

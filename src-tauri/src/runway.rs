@@ -466,6 +466,8 @@ fn account_statuses(
         .iter()
         .map(|a| {
             let usage = a.usage.as_ref();
+            // 지난 값으로 페이스를 재면 관측 이후 흐른 시간만큼 소진이 느린 것처럼 나온다.
+            let live = usage.filter(|_| a.observed_at_ms.is_none());
             let window_secs = a.window_secs.unwrap_or(window_secs);
             // 주간 하나뿐인 계정은 5시간 슬롯과 주간 슬롯에 같은 값이 들어 있다.
             // 둘 다 그리면 같은 숫자가 한 줄에 두 번 나온다.
@@ -483,7 +485,7 @@ fn account_statuses(
                     .filter(|s| !s.is_empty()),
                 // 경보 판정에만 쓴다. 계정 줄에는 안 그린다 — 계정별 소진 속도를 못 재
                 // 페이스 추정뿐이라, 로컬 시계열로 낸 카드 ETA와 나란히 두면 헷갈린다.
-                eta_minutes: usage.and_then(|u| {
+                eta_minutes: live.and_then(|u| {
                     pace_eta_minutes(
                         u.five_hour_utilization,
                         &u.five_hour_resets_at,
@@ -497,7 +499,7 @@ fn account_statuses(
                 seven_day_resets_at: usage
                     .filter(has_weekly)
                     .map(|u| u.seven_day_resets_at.clone()),
-                seven_day_eta_minutes: usage.filter(has_weekly).and_then(|u| {
+                seven_day_eta_minutes: live.filter(has_weekly).and_then(|u| {
                     pace_eta_minutes(
                         u.seven_day_utilization,
                         &u.seven_day_resets_at,
@@ -507,6 +509,7 @@ fn account_statuses(
                 }),
                 note: a.note.clone(),
                 reset_credits_available: a.reset_credits_available,
+                observed_at_ms: a.observed_at_ms,
             }
         })
         .collect()
@@ -732,6 +735,7 @@ mod tests {
             note: None,
             window_secs: None,
             reset_credits_available: credits,
+            observed_at_ms: None,
         };
         let rows = account_statuses(&[acct("a", Some(2)), acct("b", None)], 0, 5 * 3600);
         assert_eq!(rows[0].reset_credits_available, Some(2));

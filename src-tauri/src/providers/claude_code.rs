@@ -5,6 +5,8 @@
 //! 토큰을 추출해 시계열 샘플로 변환한다.
 
 use super::claude_accounts::{self, ClaudeAccount};
+use super::claude_cli_refresh;
+use super::last_usage;
 use super::representative;
 use super::{
     find_recent_jsonl, AccountUsage, OfficialUsage, SampleCache, UsageProvider, UsageSample,
@@ -21,6 +23,9 @@ use std::time::{Duration, Instant};
 
 /// OAuth 사용량 엔드포인트 (비공식). `/usage` 명령을 구동하는 데이터 소스.
 const OAUTH_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+
+/// 마지막 사용률 저장소에서 이 도구를 가르는 키.
+const TOOL_KEY: &str = "claude";
 
 /// 폴링 최소 간격. 이 엔드포인트는 공격적으로 rate limit을 걸어 180초 미만은 위험.
 const USAGE_CACHE_TTL: Duration = Duration::from_secs(180);
@@ -206,7 +211,7 @@ impl UsageProvider for ClaudeCodeProvider {
         // 카드가 세우는 건 활성 계정뿐이라, 그 계정을 못 받으면 다른 계정이
         // 성공했어도 헤더는 빈다. 왜 비었는지를 여기서 알린다.
         match accounts.iter().find(|a| a.is_active) {
-            Some(active) if active.usage.is_some() => None,
+            Some(active) if active.has_live_usage() => None,
             Some(active) => active
                 .note
                 .clone()
@@ -231,6 +236,7 @@ fn accounts_usage() -> Vec<AccountUsage> {
             refresh_stale(&accounts);
         }
     }
+    let now_ms = chrono::Utc::now().timestamp_millis();
     accounts
         .iter()
         .map(|acc| {
@@ -241,8 +247,17 @@ fn accounts_usage() -> Vec<AccountUsage> {
                 fetched_at,
                 acc.plan.clone(),
                 acc.rate_mult,
-                chrono::Utc::now().timestamp_millis(),
+                now_ms,
             );
+            // 조회가 막혔으면(만료된 토큰, 429) 마지막으로 받아둔 값으로 줄을 채운다.
+            // 실패 사유(note)는 그대로 둬서 왜 지난 값인지 함께 보이게 한다.
+            let (usage, observed_at_ms) = match usage {
+                Some(u) => (Some(u), None),
+                None => match last_usage::recall(TOOL_KEY, &acc.id, now_ms) {
+                    Some((at, u)) => (Some(u), Some(at)),
+                    None => (None, None),
+                },
+            };
             AccountUsage {
                 id: acc.id.clone(),
                 label: acc.label.clone(),
@@ -252,6 +267,7 @@ fn accounts_usage() -> Vec<AccountUsage> {
                 note: note.map(|s| s.to_string()),
                 window_secs: None,
                 reset_credits_available: None,
+                observed_at_ms,
             }
         })
         .collect()
@@ -274,12 +290,47 @@ fn refresh_stale(accounts: &[ClaudeAccount]) {
             .iter()
             .map(|acc| scope.spawn(move || (acc.id.clone(), fetch_official_usage(acc))))
             .collect();
-        for handle in handles {
+        let mut observed = Vec::new();
+        for (acc, handle) in stale.iter().zip(handles) {
             if let Ok((id, (usage, error))) = handle.join() {
+                if let Some(u) = &usage {
+                    observed.push((id.clone(), u.clone()));
+                }
+                if error == Some("error.expired") {
+                    request_cli_refresh(acc);
+                }
                 store_usage(&id, usage, error);
             }
         }
+        last_usage::remember(TOOL_KEY, &observed, chrono::Utc::now().timestamp_millis());
     });
+}
+
+/// 토큰이 만료된 계정을 CLI에게 갱신시킨다. 우리가 refresh token을 쓰지 않는다.
+///
+/// 성공하면 계정 목록 캐시를 만료 처리하고 그 계정의 사용률 캐시를 지운다. 그래야
+/// 다음 폴링이 Keychain을 다시 읽어 새 토큰으로 묻는다. 목록을 비우지 않고 시각만
+/// 되돌리는 이유는 발견이 도는 동안에도 직전 목록으로 카드를 그리기 위해서다.
+fn request_cli_refresh(acc: &ClaudeAccount) {
+    let id = acc.id.clone();
+    claude_cli_refresh::request(
+        &acc.id,
+        &acc.cli_homes,
+        crate::settings::claude_cli_refresh(),
+        move || {
+            if let Ok(mut guard) = ACCOUNTS_CACHE.lock() {
+                if let Some((at, _)) = guard.as_mut() {
+                    match Instant::now().checked_sub(ACCOUNTS_CACHE_TTL) {
+                        Some(past) => *at = past,
+                        None => *guard = None,
+                    }
+                }
+            }
+            if let Ok(mut cache) = USAGE_CACHE.lock() {
+                cache.remove(&id);
+            }
+        },
+    );
 }
 
 /// 발견한 계정 목록 (짧은 캐시). Keychain 훑기는 폴링마다 할 만큼 싸지 않다.
@@ -627,6 +678,7 @@ mod tests {
             note: None,
             window_secs: None,
             reset_credits_available: None,
+            observed_at_ms: None,
         }
     }
 

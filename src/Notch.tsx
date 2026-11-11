@@ -8,6 +8,7 @@ import {
   formatCountdown,
   formatDuration,
   formatEta,
+  formatObservedAgo,
   leadActivity,
   type AgentActivity,
   type RunwayStatus,
@@ -53,8 +54,9 @@ interface NotchFigure {
  */
 function figureOf(s: RunwayStatus): NotchFigure {
   if (s.percentRemaining != null) return { pct: s.percentRemaining, borrowed: null };
+  // 지난 관측값은 빌려 오지 않는다. 한눈에 보는 숫자가 몇 시간 전 값이면 지금 상황으로 읽힌다.
   const other = (s.accounts ?? [])
-    .filter((a) => a.percentRemaining != null)
+    .filter((a) => a.percentRemaining != null && a.observedAtMs == null)
     .sort((a, b) => (a.percentRemaining ?? 0) - (b.percentRemaining ?? 0))[0];
   return other
     ? { pct: other.percentRemaining, borrowed: other }
@@ -128,6 +130,51 @@ function Gauge({
   );
 }
 
+/** "2일 3시간"처럼 큰 단위 두 개만. 계정 줄은 좁아서 분까지 붙이면 넘친다. */
+function shortCountdown(min: number, lang: Lang): string {
+  if (min < 1) return t(lang, "lessThanMin");
+  const total = Math.round(min);
+  const d = Math.floor(total / 1440);
+  const h = Math.floor((total % 1440) / 60);
+  const m = total % 60;
+  const parts =
+    d > 0
+      ? [t(lang, "unit.d", { n: d }), h > 0 ? t(lang, "unit.h", { n: h }) : null]
+      : [h > 0 ? t(lang, "unit.h", { n: h }) : null, m > 0 ? t(lang, "unit.m", { n: m }) : null];
+  return parts.filter(Boolean).join(" ");
+}
+
+/** 안 쓰는 계정의 윈도우가 언제 리셋되는지 — 5시간과 주간을 한 줄에. */
+function AccountResets({
+  a,
+  windowHours,
+  lang,
+}: {
+  a: AccountStatus;
+  windowHours: number;
+  lang: Lang;
+}) {
+  const session = minutesUntil(a.resetsAt);
+  const weekReset = minutesUntil(a.sevenDayResetsAt);
+  const parts: string[] = [];
+  if (session != null) {
+    parts.push(
+      t(lang, "notch.acctReset", { w: windowShort(windowHours, lang), t: shortCountdown(session, lang) })
+    );
+  }
+  // 주간 윈도우 도구는 두 슬롯이 같은 값이라 주간을 따로 적지 않는다.
+  if (a.sevenDayRemaining != null && windowHours < 24 * 7) {
+    const n = a.sevenDayRemaining.toFixed(0);
+    parts.push(
+      weekReset != null
+        ? t(lang, "notch.acctWeekReset", { n, t: shortCountdown(weekReset, lang) })
+        : t(lang, "acctWeekly", { n })
+    );
+  }
+  if (parts.length === 0) return null;
+  return <span className="notch-acct-resets">{parts.join(" · ")}</span>;
+}
+
 function ToolCard({
   s,
   lang,
@@ -186,11 +233,20 @@ function ToolCard({
       {(s.accounts ?? []).length > 1 && (
         <ul className="notch-accts">
           {s.accounts.map((a) => {
-            const low = a.percentRemaining != null && a.percentRemaining <= threshold;
+            const stale =
+              a.observedAtMs != null ? formatObservedAgo(a.observedAtMs, lang) : null;
+            // 지난 값은 위험 색을 쓰지 않는다 — 지금 바닥났다는 근거가 아니다.
+            const low =
+              !stale && a.percentRemaining != null && a.percentRemaining <= threshold;
             return (
-              <li key={a.id} className={`notch-acct${a.isActive ? " active" : ""}`}>
-                <span className="notch-acct-name" title={a.label}>
+              <li
+                key={a.id}
+                className={`notch-acct${a.isActive ? " active" : ""}${stale ? " stale" : ""}`}
+                title={stale ?? undefined}
+              >
+                <span className="notch-acct-name" title={stale ? undefined : a.label}>
                   {a.label}
+                  {stale && <span className="sr-only"> ({stale})</span>}
                 </span>
                 {a.percentRemaining != null ? (
                   <>
@@ -212,6 +268,8 @@ function ToolCard({
                     {t(lang, a.note ?? "acctFailed", { tool: s.tool })}
                   </span>
                 )}
+                {/* 활성 계정의 리셋은 위 게이지 줄에 이미 있다. */}
+                {!a.isActive && <AccountResets a={a} windowHours={s.windowHours} lang={lang} />}
               </li>
             );
           })}
