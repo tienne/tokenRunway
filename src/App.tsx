@@ -1127,7 +1127,7 @@ function WeeklyBars({
             <path
               d={line}
               fill="none"
-              stroke="#0a84ff"
+              style={{ stroke: "var(--accent)" }}
               strokeWidth="1.5"
               strokeLinejoin="round"
               vectorEffect="non-scaling-stroke"
@@ -2507,15 +2507,15 @@ function TrendChart({
         >
           <defs>
             <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#0a84ff" stopOpacity="0.35" />
-              <stop offset="100%" stopColor="#0a84ff" stopOpacity="0" />
+              <stop offset="0%" style={{ stopColor: "var(--accent)" }} stopOpacity="0.35" />
+              <stop offset="100%" style={{ stopColor: "var(--accent)" }} stopOpacity="0" />
             </linearGradient>
           </defs>
           <path d={area} fill="url(#trendFill)" />
           <path
             d={line}
             fill="none"
-            stroke="#0a84ff"
+            style={{ stroke: "var(--accent)" }}
             strokeWidth="1.5"
             strokeLinejoin="round"
             vectorEffect="non-scaling-stroke"
