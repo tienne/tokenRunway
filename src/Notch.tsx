@@ -15,6 +15,7 @@ import {
   type Settings,
 } from "./App";
 import { SessionList, SessionSkeleton, useSessions } from "./SessionList";
+import { useUpdateStatus } from "./update";
 import "./Notch.css";
 
 interface NotchLayout {
@@ -291,6 +292,7 @@ export function NotchView() {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [threshold, setThreshold] = useState(20);
   const [unread, setUnread] = useState(0);
+  const update = useUpdateStatus();
   // 펼친 패널의 내용 높이. 섬 높이와 Rust의 클릭 영역을 여기에 맞춘다.
   const [bodyHeight, setBodyHeight] = useState(0);
   const scrollInnerRef = useRef<HTMLDivElement>(null);
@@ -506,6 +508,18 @@ export function NotchView() {
             </div>
           </div>
           <nav className="notch-actions" ref={actionsRef}>
+            {update.available && (
+              <button
+                className="notch-update"
+                disabled={update.installing}
+                onClick={() => invoke("install_update").catch(() => {})}
+              >
+                <Icon d={ICONS.download} />
+                {t(lang, update.installing ? "update.installing" : "update.install", {
+                  version: update.available,
+                })}
+              </button>
+            )}
             <button onClick={() => invoke("open_main_window").catch(() => {})}>
               <Icon d={ICONS.dashboard} />
               {t(lang, "notch.dashboard")}
