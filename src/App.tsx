@@ -2378,6 +2378,19 @@ function SettingsView() {
         )}
 
         <p className="setting-hint">{tr("settingsHint")}</p>
+
+        <div className="trw-row settings-app">
+          <span>{tr("appVersionRow")}</span>
+          <span className="settings-app-actions">
+            <button className="link-btn" onClick={() => invoke("check_update_now")}>
+              {tr("checkUpdate")}
+            </button>
+            <button className="link-btn" onClick={() => invoke("quit_app")}>
+              {tr("quitApp")}
+            </button>
+          </span>
+        </div>
+        <p className="setting-hint">{tr("appActionsHint")}</p>
       </section>
     </main>
   );

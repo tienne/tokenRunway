@@ -94,6 +94,8 @@ static TRAY_DANGER: AtomicBool = AtomicBool::new(false);
 static TRAY_FIGURES: Mutex<Option<String>> = Mutex::new(None);
 /// 트레이에 지금 걸려 있는 타이틀. 같은 값이면 `set_title`을 건너뛰어 메뉴바가 깜빡이지 않게 한다.
 static TRAY_TITLE_SHOWN: Mutex<Option<Option<String>>> = Mutex::new(None);
+/// 트레이 아이콘을 지금 메뉴바에 두고 있는지. 아직 한 번도 안 정했으면 None.
+static TRAY_VISIBLE_SHOWN: Mutex<Option<bool>> = Mutex::new(None);
 
 /// 도구별 소진 경보 발사 여부 (임계치 아래에서 1회만, 회복 시 리셋).
 static ALERTED: LazyLock<Mutex<HashMap<String, bool>>> =
@@ -749,7 +751,23 @@ async fn delete_pet_bundle(id: String) -> Result<(), String> {
 /// 데스크톱 pet 클릭 시 메인 팝오버를 연다.
 #[tauri::command]
 fn open_main_window(app: AppHandle) {
-    toggle_popover(&app, true);
+    toggle_popover(&app, true, false);
+}
+
+/// 설정 창의 "업데이트 확인". 노치가 주 화면에 뜨면 트레이 메뉴가 사라지니 같은 일을
+/// 여기서도 할 수 있어야 한다.
+#[tauri::command]
+fn check_update_now(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        run_update(app, true).await;
+    });
+}
+
+/// 설정 창의 "종료". 트레이가 숨어 있으면 메뉴의 종료도 같이 사라진다.
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    save_pet_position(&app);
+    app.exit(0);
 }
 
 /// pet 우클릭 컨텍스트 메뉴(숨기기/전환/불러오기)를 만들어 커서 위치에 띄운다.
@@ -943,8 +961,7 @@ fn hide_on_close(win: &tauri::WebviewWindow) {
 /// 설정 창을 열거나 포커스. 같은 프론트(label로 화면 분기)를 일반 창으로 띄운다.
 fn open_settings(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("settings") {
-        let _ = win.show();
-        let _ = win.set_focus();
+        reveal_beside_notch(app, win);
         // 창을 닫아도 파괴하지 않고 숨기므로 프론트가 재마운트되지 않는다 — 그동안
         // pet 우클릭 메뉴 등에서 바뀐 값을 다시 읽도록 알려준다.
         let _ = app.emit("settings-changed", ());
@@ -957,9 +974,11 @@ fn open_settings(app: &AppHandle) {
             .min_inner_size(420.0, 480.0)
             .resizable(true)
             .title_bar_style(tauri::TitleBarStyle::Visible)
+            .visible(false)
             .build()
     {
         hide_on_close(&win);
+        reveal_beside_notch(app, win);
     }
 }
 
@@ -971,10 +990,8 @@ fn open_settings_window(app: AppHandle) {
 /// 히스토리 창을 열거나 포커스.
 fn open_history(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("history") {
-        let _ = win.show();
-        let _ = win.set_focus();
-        // 숨겨뒀던 창 재사용 시 마운트가 다시 안 일어나므로 갱신을 트리거.
         let _ = win.emit("history-refresh", ());
+        reveal_beside_notch(app, win);
         return;
     }
     if let Ok(win) = WebviewWindowBuilder::new(app, "history", WebviewUrl::App("index.html".into()))
@@ -983,9 +1000,11 @@ fn open_history(app: &AppHandle) {
         .min_inner_size(420.0, 480.0)
         .resizable(true)
         .title_bar_style(tauri::TitleBarStyle::Visible)
+        .visible(false)
         .build()
     {
         hide_on_close(&win);
+        reveal_beside_notch(app, win);
     }
 }
 
@@ -1061,10 +1080,8 @@ fn completion_quiet_now() -> bool {
 /// 알림함 창을 열거나 앞으로 가져온다.
 fn open_inbox(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("inbox") {
-        let _ = win.show();
-        let _ = win.set_focus();
-        // 숨겨뒀던 창은 다시 마운트되지 않으므로 갱신을 트리거한다.
         let _ = win.emit("inbox-refresh", ());
+        reveal_beside_notch(app, win);
         return;
     }
     if let Ok(win) = WebviewWindowBuilder::new(app, "inbox", WebviewUrl::App("index.html".into()))
@@ -1073,9 +1090,11 @@ fn open_inbox(app: &AppHandle) {
         .min_inner_size(380.0, 400.0)
         .resizable(true)
         .title_bar_style(tauri::TitleBarStyle::Visible)
+        .visible(false)
         .build()
     {
         hide_on_close(&win);
+        reveal_beside_notch(app, win);
     }
 }
 
@@ -1528,12 +1547,33 @@ fn tray_shows_figures(mode: settings::TrayTitleMode, notch: notch::Presence) -> 
     }
 }
 
+/// 트레이 아이콘 자체를 메뉴바에 둘지. 자동 모드에서 주 화면에 노치 섬이 뜨면 섬이
+/// 숫자와 위험 색, 바로가기를 다 들고 있어서 아이콘까지 뺀다. 숫자를 숨기는 규칙과
+/// 같은 판정이라 노치 화면이 보조일 때는 그대로 남는다.
+fn tray_visible(mode: settings::TrayTitleMode, notch: notch::Presence) -> bool {
+    !(mode == settings::TrayTitleMode::Auto && notch == notch::Presence::Primary)
+}
+
 /// 들고 있는 트레이 숫자와 노치 섬 상태로 타이틀을 다시 정한다. 섬이 뜨고 질 때
 /// `notch.rs`가 부르고, 잔여율이 갱신될 때와 설정이 바뀔 때도 부른다.
 pub(crate) fn refresh_tray_title(app: &AppHandle) {
+    let mode = settings::tray_title_mode();
+    let presence = notch::presence();
+    let visible = tray_visible(mode, presence);
+    {
+        let mut shown = TRAY_VISIBLE_SHOWN.lock().unwrap();
+        if *shown != Some(visible) {
+            *shown = Some(visible);
+            let app2 = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                if let Some(tray) = app2.tray_by_id("main") {
+                    let _ = tray.set_visible(visible);
+                }
+            });
+        }
+    }
     let figures = TRAY_FIGURES.lock().unwrap().clone();
-    let title =
-        figures.filter(|_| tray_shows_figures(settings::tray_title_mode(), notch::presence()));
+    let title = figures.filter(|_| tray_shows_figures(mode, presence));
     {
         let mut shown = TRAY_TITLE_SHOWN.lock().unwrap();
         if shown.as_ref() == Some(&title) {
@@ -1752,6 +1792,8 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            check_update_now,
+            quit_app,
             get_runway,
             get_activity,
             save_pet_pos,
@@ -1887,7 +1929,7 @@ pub fn run() {
                         save_pet_position(app);
                         app.exit(0);
                     }
-                    "show" => toggle_popover(app, true),
+                    "show" => toggle_popover(app, true, true),
                     "settings" => open_settings(app),
                     "history" => open_history(app),
                     "inbox" => open_inbox(app),
@@ -1909,7 +1951,7 @@ pub fn run() {
                         ..
                     } = event
                     {
-                        toggle_popover(app, false);
+                        toggle_popover(app, false, true);
                     }
                 })
                 .build(app)?;
@@ -2014,20 +2056,36 @@ async fn run_update(app: AppHandle, install: bool) {
     }
 }
 
-/// 트레이 팝오버 토글. `force_show`면 항상 표시(메뉴 "열기"용), 아니면 토글.
-fn toggle_popover(app: &AppHandle, force_show: bool) {
+/// 팝오버를 열거나 닫는다. `force_show`면 열려 있어도 닫지 않는다. 트레이에서 열면 아이콘 아래, 노치나 pet에서 열면 노치 옆에
+/// 붙인다 — 노치가 주 화면에 있으면 트레이가 숨어 있어 아이콘 좌표가 없다.
+fn toggle_popover(app: &AppHandle, force_show: bool, from_tray: bool) {
     let Some(win) = app.get_webview_window("main") else {
         return;
     };
     let visible = win.is_visible().unwrap_or(false);
     if visible && !force_show {
         let _ = win.hide();
-    } else {
-        // 트레이 아이콘 아래 중앙에 배치 후 표시.
-        let _ = win.move_window(Position::TrayBottomCenter);
+        return;
+    }
+    let _ = app.run_on_main_thread(move || {
+        if from_tray || !notch::place_beside(&win) {
+            let _ = win.move_window(Position::TrayBottomCenter);
+        }
         let _ = win.show();
         let _ = win.set_focus();
-    }
+    });
+}
+
+/// 일반 창을 노치 옆에 띄운다. 이미 떠 있으면 사용자가 옮겨둔 자리를 존중해 앞으로만
+/// 가져온다. 노치가 없으면 원래 자리(처음엔 macOS 기본 위치)에 그대로 띄운다.
+fn reveal_beside_notch(app: &AppHandle, win: tauri::WebviewWindow) {
+    let _ = app.run_on_main_thread(move || {
+        if !win.is_visible().unwrap_or(false) {
+            notch::place_beside(&win);
+        }
+        let _ = win.show();
+        let _ = win.set_focus();
+    });
 }
 
 #[cfg(test)]
@@ -2046,6 +2104,19 @@ mod tests {
         assert!(tray_shows_figures(Auto, Absent));
         assert!(tray_shows_figures(Auto, Secondary));
         assert!(!tray_shows_figures(Auto, Primary));
+    }
+
+    #[test]
+    fn tray_icon_hides_only_when_auto_and_notch_on_primary() {
+        use notch::Presence::*;
+        use settings::TrayTitleMode::*;
+        for notch in [Absent, Secondary, Primary] {
+            assert!(tray_visible(Always, notch), "always / {notch:?}");
+            assert!(tray_visible(IconOnly, notch), "icon_only / {notch:?}");
+        }
+        assert!(tray_visible(Auto, Absent));
+        assert!(tray_visible(Auto, Secondary));
+        assert!(!tray_visible(Auto, Primary));
     }
 
     #[test]

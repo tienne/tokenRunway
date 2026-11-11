@@ -1522,3 +1522,12 @@ h1 {
   line-height: 1.4;
   white-space: pre;
 }
+
+
+.settings-app {
+  margin-top: 14px;
+}
+.settings-app-actions {
+  display: flex;
+  gap: 12px;
+}

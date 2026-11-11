@@ -148,7 +148,7 @@ pub struct Settings {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrayTitleMode {
-    /// 메뉴바가 있는 주 화면에 노치 섬이 떠 있으면 숨기고, 아니면 띄운다.
+    /// 메뉴바가 있는 주 화면에 노치 섬이 떠 있으면 트레이 아이콘을 통째로 빼고, 아니면 숫자를 띄운다.
     #[default]
     Auto,
     Always,
