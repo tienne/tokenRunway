@@ -229,6 +229,12 @@ h1 {
   text-decoration: underline;
 }
 
+.link-btn:disabled {
+  cursor: default;
+  opacity: 0.6;
+  text-decoration: none;
+}
+
 .setting-select {
   width: 100%;
   padding: 6px 8px;

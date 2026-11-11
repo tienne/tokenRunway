@@ -14,6 +14,7 @@ mod providers;
 mod rollup;
 mod runway;
 mod settings;
+mod update;
 
 use settings::Settings;
 
@@ -36,7 +37,6 @@ use tauri::{
 };
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_positioner::{Position, WindowExt};
-use tauri_plugin_updater::UpdaterExt;
 
 /// 백그라운드 경보 체크 주기.
 const ALERT_CHECK_SECS: u64 = 60;
@@ -88,6 +88,15 @@ fn set_tray_mode(mode: u8) {
 
 /// 직전 위험 상태 — 변할 때만 모드를 전환(중복 set 방지).
 static TRAY_DANGER: AtomicBool = AtomicBool::new(false);
+
+/// 업데이트 설치가 실패해 충전 표시를 거둘 때 — 직전 위험 상태로 돌아간다.
+fn restore_tray_mode() {
+    set_tray_mode(if TRAY_DANGER.load(Ordering::Relaxed) {
+        TRAY_MODE_DANGER
+    } else {
+        TRAY_MODE_STATIC
+    });
+}
 
 /// 마지막으로 계산한 트레이 숫자. 노치 섬 상태와 무관하게 들고 있다가, 섬이 뜨고 지면
 /// 잔여율을 다시 계산하지 않고 이 값으로 타이틀만 다시 정한다.
@@ -758,9 +767,7 @@ fn open_main_window(app: AppHandle) {
 /// 여기서도 할 수 있어야 한다.
 #[tauri::command]
 fn check_update_now(app: AppHandle) {
-    tauri::async_runtime::spawn(async move {
-        run_update(app, true).await;
-    });
+    update::install_update(app);
 }
 
 /// 설정 창의 "종료". 트레이가 숨어 있으면 메뉴의 종료도 같이 사라진다.
@@ -1224,10 +1231,14 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wr
     let history_item = MenuItem::with_id(app, "history", lang.menu_history(), true, None::<&str>)?;
     let settings_item =
         MenuItem::with_id(app, "settings", lang.menu_settings(), true, None::<&str>)?;
+    let update_label = match update::available_version() {
+        Some(v) => lang.menu_install_update(&v),
+        None => lang.menu_check_update().to_string(),
+    };
     let update_item = MenuItem::with_id(
         app,
         "check_update",
-        lang.menu_check_update(),
+        update_label,
         true,
         None::<&str>,
     )?;
@@ -1798,6 +1809,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             check_update_now,
+            update::get_update_status,
+            update::install_update,
             quit_app,
             get_runway,
             get_activity,
@@ -1938,12 +1951,7 @@ pub fn run() {
                     "settings" => open_settings(app),
                     "history" => open_history(app),
                     "inbox" => open_inbox(app),
-                    "check_update" => {
-                        let app = app.clone();
-                        tauri::async_runtime::spawn(async move {
-                            run_update(app, true).await;
-                        });
-                    }
+                    "check_update" => update::install_update(app.clone()),
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -1973,11 +1981,8 @@ pub fn run() {
             // 트레이 아이콘 애니메이터 (상시 활주 / 위험 펄스 / 업데이트 흐름)
             spawn_tray_animator(app.handle().clone());
 
-            // 시작 시 업데이트 확인 (있으면 알림만, 설치는 트레이 메뉴에서)
-            let update_handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                run_update(update_handle, false).await;
-            });
+            // 시작 직후와 6시간마다 업데이트 확인. 찾으면 노치와 설정에 설치 버튼이 뜬다.
+            update::spawn_checker(app.handle().clone());
 
             // 익명: 실행 + 감지된 도구 수(이름 X)만
             let tool_count = providers().iter().filter(|p| p.available()).count();
@@ -2001,64 +2006,6 @@ pub fn run() {
             tauri::RunEvent::Reopen { .. } => open_inbox(app),
             _ => {}
         });
-}
-
-/// 업데이트 확인. `install`이면 발견 시 다운로드·설치 후 재시작(메뉴용),
-/// 아니면 발견 알림만(시작 시 백그라운드용).
-async fn run_update(app: AppHandle, install: bool) {
-    let lang = i18n::current();
-    let Ok(updater) = app.updater() else {
-        return;
-    };
-    match updater.check().await {
-        Ok(Some(update)) => {
-            if install {
-                let _ = app
-                    .notification()
-                    .builder()
-                    .title("Token Runway")
-                    .body(lang.update_installing())
-                    .show();
-                // 설치 중엔 트레이를 충전 차오름으로 — 진행 표시.
-                set_tray_mode(TRAY_MODE_CHARGE);
-                if update.download_and_install(|_, _| {}, || {}).await.is_ok() {
-                    app.restart();
-                }
-                // 실패 시 직전 상태로 복귀 (재시작했다면 여기 도달 안 함).
-                set_tray_mode(if TRAY_DANGER.load(Ordering::Relaxed) {
-                    TRAY_MODE_DANGER
-                } else {
-                    TRAY_MODE_STATIC
-                });
-            } else {
-                let title = format!("{} v{}", lang.update_available_title(), update.version);
-                let _ = app
-                    .notification()
-                    .builder()
-                    .title(title)
-                    .body(lang.update_available_body())
-                    .show();
-            }
-        }
-        // 최신 버전 / 실패는 수동 확인(메뉴)일 때만 알림 — 시작 시엔 조용히 넘어감
-        Ok(None) if install => {
-            let _ = app
-                .notification()
-                .builder()
-                .title("Token Runway")
-                .body(lang.update_uptodate())
-                .show();
-        }
-        Err(_) if install => {
-            let _ = app
-                .notification()
-                .builder()
-                .title("Token Runway")
-                .body(lang.update_failed())
-                .show();
-        }
-        _ => {}
-    }
 }
 
 /// 팝오버를 열거나 닫는다. `force_show`면 열려 있어도 닫지 않는다. 트레이에서 열면 아이콘 아래, 노치나 pet에서 열면 노치 옆에

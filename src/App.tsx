@@ -21,6 +21,7 @@ import petDanger from "./assets/pet/default/danger.svg";
 import petSpriteSheet from "./assets/pet/default/sprite.webp";
 import { NotchView } from "./Notch";
 import { ICONS, Icon } from "./icons";
+import { useUpdateStatus } from "./update";
 import "./App.css";
 
 type PetLevel = "idle" | "good" | "warn" | "danger";
@@ -1770,6 +1771,7 @@ function HookInstaller({
 
 /** 설정 전용 창 */
 function SettingsView() {
+  const appUpdate = useUpdateStatus();
   const [settings, setSettings] = useState<Settings>({
     alertThreshold: 20,
     etaAlertMinutes: 30,
@@ -2415,8 +2417,16 @@ function SettingsView() {
         <div className="trw-row settings-app">
           <span>{tr("appVersionRow")}</span>
           <span className="settings-app-actions">
-            <button className="link-btn" onClick={() => invoke("check_update_now")}>
-              {tr("checkUpdate")}
+            <button
+              className="link-btn"
+              disabled={appUpdate.installing}
+              onClick={() => invoke("check_update_now")}
+            >
+              {appUpdate.installing
+                ? tr("appUpdate.installing")
+                : appUpdate.available
+                  ? tr("appUpdate.install", { version: appUpdate.available })
+                  : tr("checkUpdate")}
             </button>
             <button className="link-btn" onClick={() => invoke("quit_app")}>
               {tr("quitApp")}

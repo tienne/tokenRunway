@@ -19,6 +19,7 @@ src-tauri/src/
 ├ ipc.rs            trw 소켓 리스너(trw.sock) + 앱 꺼진 사이 스풀(pending/) 소비
 ├ landing.rs        알림 클릭 시 원래 세션으로 되돌리는 어댑터(Orca/Paseo/경로)
 ├ notify_os.rs      완료 알림의 OS 알림 발송 + 클릭 응답 수신
+├ update.rs         앱 업데이트 — 시작 직후와 6시간마다 확인, 설치 버튼 상태, 알림 클릭 설치
 ├ installer/        trw CLI·스킬 설치(mod.rs) + 사용자 설정 파일에 훅 넣고 빼기
 │  ├ template.rs    diff 미리보기·지문 확인·백업·설치 기록(hook-installs.json) 공용 틀
 │  ├ codex_hooks.rs Codex hooks.json
@@ -548,6 +549,10 @@ bash scripts/build-trw.sh       # trw를 externalBin 자리에 놓기 (--debug�
   (`record_or_inherited`). 그래야 어떤 순서로 넣고 빼도 마지막에 빠지는 쪽이 원래 파일을
   바이트 그대로 되돌린다(`coexists_with_statusline_in_every_order` 테스트). 우리 그룹은
   배열 끝에만 붙이고 matcher를 비운다 — 오르카나 사용자 훅의 순서·내용을 건드리지 않는다
+- **업데이트 확인 주기는 벽시계로 잰다** (`update.rs`) — 6시간을 스레드 sleep 한 번으로
+  자면 잠자기 동안 시계가 멈춰 며칠 뒤에야 깬다. 10분마다 깨서 마지막 확인 뒤 지난 시간을
+  본다. 그리고 CI가 만든 릴리스는 draft라 Latest로 발행하기 전엔 updater 엔드포인트
+  (`releases/latest/download/latest.json`)에 안 잡힌다
 - 토큰 등 시크릿은 로그/커밋에 절대 노출 금지 (Keychain 직접 읽기)
 - `official_usage` 우선 — 로컬 토큰 합산보다 공식 사용률이 정확
 - 새 provider의 `window_secs`/`unit`이 다르면 UI는 자동 대응 (라벨 동적)
@@ -590,8 +595,9 @@ bash scripts/build-trw.sh       # trw를 externalBin 자리에 놓기 (--debug�
   안분이라 막대 합계가 항상 공식 사용률과 일치한다
 - [x] 요금제 하향 추천 안전 가드 — 평균만 보면 "마감 주에 몰아 쓰는" 사용자에게
   하향을 권하게 되므로, 롤업의 주간 사용률 이력에서 최악의 주로 검증
-- [x] 자동 업데이트 — `tauri-plugin-updater`(minisign 서명, 애플 공증과 별개). 시작 시
-  확인 → 알림, 트레이 "업데이트 확인..."에서 설치·재시작. endpoint=GitHub Releases
+- [x] 자동 업데이트 — `tauri-plugin-updater`(minisign 서명, 애플 공증과 별개). 시작 직후와
+  6시간마다 확인(`update.rs`)하고, 찾으면 펼친 노치 바로가기 위와 설정, 트레이 메뉴에
+  "vX 설치"가 뜬다. 알림은 버전마다 한 번만 울리고 누르면 바로 설치·재시작한다. endpoint=GitHub Releases
   `latest.json`. 공개키는 `tauri.conf.json`, 개인키는 `~/.tauri/token-runway.key`(repo 밖,
   CI는 `TAURI_SIGNING_PRIVATE_KEY` secret). **남은 것: Apple 서명·공증(`APPLE_*` secret)**
 - [x] Grok 잔여율 — billing API 연동. 주기가 응답에 따라 달라져 `window_secs()`가
