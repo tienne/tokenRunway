@@ -5,13 +5,13 @@
   align-items: center;
   gap: 6px;
   margin: 0 6px 8px;
-  color: #8e939c;
+  color: var(--sub);
   font-size: 11px;
   font-weight: 600;
 }
 
 .session-count {
-  color: #7c818a;
+  color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 
@@ -33,7 +33,7 @@
   padding: 6px;
   background: none;
   border: 0;
-  border-radius: 9px;
+  border-radius: 5px;
   color: inherit;
   font: inherit;
   font-size: 12px;
@@ -54,28 +54,25 @@ button.session-row:focus-visible {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #6b7079;
+  background: var(--muted);
 }
 
 .session-dot.working {
-  background: #64d2ff;
+  background: var(--teal);
 }
 
-/* 입력 대기만 속 빈 고리 — 작업 중과 밝기가 비슷해 색이 안 보여도 모양으로 갈린다.
-   고리 선이 얇아도 카드 대비 12.9:1이라 비텍스트 기준(3:1)을 넉넉히 넘는다. */
+/* 입력 대기는 색 외에도 빈 고리로 구분한다. */
 .session-dot.waiting {
   background: transparent;
   box-sizing: border-box;
-  border: 1.5px solid #ffd60a;
+  border: 1.5px solid var(--warn);
 }
 
 .session-dot.justDone {
-  background: #30d158;
+  background: var(--good);
 }
 
-/* 실패는 위험 빨강(#ff453a)을 쓰지 않는다 — 노치에서 그 색은 잔여율 경고 몫이라
-   세션 하나 실패한 게 한도 바닥난 것처럼 읽힌다. 보라 ×로 색과 모양을 둘 다 바꾼다.
-   대비는 카드(#141518) 위 5.18:1, 호버 배경 위 4.62:1. */
+/* 실패는 잔여율 경보와 구분되도록 × 표시를 쓴다. */
 .session-dot.failed {
   position: relative;
   background: transparent;
@@ -91,7 +88,7 @@ button.session-row:focus-visible {
   width: 9px;
   height: 1.5px;
   border-radius: 1px;
-  background: #bf5af2;
+  background: var(--failed);
   transform: translate(-50%, -50%) rotate(45deg);
 }
 
@@ -108,7 +105,7 @@ button.session-row:focus-visible {
 
 .session-state,
 .session-age {
-  color: #8e939c;
+  color: var(--sub);
   font-size: 11px;
   white-space: nowrap;
 }
@@ -118,11 +115,11 @@ button.session-row:focus-visible {
 }
 
 .session-state.waiting {
-  color: #ffd60a;
+  color: var(--warn);
 }
 
 .session-state.failed {
-  color: #bf5af2;
+  color: var(--failed);
 }
 
 /* 자리표시 줄은 실제 줄과 높이가 같아야 목록이 붙을 때 섬 높이가 안 튄다.

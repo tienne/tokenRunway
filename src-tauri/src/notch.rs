@@ -25,7 +25,6 @@ const EXPANDED_WIDTH: f64 = 420.0;
 /// 프론트가 잰 내용 높이(`FIT_HEIGHT`)를 따른다 — 도구가 하나뿐인데 빈 검은 판이 내려오지 않게.
 const EXPANDED_MAX_HEIGHT: f64 = 560.0;
 /// 노치 옆에 띄우는 창과 펼친 섬, 메뉴바, 화면 끝 사이 여백.
-const BESIDE_GAP: f64 = 8.0;
 /// 프론트가 아직 내용 높이를 알려주기 전에 쓰는 값.
 const DEFAULT_FIT_HEIGHT: u32 = 236;
 const POLL_MS: u64 = 40;
@@ -252,36 +251,6 @@ fn make_panel(win: &WebviewWindow) -> Result<(), String> {
         let _: () = msg_send![obj, setHasShadow: false];
     }
     Ok(())
-}
-
-/// 노치 옆에 띄울 창(폭 `w`)의 좌상단. 펼친 섬 오른쪽에 붙이고, 화면을 넘으면 화면
-/// 안으로 당긴다. 섬 바로 아래에 두면 커서를 내리는 동안 펼친 섬이 창을 덮는다.
-/// 펼친 섬이 화면 가운데라 왼쪽 공간은 오른쪽과 같아서 왼쪽으로 넘기지 않는다.
-fn beside_origin(g: &Geom, w: f64) -> NSPoint {
-    let s = g.screen;
-    let top = s.origin.y + s.size.height - g.bar_height - BESIDE_GAP;
-    let right_x = g.expanded.origin.x + g.expanded.size.width + BESIDE_GAP;
-    let max_x = s.origin.x + s.size.width - BESIDE_GAP - w;
-    let x = right_x.min(max_x).max(s.origin.x);
-    NSPoint::new(x, top)
-}
-
-/// 창을 노치 옆으로 옮긴다. 섬이 없으면(노치 없는 화면·꺼짐) false를 돌려주고 손대지
-/// 않는다. AppKit 호출이라 메인 스레드에서 부른다.
-pub fn place_beside(win: &WebviewWindow) -> bool {
-    let Some(g) = *GEOM.lock().unwrap() else {
-        return false;
-    };
-    let Ok(ptr) = win.ns_window() else { return false };
-    let Some(obj) = (unsafe { (ptr as *mut AnyObject).as_ref() }) else {
-        return false;
-    };
-    unsafe {
-        let frame: NSRect = msg_send![obj, frame];
-        let origin = beside_origin(&g, frame.size.width);
-        let _: () = msg_send![obj, setFrameTopLeftPoint: origin];
-    }
-    true
 }
 
 fn place(win: &WebviewWindow, g: &Geom) {
@@ -591,25 +560,6 @@ mod tests {
         let huge = fitted_expanded(&g, 10_000.0);
         assert_eq!(huge.size.height, EXPANDED_MAX_HEIGHT);
         assert_eq!(huge.origin.y + huge.size.height, 982.0);
-    }
-
-    #[test]
-    fn side_windows_open_right_of_the_panel_and_stay_on_screen() {
-        let g = layout(rect(0.0, 0.0, 1512.0, 982.0), 200.0, 32.0, true);
-        let o = beside_origin(&g, 460.0);
-        assert_eq!(o.x, g.expanded.origin.x + g.expanded.size.width + BESIDE_GAP);
-        assert_eq!(o.y, 982.0 - 32.0 - BESIDE_GAP);
-        // 오른쪽 공간이 모자라면 화면 안으로 당긴다.
-        let narrow = layout(rect(0.0, 0.0, 1100.0, 800.0), 200.0, 32.0, true);
-        assert_eq!(beside_origin(&narrow, 460.0).x, 1100.0 - BESIDE_GAP - 460.0);
-    }
-
-    #[test]
-    fn side_windows_stay_on_a_secondary_screen() {
-        let g = layout(rect(-1512.0, 300.0, 1512.0, 982.0), 184.0, 37.0, false);
-        let o = beside_origin(&g, 420.0);
-        assert!(o.x >= -1512.0 && o.x + 420.0 <= 0.0);
-        assert_eq!(o.y, 300.0 + 982.0 - 37.0 - BESIDE_GAP);
     }
 
     #[test]

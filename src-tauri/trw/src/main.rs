@@ -31,7 +31,10 @@ trw — Token Runway 알림 보내기
 
 옵션 (notify):
   --body <문구>        알림 본문
-  --level <레벨>       done | blocked | failed  (기본 done)
+  --prompt <요청>      이 알림을 만든 사용자 요청 원문
+  --question <질문>    답변 대기 알림에서 미리 볼 질문
+  --option <선택지>    질문의 선택지. 여러 번 지정 가능
+  --level <레벨>       done | waiting | blocked | interrupted | failed | turnEnd  (기본 done)
   --context <라벨>     리스트에 뜰 출처. 생략하면 워크트리 이름을 쓴다
   --no-target          랜딩 정보를 붙이지 않는다 (눌러도 이동하지 않음)
   --strict             전달 실패 시 종료 코드 1
@@ -143,6 +146,29 @@ fn orca_current_worktree() -> Option<String> {
         .get("id")?
         .as_str()
         .map(|s| s.to_string())
+}
+
+fn select_orca_prompt(snapshot: &serde_json::Value, worktree_id: &str, session_id: &str) -> Option<String> {
+    let prefix = format!("structured-agent-session-{session_id}:");
+    let mut matches = snapshot.get("result")?.get("worktrees")?.as_array()?.iter()
+        .filter(|workspace| workspace.get("worktreeId").and_then(|value| value.as_str()) == Some(worktree_id))
+        .filter_map(|workspace| workspace.get("agents").and_then(|value| value.as_array()))
+        .flatten()
+        .filter(|agent| agent.get("paneKey").and_then(|value| value.as_str()).is_some_and(|key| key.starts_with(&prefix)));
+    let agent = matches.next()?;
+    if matches.next().is_some() { return None; }
+    agent.get("prompt")?.as_str().filter(|prompt| !prompt.trim().is_empty()).map(str::to_owned)
+}
+
+fn orca_current_prompt(target: &serde_json::Value) -> Option<String> {
+    let worktree_id = target.get("worktreeId")?.as_str()?;
+    let session_id = std::env::var("ORCA_AGENT_SESSION_ID").ok().filter(|id| !id.is_empty())?;
+    let mut command = Command::new(std::env::var_os("ORCA_CLI_COMMAND")?);
+    command.args(["worktree", "ps", "--limit", "10000", "--json"]).stderr(Stdio::null());
+    let output = run_command_with_timeout(command, &[], Duration::from_secs(3));
+    let snapshot = serde_json::from_slice(&output).ok()?;
+    // 같은 작업 공간의 다른 에이전트 요청을 붙이지 않도록 세션까지 일치시킨다.
+    select_orca_prompt(&snapshot, worktree_id, &session_id)
 }
 
 fn last_segment(path: &str) -> Option<String> {
@@ -286,6 +312,9 @@ fn wake_app() {
 fn cmd_notify(args: &[String]) -> ExitCode {
     let mut title: Option<String> = None;
     let mut body: Option<String> = None;
+    let mut prompt: Option<String> = None;
+    let mut question: Option<String> = None;
+    let mut options: Vec<String> = Vec::new();
     let mut level = "done".to_string();
     let mut context: Option<String> = None;
     let mut no_target = false;
@@ -296,6 +325,20 @@ fn cmd_notify(args: &[String]) -> ExitCode {
         match args[i].as_str() {
             "--body" => {
                 body = args.get(i + 1).cloned();
+                i += 2;
+            }
+            "--prompt" => {
+                prompt = args.get(i + 1).cloned();
+                i += 2;
+            }
+            "--question" => {
+                question = args.get(i + 1).cloned();
+                i += 2;
+            }
+            "--option" => {
+                if let Some(option) = args.get(i + 1) {
+                    options.push(option.clone());
+                }
                 i += 2;
             }
             "--level" => {
@@ -329,10 +372,25 @@ fn cmd_notify(args: &[String]) -> ExitCode {
         eprintln!("제목이 필요합니다.\n\n{USAGE}");
         return ExitCode::from(if strict { 1 } else { 0 });
     };
-    if !matches!(level.as_str(), "done" | "blocked" | "failed") {
-        eprintln!("--level 은 done | blocked | failed 중 하나여야 합니다");
+    if !matches!(level.as_str(), "done" | "waiting" | "blocked" | "interrupted" | "failed" | "turnEnd") {
+        eprintln!("--level 은 done | waiting | blocked | interrupted | failed | turnEnd 중 하나여야 합니다");
         return ExitCode::from(if strict { 1 } else { 0 });
     }
+
+    if question.is_some() && level != "waiting" {
+        eprintln!("--question은 --level waiting과 함께 써 주세요");
+        return ExitCode::from(if strict { 1 } else { 0 });
+    }
+    if !options.is_empty() && question.as_deref().is_none_or(|text| text.trim().is_empty()) {
+        eprintln!("--option을 쓰려면 --question이 필요합니다");
+        return ExitCode::from(if strict { 1 } else { 0 });
+    }
+    let questions = question.filter(|text| !text.trim().is_empty()).map(|question| vec![serde_json::json!({
+        "question": question,
+        "options": options.iter().filter(|label| !label.trim().is_empty())
+            .map(|label| serde_json::json!({"label":label})).collect::<Vec<_>>(),
+        "multiSelect": false,
+    })]).unwrap_or_default();
 
     let (target, auto_label) = if no_target {
         (serde_json::json!({ "kind": "none" }), None)
@@ -340,9 +398,15 @@ fn cmd_notify(args: &[String]) -> ExitCode {
         detect_target()
     };
 
+    let prompt = prompt.or_else(|| orca_current_prompt(&target)).or_else(|| session_key(None).and_then(|key| {
+        let (tool, session) = key.split_once(':')?;
+        read_prompt_context(tool, session)
+    }));
     let payload = serde_json::json!({
         "title": title,
         "body": body,
+        "prompt": prompt,
+        "questions": questions,
         "level": level,
         "context": context.or(auto_label),
         "target": target,
@@ -352,7 +416,23 @@ fn cmd_notify(args: &[String]) -> ExitCode {
     deliver(&payload, strict)
 }
 
+fn notification_for_wire(payload: &serde_json::Value) -> serde_json::Value {
+    let mut wire = payload.clone();
+    let legacy = match payload.get("level").and_then(|level| level.as_str()) {
+        Some("waiting") => "blocked",
+        Some("interrupted") => "failed",
+        Some("turnEnd") => "done",
+        _ => return wire,
+    };
+    // 업데이트 중 구 앱이 살아 있어도 소켓과 스풀의 알림을 버리지 않게 한다.
+    wire["status"] = payload["level"].clone();
+    wire["level"] = legacy.into();
+    wire
+}
+
 fn deliver(payload: &serde_json::Value, strict: bool) -> ExitCode {
+    let wire = notification_for_wire(payload);
+    let payload = &wire;
     match send_socket(payload) {
         Ok(()) => ExitCode::SUCCESS,
         // 앱은 떠 있는데 응답만 늦은 경우 — 이미 받았을 수 있어서 스풀에 또 남기면 두 번
@@ -390,6 +470,8 @@ fn session_key(from_hook: Option<&str>) -> Option<String> {
         .or_else(|| std::env::var("CLAUDE_CODE_SESSION_ID").ok())
         .filter(|s| !s.is_empty())
         .map(|s| format!("claude:{s}"))
+        .or_else(|| std::env::var("CODEX_THREAD_ID").ok()
+            .filter(|s| !s.is_empty()).map(|s| format!("codex:{s}")))
 }
 
 /// Claude Code Stop 훅 — 턴이 끝날 때마다 그 세션을 알림함에 한 줄로 남긴다.
@@ -415,7 +497,8 @@ fn cmd_hook_stop() -> ExitCode {
     let (target, label) = detect_target();
     let payload = serde_json::json!({
         "title": title,
-        "level": "done",
+        "prompt": notice_prompt("claude", &input),
+        "level": "turnEnd",
         "context": label,
         "target": target,
         "key": session_key(field("session_id")),
@@ -470,6 +553,7 @@ fn cmd_hook_codex(args: &[String]) -> ExitCode {
         .filter(|s| !s.is_empty());
     let raw = read_stdin_limited();
     let input: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+    remember_prompt("codex", event, &input);
     let session = ["session_id", "sessionId"]
         .iter()
         .find_map(|k| input.get(*k).and_then(|v| v.as_str()))
@@ -482,6 +566,7 @@ fn cmd_hook_codex(args: &[String]) -> ExitCode {
         "home": home,
     });
     let _ = write_hook_state("codex", session.as_deref(), &input, line);
+    send_hook_notice("codex", event, &input);
     ExitCode::SUCCESS
 }
 
@@ -498,6 +583,7 @@ fn cmd_hook_claude(args: &[String]) -> ExitCode {
     };
     let raw = read_stdin_limited();
     let input: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+    remember_prompt("claude", event, &input);
     let field = |k: &str| input.get(k).and_then(|v| v.as_str()).filter(|s| !s.is_empty());
     let session = field("session_id").map(|s| s.to_string());
 
@@ -523,7 +609,121 @@ fn cmd_hook_claude(args: &[String]) -> ExitCode {
         "config_dir": config_dir,
     });
     let _ = write_hook_state("claude", session.as_deref(), &input, line);
+    send_hook_notice("claude", event, &input);
     ExitCode::SUCCESS
+}
+
+fn hook_notice(tool: &str, event: &str, input: &serde_json::Value) -> Option<(&'static str, String)> {
+    let (level, fallback) = match (tool, event) {
+        ("claude", "PreToolUse") if input.get("tool_name").and_then(|value| value.as_str()) == Some("AskUserQuestion") => {
+            ("waiting", "답변을 기다리고 있어요")
+        }
+        ("claude" | "codex", "Stop") => ("turnEnd", "응답이 끝났어요"),
+        ("codex", "Interrupt") => ("interrupted", "작업이 중단됐어요"),
+        ("claude", "StopFailure") => ("failed", "오류로 응답이 종료됐어요"),
+        ("claude", "Notification") if claude_state(event, input).is_some() => {
+            match input.get("notification_type").and_then(|value| value.as_str()) {
+                Some("permission_prompt") | None => ("blocked", "진행 승인을 기다리고 있어요"),
+                _ => ("waiting", "답변을 기다리고 있어요"),
+            }
+        }
+        _ => return None,
+    };
+    let text = if event == "Stop" {
+        input.get("last_assistant_message").and_then(|value| value.as_str()).map(str::to_owned)
+            .or_else(|| input.get("transcript_path").and_then(|value| value.as_str())
+                .and_then(|path| last_assistant_text(Path::new(path))))
+    } else {
+        input.get("message").and_then(|value| value.as_str()).map(str::to_owned)
+    };
+    Some((level, text.as_deref().and_then(headline).unwrap_or_else(|| fallback.to_owned())))
+}
+
+fn notice_questions(input: &serde_json::Value) -> Vec<serde_json::Value> {
+    let questions = input.get("questions").or_else(|| input.get("tool_input").and_then(|tool| tool.get("questions")));
+    questions.and_then(|value| value.as_array()).into_iter().flatten().filter_map(|question| {
+        let text = question.get("question")?.as_str()?.trim();
+        if text.is_empty() { return None; }
+        let options: Vec<_> = question.get("options").and_then(|value| value.as_array())
+            .into_iter().flatten().filter_map(|option| {
+                let label = option.as_str().or_else(|| option.get("label").and_then(|value| value.as_str()))?.trim();
+                if label.is_empty() { return None; }
+                Some(serde_json::json!({
+                    "label": label,
+                    "description": option.get("description").and_then(|value| value.as_str()),
+                }))
+            }).collect();
+        Some(serde_json::json!({
+            "question": text,
+            "options": options,
+            "multiSelect": question.get("multiSelect").and_then(|value| value.as_bool()).unwrap_or(false),
+        }))
+    }).collect()
+}
+
+fn prompt_context_path(tool: &str, session: &str) -> Option<PathBuf> {
+    let file = hook_state_path(tool, Some(session))?;
+    Some(app_dir()?.join("notification-prompts").join(file.file_name()?))
+}
+
+fn remember_prompt(tool: &str, event: &str, input: &serde_json::Value) {
+    if !matches!(event, "UserPromptSubmit" | "SessionEnd") { return; }
+    let Some(session) = input.get("session_id").or_else(|| input.get("sessionId")).and_then(|value| value.as_str()).filter(|s| !s.is_empty()) else { return; };
+    let Some(path) = prompt_context_path(tool, session) else { return; };
+    let prompt = input.get("prompt").and_then(|value| value.as_str()).filter(|text| !text.trim().is_empty());
+    if event == "SessionEnd" || prompt.is_none() {
+        let _ = std::fs::remove_file(path);
+        return;
+    }
+    let Some(dir) = path.parent() else { return; };
+    if std::fs::create_dir_all(dir).is_err() { return; }
+    // 활동 상태 파일에는 요청 본문을 섞지 않고 알림용 맥락만 따로 보관한다.
+    let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
+    let written = serde_json::to_vec(&prompt).ok().is_some_and(|raw| {
+        std::fs::write(&temporary, raw).and_then(|_| std::fs::rename(&temporary, &path)).is_ok()
+    });
+    if !written { let _ = std::fs::remove_file(&path); }
+    let _ = std::fs::remove_file(temporary);
+    prune_hook_states(dir);
+}
+
+fn read_prompt_context(tool: &str, session: &str) -> Option<String> {
+    let raw = std::fs::read(prompt_context_path(tool, session)?).ok()?;
+    serde_json::from_slice(&raw).ok()
+}
+
+fn notice_prompt(tool: &str, input: &serde_json::Value) -> Option<String> {
+    input.get("prompt").and_then(|value| value.as_str())
+        .filter(|text| !text.trim().is_empty()).map(str::to_owned)
+        .or_else(|| {
+            let session = input.get("session_id").or_else(|| input.get("sessionId"))?.as_str()?;
+            read_prompt_context(tool, session)
+        })
+        .or_else(|| input.get("transcript_path").and_then(|value| value.as_str())
+            .and_then(|path| last_user_prompt(Path::new(path))))
+}
+
+fn send_hook_notice(tool: &str, event: &str, input: &serde_json::Value) {
+    let Some((level, title)) = hook_notice(tool, event, input) else { return; };
+    let Some(session) = ["session_id", "sessionId"].iter()
+        .find_map(|key| input.get(*key).and_then(|value| value.as_str()))
+        .filter(|session| !session.is_empty()) else { return; };
+    if let Some(cwd) = input.get("cwd").and_then(|value| value.as_str()) {
+        let _ = std::env::set_current_dir(cwd);
+    }
+    let (target, label) = detect_target();
+    let payload = serde_json::json!({
+        "title": title,
+        "prompt": notice_prompt(tool, input),
+        "questions": if level == "waiting" { notice_questions(input) } else { Vec::new() },
+        "level": level,
+        "context": label,
+        "target": target,
+        "key": format!("{tool}:{session}"),
+        "quiet": true,
+        "sentMs": now_ms(),
+    });
+    deliver(&payload, false);
 }
 
 /// 훅 이벤트 → 세션 상태. None이면 상태를 바꾸지 않는다.
@@ -533,6 +733,9 @@ fn cmd_hook_claude(args: &[String]) -> ExitCode {
 fn claude_state(event: &str, input: &serde_json::Value) -> Option<(&'static str, bool)> {
     match event {
         "SessionStart" => Some(("idle", false)),
+        "PreToolUse" if input.get("tool_name").and_then(|value| value.as_str()) == Some("AskUserQuestion") => {
+            Some(("waiting", false))
+        }
         "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => {
             Some(("working", false))
         }
@@ -813,14 +1016,17 @@ fn send_relay(payload: &serde_json::Value) {
 
 /// `sh -c`로 원래 명령을 돌려 stdout을 모은다. 상한을 넘기면 프로세스 그룹째 끊고 그때까지 모은 것만 돌려준다.
 fn run_with_timeout(command: &str, input: &[u8], timeout: Duration) -> Vec<u8> {
+    let mut process = Command::new("/bin/sh");
+    process.arg("-c").arg(command).stderr(Stdio::inherit());
+    run_command_with_timeout(process, input, timeout)
+}
+
+fn run_command_with_timeout(mut command: Command, input: &[u8], timeout: Duration) -> Vec<u8> {
     use std::os::unix::process::CommandExt;
     use std::sync::{mpsc, Arc, Mutex};
-    let Ok(mut child) = Command::new("/bin/sh")
-        .arg("-c")
-        .arg(command)
+    let Ok(mut child) = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
         // 셸이 띄운 손자 프로세스까지 한 번에 끊으려고 그룹을 따로 잡는다.
         .process_group(0)
         .spawn()
@@ -924,6 +1130,34 @@ fn last_assistant_text(path: &Path) -> Option<String> {
     })
 }
 
+fn last_user_prompt(path: &Path) -> Option<String> {
+    use std::io::{Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).ok()?;
+    let length = file.metadata().ok()?.len();
+    file.seek(SeekFrom::Start(length.saturating_sub(2 * 1024 * 1024))).ok()?;
+    let mut raw = Vec::new();
+    file.read_to_end(&mut raw).ok()?;
+    let raw = String::from_utf8_lossy(&raw);
+    raw.lines().rev().find_map(|line| {
+        let record: serde_json::Value = serde_json::from_str(line).ok()?;
+        if record.get("isMeta").and_then(|value| value.as_bool()) == Some(true) { return None; }
+        let text = if record.get("type").and_then(|value| value.as_str()) == Some("user") {
+            let content = record.get("message")?.get("content")?;
+            if let Some(text) = content.as_str() { text.to_owned() } else {
+                content.as_array()?.iter()
+                    .filter(|block| block.get("type").and_then(|value| value.as_str()) == Some("text"))
+                    .filter_map(|block| block.get("text").and_then(|value| value.as_str()))
+                    .collect::<Vec<_>>().join("\n")
+            }
+        } else if record.get("type").and_then(|value| value.as_str()) == Some("event_msg")
+            && record.get("payload")?.get("type")?.as_str()? == "user_message" {
+            record.get("payload")?.get("message")?.as_str()?.to_owned()
+        } else { return None; };
+        let trimmed = text.trim();
+        (!trimmed.is_empty() && !trimmed.starts_with("[Request interrupted by user")).then_some(text)
+    })
+}
+
 /// 응답 첫 줄을 알림 제목으로 다듬는다. 마크다운 머리 기호와 굵게 표시는 뗀다.
 fn headline(text: &str) -> Option<String> {
     const MAX_CHARS: usize = 80;
@@ -1021,6 +1255,80 @@ mod tests {
         assert_eq!(me.ppid, std::os::unix::process::parent_id());
         assert!(me.start_sec > 1_600_000_000);
         assert!(!me.comm.is_empty());
+    }
+
+    #[test]
+    fn orca_prompt_matches_both_workspace_and_agent_session() {
+        let snapshot = serde_json::json!({"result":{"worktrees":[
+            {"worktreeId":"repo::/other", "agents":[{"paneKey":"structured-agent-session-codex_a:other", "prompt":"다른 프로젝트 요청"}]},
+            {"worktreeId":"repo::/current", "agents":[
+                {"paneKey":"structured-agent-session-codex_b:thread-b", "prompt":"다른 에이전트 요청"},
+                {"paneKey":"structured-agent-session-codex_a:thread-a", "prompt":"이번 요청\n원문 그대로"}
+            ]}
+        ]}});
+        assert_eq!(select_orca_prompt(&snapshot, "repo::/current", "codex_a").as_deref(), Some("이번 요청\n원문 그대로"));
+        assert!(select_orca_prompt(&snapshot, "repo::/missing", "codex_a").is_none());
+        assert!(select_orca_prompt(&snapshot, "repo::/current", "codex").is_none());
+        let ambiguous = serde_json::json!({"result":{"worktrees":[{"worktreeId":"repo::/current", "agents":[
+            {"paneKey":"structured-agent-session-codex_a:first", "prompt":"하나"},
+            {"paneKey":"structured-agent-session-codex_a:second", "prompt":"둘"}
+        ]}]}});
+        assert!(select_orca_prompt(&ambiguous, "repo::/current", "codex_a").is_none());
+    }
+
+    #[test]
+    fn prompt_fallback_ignores_tool_results_metadata_and_interrupt_markers() {
+        let path = std::env::temp_dir().join(format!("trw-prompt-transcript-{}.jsonl", std::process::id()));
+        let lines = [
+            serde_json::json!({"type":"user", "message":{"content":"최초 요청"}}),
+            serde_json::json!({"type":"user", "message":{"content":[{"type":"text", "text":"실제 요청\n둘째 줄"}]}}),
+            serde_json::json!({"type":"user", "message":{"content":[{"type":"tool_result", "content":"도구 출력"}]}}),
+            serde_json::json!({"type":"user", "isMeta":true, "message":{"content":"시스템 정보"}}),
+            serde_json::json!({"type":"user", "message":{"content":"[Request interrupted by user]"}}),
+        ];
+        std::fs::write(&path, lines.iter().map(|line| line.to_string()).collect::<Vec<_>>().join("\n")).unwrap();
+        assert_eq!(last_user_prompt(&path).as_deref(), Some("실제 요청\n둘째 줄"));
+        std::fs::write(&path, serde_json::json!({"type":"event_msg", "payload":{"type":"user_message", "message":"Codex 요청"}}).to_string()).unwrap();
+        assert_eq!(last_user_prompt(&path).as_deref(), Some("Codex 요청"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn question_preview_keeps_labels_descriptions_and_multiple_selection() {
+        let input = serde_json::json!({"tool_name":"AskUserQuestion", "tool_input":{"questions":[{
+            "question":"대상 환경은?", "multiSelect":true,
+            "options":[{"label":"스테이징", "description":"검증 환경"}, "프로덕션", {"bad":true}]
+        }]}});
+        assert_eq!(hook_notice("claude", "PreToolUse", &input).unwrap().0, "waiting");
+        assert_eq!(claude_state("PreToolUse", &input), Some(("waiting", false)));
+        let questions = notice_questions(&input);
+        assert_eq!(questions[0]["question"], "대상 환경은?");
+        assert_eq!(questions[0]["options"].as_array().unwrap().len(), 2);
+        assert_eq!(questions[0]["options"][0]["description"], "검증 환경");
+        assert_eq!(questions[0]["multiSelect"], true);
+        assert!(notice_questions(&serde_json::json!({})).is_empty());
+        assert!(notice_questions(&serde_json::json!({"questions":[{"question":" "}]})).is_empty());
+    }
+
+    #[test]
+    fn notification_types_follow_explicit_hook_events() {
+        let empty = serde_json::json!({});
+        assert_eq!(hook_notice("codex", "Interrupt", &empty).unwrap().0, "interrupted");
+        assert_eq!(hook_notice("codex", "Stop", &empty).unwrap().0, "turnEnd");
+        assert_eq!(hook_notice("claude", "StopFailure", &empty).unwrap().0, "failed");
+        assert_eq!(hook_notice("claude", "Stop", &empty).unwrap().0, "turnEnd");
+        for kind in ["agent_needs_input", "elicitation_dialog", "elicitation_url_dialog"] {
+            let input = serde_json::json!({"notification_type": kind});
+            assert_eq!(hook_notice("claude", "Notification", &input).unwrap().0, "waiting");
+        }
+        let permission = serde_json::json!({"notification_type": "permission_prompt"});
+        assert_eq!(hook_notice("claude", "Notification", &permission).unwrap().0, "blocked");
+        for event in ["PreToolUse", "UserPromptSubmit", "SessionStart", "SessionEnd"] {
+            assert!(hook_notice("claude", event, &empty).is_none());
+        }
+        let idle = serde_json::json!({"notification_type": "idle_prompt", "message": "Waiting for you"});
+        assert!(hook_notice("claude", "Notification", &idle).is_none());
+        assert!(hook_notice("claude", "Notification", &empty).is_none());
     }
 
     #[test]

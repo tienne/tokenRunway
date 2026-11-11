@@ -1,8 +1,7 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useLayoutEffect, useEffect, useState, useCallback, useRef } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import {
   getCurrentWindow,
-  LogicalSize,
   LogicalPosition,
 } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
@@ -23,6 +22,7 @@ import { NotchView } from "./Notch";
 import { ICONS, Icon } from "./icons";
 import { useUpdateStatus } from "./update";
 import "./App.css";
+import { inboxNeedsAttention, groupInbox, type InboxItem, type InboxLevel, type InboxTarget } from "./inbox";
 
 type PetLevel = "idle" | "good" | "warn" | "danger";
 
@@ -1077,8 +1077,8 @@ function WeeklyBars({
   showLine?: boolean;
   onHover?: (i: number | null) => void;
 }) {
-  // 가장 많이 쓴 날을 꽉 차게 그려야 하루치 차이가 눈에 들어온다.
-  const max = Math.max(...days.map((d) => d.dailyPercent), 0.01);
+  // 누적선과 겹칠 때는 막대도 같은 주간 한도 100%를 기준으로 그린다.
+  const max = showLine ? 100 : Math.max(...days.map((d) => d.dailyPercent), 0.01);
 
   // 누적 선은 첫 사용일부터 오늘까지만 긋는다. 미래로 이으면 데이터가 있는 것처럼
   // 보이고, 아직 안 쓴 앞 구간은 점이 바닥에 붙어 요일 라벨과 겹친다.
@@ -1115,7 +1115,7 @@ function WeeklyBars({
             <div className="wk-track">
               <div
                 className="wk-fill"
-                style={{ height: `${(d.dailyPercent / max) * 100}%` }}
+                style={{ height: `${Math.max(0, Math.min(100, (d.dailyPercent / max) * 100))}%` }}
               />
             </div>
           </div>
@@ -1131,7 +1131,7 @@ function WeeklyBars({
             <path
               d={line}
               fill="none"
-              style={{ stroke: "var(--accent)" }}
+              style={{ stroke: "var(--chart-line)" }}
               strokeWidth="1.5"
               strokeLinejoin="round"
               vectorEffect="non-scaling-stroke"
@@ -1332,9 +1332,6 @@ function Dashboard() {
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
   // 도구별 계정 목록 펼침 상태. 기본은 접어두고 지금 쓰는 계정만 카드에 세운다.
   const [openAccounts, setOpenAccounts] = useState<Record<string, boolean>>({});
-  // 읽지 않은 완료 알림 수 — 벨 배지용. Rust가 바뀔 때마다 밀어준다.
-  const [unread, setUnread] = useState(0);
-
   async function refresh() {
     try {
       const data = await invoke<RunwayStatus[]>("get_runway");
@@ -1374,38 +1371,6 @@ function Dashboard() {
     };
   }, []);
 
-  // 벨 배지 — Rust가 알림함이 바뀔 때마다 개수를 밀어준다. 창을 처음 열 때만
-  // 직접 세고, 그다음은 이벤트로 따라간다.
-  useEffect(() => {
-    invoke<InboxItem[]>("get_inbox")
-      .then((items) => setUnread(items.filter((i) => !i.read).length))
-      .catch(() => {});
-    const un = listen<number>("inbox-changed", (e) => setUnread(e.payload));
-    return () => {
-      un.then((f) => f()).catch(() => {});
-    };
-  }, []);
-
-  // 콘텐츠 너비에 맞춰 팝오버 창 너비 자동 조정 (텍스트가 줄바꿈되지 않게)
-  useEffect(() => {
-    const ro = new ResizeObserver(() => {
-      // 줄바꿈 없이 필요한 너비(scrollWidth) + 높이
-      const w = Math.ceil(document.documentElement.scrollWidth);
-      const h = Math.ceil(document.documentElement.scrollHeight);
-      const win = getCurrentWindow();
-      win
-        .setSize(
-          new LogicalSize(
-            Math.min(Math.max(w, 360), 560), // 360~560 범위
-            Math.min(Math.max(h, 160), 760)
-          )
-        )
-        .catch(() => {});
-    });
-    ro.observe(document.body);
-    return () => ro.disconnect();
-  }, []);
-
   useEffect(() => {
     const id = setInterval(async () => {
       refresh();
@@ -1423,32 +1388,10 @@ function Dashboard() {
   return (
     <main className="container">
       <header>
-        <h1>Token Runway</h1>
+        <h1>{t(lang, "notch.dashboard")}</h1>
         <div className="header-actions">
           <button onClick={refresh} className="refresh">
             {t(lang, "refresh")}
-          </button>
-          <button
-            onClick={() => invoke("open_inbox_window")}
-            className="icon-btn bell"
-            title={t(lang, "inbox")}
-          >
-            <Icon d={ICONS.inbox} size={15} />
-            {unread > 0 && <span className="bell-badge">{unread}</span>}
-          </button>
-          <button
-            onClick={() => invoke("open_history_window")}
-            className="icon-btn"
-            title={t(lang, "history")}
-          >
-            <Icon d={ICONS.history} size={15} />
-          </button>
-          <button
-            onClick={() => invoke("open_settings_window")}
-            className="icon-btn"
-            title={t(lang, "settings")}
-          >
-            <Icon d={ICONS.settings} size={15} />
           </button>
         </div>
       </header>
@@ -1497,7 +1440,7 @@ function Dashboard() {
           {s.percentRemaining != null && (
             <div className="bar">
               <div
-                className="bar-fill"
+                className={`bar-fill ${pctLevel(s.percentRemaining)}`}
                 style={{
                   width: `${Math.max(0, Math.min(100, s.percentRemaining))}%`,
                 }}
@@ -1582,7 +1525,14 @@ function Dashboard() {
             </div>
           </div>
 
-          <Sparkline data={s.sparkline} />
+          {s.sparkline.length > 0 && <div className="usage-flow">
+            <div className="usage-flow-label">{t(lang, "usageFlow")} · {unitLabel(s.unit)}</div>
+            <Sparkline data={s.sparkline} />
+            <div className="usage-flow-axis">
+              <span>{t(lang, "usageFlowStart", { h: String(s.windowHours) })}</span>
+              <span>{t(lang, "usageFlowNow")}</span>
+            </div>
+          </div>}
 
           {s.cacheHitRate != null && (
             <p className="cache-hit">
@@ -1769,7 +1719,7 @@ function HookInstaller({
   );
 }
 
-/** 설정 전용 창 */
+/** 설정 화면 */
 function SettingsView() {
   const appUpdate = useUpdateStatus();
   const [settings, setSettings] = useState<Settings>({
@@ -1945,8 +1895,8 @@ function SettingsView() {
   }
 
   return (
-    <main className="container settings-window win-framed">
-      <div className="win-titlebar-bg" />
+    <main className="container settings-window">
+      <header><h1>{tr("settings")}</h1></header>
       <section className="settings">
         <label className="setting-row toggle-row">
           <span>{tr("osNotif")}</span>
@@ -2563,15 +2513,15 @@ function TrendChart({
         >
           <defs>
             <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" style={{ stopColor: "var(--accent)" }} stopOpacity="0.35" />
-              <stop offset="100%" style={{ stopColor: "var(--accent)" }} stopOpacity="0" />
+              <stop offset="0%" style={{ stopColor: "var(--chart-primary)" }} stopOpacity="0.35" />
+              <stop offset="100%" style={{ stopColor: "var(--chart-primary)" }} stopOpacity="0" />
             </linearGradient>
           </defs>
           <path d={area} fill="url(#trendFill)" />
           <path
             d={line}
             fill="none"
-            style={{ stroke: "var(--accent)" }}
+            style={{ stroke: "var(--chart-line)" }}
             strokeWidth="1.5"
             strokeLinejoin="round"
             vectorEffect="non-scaling-stroke"
@@ -2629,6 +2579,11 @@ function WeeklyLimitBlock({ days, lang }: { days: WeeklyDay[]; lang: Lang }) {
           left: Math.max(0, 100 - total).toFixed(0),
         })}
       </p>
+      <div className="wk-legend">
+        <span><i className="wk-legend-daily" />{t(lang, "wkDailyLegend")}</span>
+        <span><i className="wk-legend-cumulative" />{t(lang, "wkCumulativeLegend")}</span>
+        <span className="wk-limit-label">{t(lang, "wkLimitLabel")}</span>
+      </div>
       <WeeklyBars days={days} lang={lang} showLine onHover={setActive} />
       {a ? (
         <p className="wk-tip">
@@ -2889,27 +2844,11 @@ function StatsCard({ s, lang }: { s: ToolStats; lang: Lang }) {
 }
 
 /** 통계 전용 창 — 기간 토글 + 도구별 요약·추세 */
-type InboxLevel = "done" | "blocked" | "failed";
-
-type InboxTarget =
-  | { kind: "orca"; worktreeId: string; worktreePath: string | null; tabId: string | null }
-  | { kind: "paseo"; agentId: string; cwd: string | null }
-  | { kind: "path"; path: string }
-  | { kind: "none" };
-
-interface InboxItem {
-  id: string;
-  title: string;
-  body: string | null;
-  level: InboxLevel;
-  context: string | null;
-  target: InboxTarget;
-  createdMs: number;
-  read: boolean;
-}
-
 const LEVEL_ICON: Record<InboxLevel, string> = {
   done: ICONS.check,
+  waiting: ICONS.pause,
+  interrupted: ICONS.cross,
+  turnEnd: ICONS.check,
   blocked: ICONS.pause,
   failed: ICONS.cross,
 };
@@ -2931,17 +2870,36 @@ export function formatAge(ms: number, lang: Lang): string {
   return t(lang, "inboxAgo", { t: `${Math.floor(h / 24)}d` });
 }
 
+function inboxSourceName(item: InboxItem): string | null {
+  if (item.target.kind === "orca") {
+    return item.target.worktreePath?.split(/[\\/]/).filter(Boolean).pop() || item.context;
+  }
+  return item.context;
+}
+
 /** 알림함 — trw로 들어온 작업 완료 알림. 항목을 누르면 그 세션으로 돌아간다 */
-function InboxView() {
+function InboxView({ active = true }: { active?: boolean }) {
   const [items, setItems] = useState<InboxItem[]>([]);
   const [lang, setLang] = useState<Lang>(resolveLang(null));
   const [error, setError] = useState<string | null>(null);
   // "3분 전" 표시를 살아 있게 하려고 주기적으로 다시 그린다.
   const [, setTick] = useState(0);
 
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [filter, setFilter] = useState<"all" | "unread" | "attention">("all");
+  const [projectQuery, setProjectQuery] = useState("");
+  const [activeProject, setActiveProject] = useState<string | null>(null);
+  const [navigationHeight, setNavigationHeight] = useState(0);
+  const navigationRef = useRef<HTMLDivElement>(null);
+  const shortcutsRef = useRef<HTMLElement>(null);
+  const groupRefs = useRef(new Map<string, HTMLElement>());
+
   const load = useCallback(async () => {
     try {
-      setItems(await invoke<InboxItem[]>("get_inbox"));
+      const next = await invoke<InboxItem[]>("get_inbox");
+      setItems(next);
+      setExpanded((previous) => Object.fromEntries(groupInbox(next, "").map((group) =>
+        [group.key, previous[group.key] ?? group.unread > 0])));
     } catch {
       /* noop */
     }
@@ -2955,6 +2913,9 @@ function InboxView() {
     const unlisten = [
       listen("inbox-changed", () => load()),
       listen("inbox-refresh", () => load()),
+      listen("settings-changed", () => {
+        invoke<Settings>("get_settings").then((settings) => setLang(resolveLang(settings.language))).catch(() => {});
+      }),
     ];
     const id = setInterval(() => setTick((n) => n + 1), 30000);
     return () => {
@@ -2978,6 +2939,90 @@ function InboxView() {
   }
 
   const unread = items.filter((i) => !i.read).length;
+  const groups = groupInbox(items, t(lang, "inboxOther"));
+  const attention = groups.reduce((count, group) => count + group.attention, 0);
+  const visibleGroups = groups.map((group) => ({
+    ...group,
+    visibleItems: group.items.filter((item) => filter === "all"
+      || (!item.read && (filter === "unread" || inboxNeedsAttention(item.level)))),
+  })).filter((group) => group.visibleItems.length > 0);
+
+  const query = projectQuery.trim().toLocaleLowerCase();
+  const jumpGroups = visibleGroups.filter((group) =>
+    `${group.label} ${group.path ?? ""}`.toLocaleLowerCase().includes(query));
+  const groupKeys = JSON.stringify(visibleGroups.map((group) => group.key));
+  const hasItems = items.length > 0;
+
+  useEffect(() => {
+    const navigation = navigationRef.current;
+    if (!navigation || !active) return;
+    const measure = () => setNavigationHeight(navigation.getBoundingClientRect().height);
+    const observer = new ResizeObserver(measure);
+    measure();
+    observer.observe(navigation);
+    return () => observer.disconnect();
+  }, [hasItems, active]);
+
+  useEffect(() => {
+    if (!active) return;
+    const keys: string[] = JSON.parse(groupKeys);
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const boundary = navigationRef.current?.getBoundingClientRect().bottom ?? 0;
+      const current = keys.find((key) => {
+        const section = groupRefs.current.get(key);
+        return section && section.getBoundingClientRect().bottom > boundary + 1;
+      });
+      setActiveProject(current ?? keys[keys.length - 1] ?? null);
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(update);
+    };
+    update();
+    window.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
+    };
+  }, [groupKeys, navigationHeight, expanded, active]);
+
+  useEffect(() => {
+    const shortcuts = shortcutsRef.current;
+    const current = shortcuts?.querySelector<HTMLButtonElement>('[aria-current="location"]');
+    if (!shortcuts || !current) return;
+    const strip = shortcuts.getBoundingClientRect();
+    const button = current.getBoundingClientRect();
+    shortcuts.scrollTo({
+      left: shortcuts.scrollLeft + button.left - strip.left - (shortcuts.clientWidth - button.width) / 2,
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+    });
+  }, [activeProject, query, groupKeys]);
+
+  function jumpToProject(key: string) {
+    setExpanded((previous) => ({ ...previous, [key]: true }));
+    requestAnimationFrame(() => {
+      const section = groupRefs.current.get(key);
+      if (!section) return;
+      const offset = navigationRef.current?.getBoundingClientRect().height ?? 0;
+      window.scrollTo({
+        top: window.scrollY + section.getBoundingClientRect().top - offset - 6,
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+      });
+    });
+  }
+
+  async function markGroupRead(groupItems: InboxItem[]) {
+    try {
+      await invoke("inbox_mark_read", { ids: groupItems.filter((item) => !item.read).map((item) => item.id) });
+      setError(null);
+      await load();
+    } catch (e) {
+      setError(t(lang, "inboxUpdateFailed", { e: String(e) }));
+    }
+  }
 
   return (
     <main className="container inbox">
@@ -3012,41 +3057,140 @@ function InboxView() {
       {items.length === 0 && <p className="muted">{t(lang, "inboxEmpty")}</p>}
       {items.length > 0 && <p className="inbox-hint">{t(lang, "inboxHint")}</p>}
 
-      <ul className="inbox-list">
-        {items.map((it) => {
-          const src = TARGET_LABEL[it.target.kind];
+      {items.length > 0 && (
+        <div className="inbox-navigation" ref={navigationRef}>
+          <input className="inbox-project-search" type="search"
+            aria-label={t(lang, "inboxProjectSearch")}
+            placeholder={t(lang, "inboxProjectSearch")}
+            value={projectQuery} onChange={(event) => setProjectQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.nativeEvent.isComposing && jumpGroups[0]) {
+                jumpToProject(jumpGroups[0].key);
+              }
+            }} />
+          <nav className="inbox-project-shortcuts" ref={shortcutsRef} aria-label={t(lang, "inboxProjectJump")}>
+            {jumpGroups.map((group) => <button key={group.key}
+              aria-current={activeProject === group.key ? "location" : undefined}
+              title={group.path ?? group.label}
+              onClick={() => jumpToProject(group.key)}>
+              <span>{group.label}</span>
+              {group.unread > 0 && <span className="inbox-shortcut-count">{group.unread}</span>}
+            </button>)}
+            {jumpGroups.length === 0 && <span className="inbox-project-no-match">{t(lang, "inboxProjectNoMatch")}</span>}
+          </nav>
+          <div className="inbox-filters" role="group" aria-label={t(lang, "inboxFilter")}>
+            {(["all", "unread", "attention"] as const).map((value) => (
+              <button key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>
+                {t(lang, value === "all" ? "inboxAll" : value === "unread" ? "inboxUnread" : "inboxAttention")}
+                {value !== "all" && <span>{value === "unread" ? unread : attention}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {items.length > 0 && visibleGroups.length === 0 && <p className="muted">{t(lang, "inboxNoMatch")}</p>}
+      <div className="inbox-groups">
+        {visibleGroups.map((group) => {
+          const open = expanded[group.key] ?? group.unread > 0;
+          const latest = group.visibleItems[0];
           return (
-            <li key={it.id} className={it.read ? "inbox-item read" : "inbox-item"}>
-              <button className="inbox-main" onClick={() => land(it)}>
-                <span className="inbox-row1">
-                  <span className="inbox-dot">{it.read ? "" : "●"}</span>
-                  <span
-                    className={`inbox-level ${it.level}`}
-                    title={t(lang, `inboxLevel.${it.level}`)}
-                  >
-                    <Icon d={LEVEL_ICON[it.level]} size={12} />
-                  </span>
-                  <span className="inbox-src">
-                    {src && <b>{src}</b>}
-                    {src && it.context && " · "}
-                    {it.context}
-                  </span>
-                  <span className="inbox-age">{formatAge(it.createdMs, lang)}</span>
-                </span>
-                <span className="inbox-title">{it.title}</span>
-                {it.body && <span className="inbox-body">{it.body}</span>}
-              </button>
-              <button
-                className="inbox-x"
-                title={t(lang, "inboxRemove")}
-                onClick={() => invoke("inbox_remove", { id: it.id }).then(load)}
-              >
-                ×
-              </button>
-            </li>
+            <section className="inbox-group" key={group.key}
+              ref={(element) => {
+                if (element) groupRefs.current.set(group.key, element);
+                else groupRefs.current.delete(group.key);
+              }}
+              style={{ scrollMarginTop: navigationHeight + 6 }}>
+              <div className="inbox-group-header" style={{ top: navigationHeight }}>
+                <button className="inbox-group-toggle" aria-expanded={open}
+                  aria-controls={`inbox-group-${encodeURIComponent(group.key)}`}
+                  onClick={() => setExpanded((previous) => ({ ...previous, [group.key]: !open }))}>
+                  <span className="inbox-chevron" aria-hidden="true">{open ? "▾" : "▸"}</span>
+                  <span className="inbox-group-label" title={group.path ?? group.label}>{group.label}</span>
+                  {group.unread > 0 && <span className="inbox-group-unread">{t(lang, "inboxUnreadCount", { n: group.unread })}</span>}
+                  <span className="inbox-age">{formatAge(group.items[0].createdMs, lang)}</span>
+                </button>
+                {group.unread > 0 && <button className="inbox-group-read" onClick={() => markGroupRead(group.items)}>
+                  {t(lang, "inboxMarkAll")}
+                </button>}
+              </div>
+              {group.attention > 0 && <p className="inbox-group-attention">{t(lang, "inboxAttentionCount", { n: group.attention })}</p>}
+              {!open && <p className="inbox-group-preview">
+                <span className={`inbox-level ${latest.level}`}>{t(lang, `inboxLevel.${latest.level}`)}</span>{" "}
+                {inboxSourceName(latest) && <span className="inbox-worktree-preview">{inboxSourceName(latest)} · </span>}
+                {latest.title}
+                {group.visibleItems.length > 1 && <span> · {t(lang, "inboxMore", { n: group.visibleItems.length - 1 })}</span>}
+              </p>}
+              <ul className="inbox-list" id={`inbox-group-${encodeURIComponent(group.key)}`} hidden={!open}>
+                {group.visibleItems.map((it) => {
+                  const src = TARGET_LABEL[it.target.kind];
+                  const sourceName = inboxSourceName(it);
+                  return (
+                    <li key={it.id} className={it.read ? "inbox-item read" : "inbox-item"}>
+                      <div className="inbox-item-content">
+                        <div className="inbox-item-meta">
+                          <span className="inbox-row1">
+                            <span className="inbox-dot">{it.read ? "" : "●"}</span>
+                            <span className="inbox-src">
+                              {sourceName && <span className="inbox-worktree" title={sourceName}>{sourceName}</span>}
+                              {src && <span className="inbox-app">{src}</span>}
+                            </span>
+                            <span className="inbox-age">{formatAge(it.createdMs, lang)}</span>
+                          </span>
+                        </div>
+                        <div className="inbox-chat">
+                          {it.prompt && <details className="inbox-prompt">
+                            <summary>
+                              <span>{t(lang, "inboxPrompt")}</span>
+                              <span className="inbox-prompt-snippet">{it.prompt}</span>
+                            </summary>
+                            <pre>{it.prompt}</pre>
+                          </details>}
+                          <div className="inbox-response">
+                          <button className="inbox-main" onClick={() => land(it)}>
+                            <span className="inbox-response-label">{t(lang, "inboxResponse")}</span>
+                            <span className="inbox-title-row">
+                              <span className={`inbox-level ${it.level}`}>
+                                <Icon d={LEVEL_ICON[it.level]} size={11} />
+                                {t(lang, `inboxLevel.${it.level}`)}
+                              </span>
+                              <span className="inbox-title">{it.title}</span>
+                            </span>
+                            {it.body && <span className="inbox-body">{it.body}</span>}
+                          </button>
+                          {it.level === "waiting" && (it.questions?.length ? (
+                            <details className="inbox-questions">
+                              <summary>{t(lang, "inboxQuestionPreview", { n: it.questions.length })}</summary>
+                              {it.questions.map((question, index) => <div className="inbox-question" key={index}>
+                                <p className="inbox-question-text">{question.question}</p>
+                                {question.options.length > 0 && <p className="inbox-question-hint">{t(lang, question.multiSelect ? "inboxMultipleChoices" : "inboxSingleChoice")}</p>}
+                                {question.options.length > 0 ? <ol>
+                                  {question.options.map((option, optionIndex) => <li key={optionIndex}>
+                                    <strong>{option.label}</strong>
+                                    {option.description && <p>{option.description}</p>}
+                                  </li>)}
+                                </ol> : <p className="inbox-question-hint">{t(lang, "inboxFreeText")}</p>}
+                            </div>)}
+                            <button className="inbox-question-open" onClick={() => land(it)}>{t(lang, "inboxAnswerInSession")}</button>
+                          </details>
+                        ) : <p className="inbox-question-unavailable">{t(lang, "inboxQuestionsUnavailable")}</p>)}
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        className="inbox-x"
+                        title={t(lang, "inboxRemove")}
+                        onClick={() => invoke("inbox_remove", { id: it.id }).then(load)}
+                      >
+                        ×
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
           );
         })}
-      </ul>
+      </div>
     </main>
   );
 }
@@ -3062,6 +3206,10 @@ function HistoryView() {
       .then((s) => setLang(resolveLang(s.language)))
       .catch(() => {});
     invoke("track_event", { event: "history_opened" }).catch(() => {});
+    const unlisten = listen("settings-changed", () => {
+      invoke<Settings>("get_settings").then((settings) => setLang(resolveLang(settings.language))).catch(() => {});
+    });
+    return () => { unlisten.then((stop) => stop()).catch(() => {}); };
   }, []);
 
   const load = useCallback(() => {
@@ -3094,8 +3242,8 @@ function HistoryView() {
   const active = stats.filter((s) => s.days.length > 0);
 
   return (
-    <main className="container win-framed">
-      <div className="win-titlebar-bg" />
+    <main className="container history-window">
+      <header><h1>{t(lang, "history")}</h1></header>
       <div className="period-bar">
         <span className="period-label">{t(lang, "period")}</span>
         <select
@@ -3111,7 +3259,7 @@ function HistoryView() {
         </select>
       </div>
 
-      {loading && (
+      {loading && stats.length === 0 && (
         <>
           <StatsCardSkeleton />
           <StatsCardSkeleton />
@@ -3121,20 +3269,92 @@ function HistoryView() {
         <p className="muted">{t(lang, "noHistory")}</p>
       )}
 
-      {!loading &&
-        active.map((s) => <StatsCard key={s.tool} s={s} lang={lang} />)}
+      {active.map((s) => <StatsCard key={s.tool} s={s} lang={lang} />)}
     </main>
+  );
+}
+
+type WorkspacePage = "dashboard" | "history" | "inbox" | "settings";
+const WORKSPACE_PAGES: WorkspacePage[] = ["dashboard", "history", "inbox", "settings"];
+
+function Workspace() {
+  const [page, setPage] = useState<WorkspacePage>("dashboard");
+  const [visited, setVisited] = useState<Set<WorkspacePage>>(() => new Set(["dashboard"]));
+  const [lang, setLang] = useState<Lang>(resolveLang(null));
+  const [unread, setUnread] = useState(0);
+  const current = useRef<WorkspacePage>("dashboard");
+  const positions = useRef<Partial<Record<WorkspacePage, number>>>({});
+
+  const selectPage = useCallback((next: WorkspacePage) => {
+    if (!WORKSPACE_PAGES.includes(next) || current.current === next) return;
+    positions.current[current.current] = window.scrollY;
+    current.current = next;
+    setVisited((previous) => new Set([...previous, next]));
+    setPage(next);
+  }, []);
+
+  useLayoutEffect(() => {
+    window.scrollTo({ top: positions.current[page] ?? 0, behavior: "instant" });
+  }, [page]);
+
+  useEffect(() => {
+    let alive = true;
+    const reloadLanguage = () => invoke<Settings>("get_settings")
+      .then((settings) => { if (alive) setLang(resolveLang(settings.language)); }).catch(() => {});
+    reloadLanguage();
+    invoke<InboxItem[]>("get_inbox")
+      .then((items) => { if (alive) setUnread(items.filter((item) => !item.read).length); }).catch(() => {});
+    const navigation = listen<WorkspacePage>("workspace-navigate", ({ payload }) => selectPage(payload));
+    navigation.then(() => invoke<WorkspacePage>("get_workspace_page"))
+      .then((initial) => { if (alive) selectPage(initial); }).catch(() => {});
+    const listeners = [navigation,
+      listen<number>("inbox-changed", ({ payload }) => setUnread(payload)),
+      listen("settings-changed", reloadLanguage),
+    ];
+    return () => {
+      alive = false;
+      listeners.forEach((listener) => listener.then((stop) => stop()).catch(() => {}));
+    };
+  }, [selectPage]);
+
+  function navigate(next: WorkspacePage) {
+    selectPage(next);
+    invoke("navigate_workspace", { page: next }).catch(() => {});
+  }
+
+  return (
+    <div className="workspace">
+      <aside className="workspace-sidebar">
+        <div className="workspace-brand">Token Runway</div>
+        <nav aria-label={t(lang, "workspaceNav")}>
+          {WORKSPACE_PAGES.map((item) => <button key={item}
+            aria-current={page === item ? "page" : undefined}
+            onClick={() => navigate(item)}>
+            <Icon d={ICONS[item]} size={17} />
+            <span>{t(lang, item === "dashboard" ? "notch.dashboard" : item)}</span>
+            {item === "inbox" && unread > 0 && <span className="workspace-unread">{unread}</span>}
+          </button>)}
+        </nav>
+      </aside>
+      <div className="workspace-content">
+        {WORKSPACE_PAGES.map((item) => visited.has(item) && <section key={item}
+          className="workspace-panel" hidden={page !== item}
+          aria-label={t(lang, item === "dashboard" ? "notch.dashboard" : item)}>
+          {item === "dashboard" && <Dashboard />}
+          {item === "history" && <HistoryView />}
+          {item === "inbox" && <InboxView active={page === "inbox"} />}
+          {item === "settings" && <SettingsView />}
+        </section>)}
+      </div>
+    </div>
   );
 }
 
 function App() {
   const label = getCurrentWindow().label;
-  if (label === "settings") return <SettingsView />;
-  if (label === "history") return <HistoryView />;
-  if (label === "inbox") return <InboxView />;
   if (label === "pet") return <PetOverlay />;
   if (label === "notch") return <NotchView />;
-  return <Dashboard />;
+  return <Workspace />;
 }
 
 export default App;

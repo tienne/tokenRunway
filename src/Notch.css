@@ -1,17 +1,19 @@
-/* 색은 coucou 노치 섬 톤을 따른다 — 순검정 섬 위에 살짝 뜬 카드(#141518), 그 안의 알약(#0e0f11).
-   보조 글자(#8e939c)와 흐린 글자(#7c818a)는 카드 위 대비 5.9:1, 4.7:1로 AA를 넘긴다.
-   coucou의 #6b7079는 3.7:1이라 쓰지 않는다. */
 .notch-root {
-  --card: #141518;
-  --card-line: rgba(255, 255, 255, 0.035);
-  --pill: #0e0f11;
-  --fg: #f5f6f8;
-  --fg-2: #c5c8cd;
-  --sub: #8e939c;
-  --muted: #7c818a;
-  --track: rgba(255, 255, 255, 0.08);
-  --hover: rgba(255, 255, 255, 0.05);
-  --danger: #ff453a;
+  --card: #262626;
+  --card-line: #ffffff12;
+  --pill: #1e1e1e;
+  --fg: #f0f0f0;
+  --fg-2: #d0d0d0;
+  --sub: #acacac;
+  --muted: #999999;
+  --track: #ffffff12;
+  --hover: rgba(255, 255, 255, 0.04);
+  --danger: #e09b94;
+  --good: #6fca91;
+  --good-fill: #45ab76;
+  --warn: #e6b765;
+  --teal: #58b6c9;
+  --failed: #c7a0de;
 
   position: fixed;
   inset: 0;
@@ -74,18 +76,15 @@
 }
 
 .notch-activity.working {
-  color: #64d2ff;
+  color: var(--teal);
 }
 
 .notch-activity.justDone {
-  color: #30d158;
+  color: var(--good);
 }
 
-/* 입력 대기는 systemYellow(#ffd60a, 검정 대비 14.9:1). 위험 색(#ff453a)을 쓰면 잔여율 경고로
-   읽히고, 작업 중(#64d2ff)과는 밝기가 비슷해 색만으론 안 갈리니 속 빈 고리를 앞에 붙인다.
-   세션 목록 점과 같은 모양이다. */
 .notch-activity.waiting {
-  color: #ffd60a;
+  color: var(--warn);
 }
 
 .notch-activity.waiting::before {
@@ -104,7 +103,7 @@
   content: "";
   width: 6px;
   height: 6px;
-  border: 1.5px solid #8e8e93;
+  border: 1.5px solid var(--sub);
   border-radius: 50%;
   flex: none;
 }
@@ -239,7 +238,7 @@
   padding: 14px 16px 15px;
   background: var(--card);
   border: 1px solid var(--card-line);
-  border-radius: 16px;
+  border-radius: 8px;
 }
 
 /* 위험한 도구 카드만 아래쪽에 붉은 기운을 깐다. 색 자체는 경고 몫이라 다른 상태엔 안 쓴다. */
@@ -247,8 +246,8 @@
   background:
     radial-gradient(
       ellipse 70% 90% at 50% 130%,
-      rgba(255, 69, 58, 0.2),
-      rgba(255, 69, 58, 0) 70%
+      rgba(224, 155, 148, 0.14),
+      rgba(224, 155, 148, 0) 70%
     ),
     var(--card);
 }
@@ -309,7 +308,6 @@
   font-weight: 500;
 }
 
-/* #ff453a는 카드(#141518) 위 대비 5.4:1 — WCAG AA(4.5:1)를 넘는다. */
 .notch-card.danger .notch-card-pct strong {
   color: var(--danger);
 }
@@ -416,7 +414,7 @@
 }
 
 .notch-acct.active .notch-acct-name::before {
-  background: #30d158;
+  background: var(--good);
 }
 
 .notch-acct-pct {
@@ -470,7 +468,7 @@
   padding: 12px 10px 10px;
   background: var(--card);
   border: 1px solid var(--card-line);
-  border-radius: 16px;
+  border-radius: 8px;
 }
 
 .notch-sessions:empty {
@@ -524,13 +522,13 @@
   order: -1;
   flex-basis: 100%;
   background: rgba(48, 209, 88, 0.16);
-  color: #30d158;
+  color: var(--good);
 }
 
 .notch-actions button.notch-update:hover,
 .notch-actions button.notch-update:focus-visible {
   background: rgba(48, 209, 88, 0.24);
-  color: #30d158;
+  color: var(--good);
 }
 
 .notch-actions button.notch-update:disabled {
@@ -546,10 +544,11 @@
   min-width: 16px;
   padding: 0 4px;
   border-radius: 8px;
-  background: var(--danger);
-  color: #000;
+  background: var(--pill);
+  color: var(--fg-2);
+  border: 1px solid var(--card-line);
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 500;
   line-height: 16px;
   font-variant-numeric: tabular-nums;
 }

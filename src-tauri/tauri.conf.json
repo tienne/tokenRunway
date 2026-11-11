@@ -15,14 +15,17 @@
       {
         "title": "Token Runway",
         "label": "main",
-        "width": 360,
-        "height": 520,
-        "resizable": false,
-        "decorations": false,
+        "width": 960,
+        "height": 720,
+        "resizable": true,
+        "decorations": true,
         "transparent": false,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "visible": false
+        "alwaysOnTop": false,
+        "skipTaskbar": false,
+        "visible": false,
+        "minWidth": 720,
+        "minHeight": 480,
+        "center": true
       }
     ],
     "security": {

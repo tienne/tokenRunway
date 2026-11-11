@@ -11,6 +11,7 @@
     "tauri": "tauri",
     "build:trw": "bash scripts/build-trw.sh",
     "build:trw:dev": "bash scripts/build-trw.sh --debug",
+    "test:inbox": "node --test scripts/test-inbox.mjs",
     "check:i18n": "node scripts/check-i18n.mjs"
   },
   "dependencies": {

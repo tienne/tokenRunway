@@ -18,7 +18,7 @@ mod update;
 
 use settings::Settings;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use providers::antigravity::AntigravityProvider;
 use providers::claude_code::ClaudeCodeProvider;
@@ -36,7 +36,6 @@ use tauri::{
     AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_notification::NotificationExt;
-use tauri_plugin_positioner::{Position, WindowExt};
 
 /// 백그라운드 경보 체크 주기.
 const ALERT_CHECK_SECS: u64 = 60;
@@ -757,10 +756,10 @@ async fn delete_pet_bundle(id: String) -> Result<(), String> {
         .map_err(|e| e.to_string())?
 }
 
-/// 데스크톱 pet 클릭 시 메인 팝오버를 연다.
+/// 데스크톱 pet 클릭 시 통합 창의 대시보드를 연다.
 #[tauri::command]
 fn open_main_window(app: AppHandle) {
-    toggle_popover(&app, true, false);
+    open_workspace(&app, WorkspacePage::Dashboard);
 }
 
 /// 설정 창의 "업데이트 확인". 노치가 주 화면에 뜨면 트레이 메뉴가 사라지니 같은 일을
@@ -954,39 +953,45 @@ fn save_pet_position(app: &AppHandle) {
     settings::set(s);
 }
 
-/// 창을 닫을 때 파괴하지 않고 숨긴다 — 재오픈 시 웹뷰 재부팅(OS 로딩) 회피.
-fn hide_on_close(win: &tauri::WebviewWindow) {
-    let w = win.clone();
-    win.on_window_event(move |event| {
-        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-            api.prevent_close();
-            let _ = w.hide();
-        }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum WorkspacePage {
+    Dashboard,
+    History,
+    Inbox,
+    Settings,
+}
+
+static WORKSPACE_PAGE: Mutex<WorkspacePage> = Mutex::new(WorkspacePage::Dashboard);
+
+#[tauri::command]
+fn get_workspace_page() -> WorkspacePage {
+    WORKSPACE_PAGE.lock().map(|page| *page).unwrap_or(WorkspacePage::Dashboard)
+}
+
+fn open_workspace(app: &AppHandle, page: WorkspacePage) {
+    if let Ok(mut current) = WORKSPACE_PAGE.lock() { *current = page; }
+    let Some(win) = app.get_webview_window("main") else { return; };
+    let _ = win.emit("workspace-navigate", page);
+    match page {
+        WorkspacePage::History => { let _ = win.emit("history-refresh", ()); }
+        WorkspacePage::Inbox => { let _ = win.emit("inbox-refresh", ()); }
+        _ => {}
+    }
+    let _ = app.run_on_main_thread(move || {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
     });
 }
 
-/// 설정 창을 열거나 포커스. 같은 프론트(label로 화면 분기)를 일반 창으로 띄운다.
+#[tauri::command]
+fn navigate_workspace(app: AppHandle, page: WorkspacePage) {
+    open_workspace(&app, page);
+}
+
 fn open_settings(app: &AppHandle) {
-    if let Some(win) = app.get_webview_window("settings") {
-        reveal_beside_notch(app, win);
-        // 창을 닫아도 파괴하지 않고 숨기므로 프론트가 재마운트되지 않는다 — 그동안
-        // pet 우클릭 메뉴 등에서 바뀐 값을 다시 읽도록 알려준다.
-        let _ = app.emit("settings-changed", ());
-        return;
-    }
-    if let Ok(win) =
-        WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
-            .title(i18n::current().settings_title())
-            .inner_size(420.0, 640.0)
-            .min_inner_size(420.0, 480.0)
-            .resizable(true)
-            .title_bar_style(tauri::TitleBarStyle::Visible)
-            .visible(false)
-            .build()
-    {
-        hide_on_close(&win);
-        reveal_beside_notch(app, win);
-    }
+    open_workspace(app, WorkspacePage::Settings);
 }
 
 #[tauri::command]
@@ -994,25 +999,8 @@ fn open_settings_window(app: AppHandle) {
     open_settings(&app);
 }
 
-/// 히스토리 창을 열거나 포커스.
 fn open_history(app: &AppHandle) {
-    if let Some(win) = app.get_webview_window("history") {
-        let _ = win.emit("history-refresh", ());
-        reveal_beside_notch(app, win);
-        return;
-    }
-    if let Ok(win) = WebviewWindowBuilder::new(app, "history", WebviewUrl::App("index.html".into()))
-        .title(i18n::current().history_title())
-        .inner_size(460.0, 600.0)
-        .min_inner_size(420.0, 480.0)
-        .resizable(true)
-        .title_bar_style(tauri::TitleBarStyle::Visible)
-        .visible(false)
-        .build()
-    {
-        hide_on_close(&win);
-        reveal_beside_notch(app, win);
-    }
+    open_workspace(app, WorkspacePage::History);
 }
 
 #[tauri::command]
@@ -1084,25 +1072,8 @@ fn completion_quiet_now() -> bool {
     settings::completion_alerts_quiet() && is_quiet_now()
 }
 
-/// 알림함 창을 열거나 앞으로 가져온다.
 fn open_inbox(app: &AppHandle) {
-    if let Some(win) = app.get_webview_window("inbox") {
-        let _ = win.emit("inbox-refresh", ());
-        reveal_beside_notch(app, win);
-        return;
-    }
-    if let Ok(win) = WebviewWindowBuilder::new(app, "inbox", WebviewUrl::App("index.html".into()))
-        .title(i18n::current().inbox_title())
-        .inner_size(420.0, 560.0)
-        .min_inner_size(380.0, 400.0)
-        .resizable(true)
-        .title_bar_style(tauri::TitleBarStyle::Visible)
-        .visible(false)
-        .build()
-    {
-        hide_on_close(&win);
-        reveal_beside_notch(app, win);
-    }
+    open_workspace(app, WorkspacePage::Inbox);
 }
 
 #[tauri::command]
@@ -1111,8 +1082,10 @@ fn open_inbox_window(app: AppHandle) {
 }
 
 #[tauri::command]
-fn get_inbox() -> Vec<inbox::InboxItem> {
-    inbox::all()
+async fn get_inbox() -> Result<Vec<inbox::InboxItem>, String> {
+    tauri::async_runtime::spawn_blocking(inbox::all)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// 항목을 눌렀을 때 — 읽음으로 바꾸고 원래 세션으로 보낸다.
@@ -1133,6 +1106,12 @@ async fn inbox_land(id: String) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     refresh_inbox_badge();
     res
+}
+
+#[tauri::command]
+fn inbox_mark_read(ids: Vec<String>) {
+    inbox::mark_read_ids(&ids);
+    refresh_inbox_badge();
 }
 
 #[tauri::command]
@@ -1267,13 +1246,6 @@ fn refresh_localized_ui(app: &AppHandle) {
             if let Some(tray) = app.tray_by_id("main") {
                 let _ = tray.set_menu(Some(menu));
             }
-        }
-        if let Some(win) = app.get_webview_window("settings") {
-            let _ = win.set_title(i18n::current().settings_title());
-        }
-        // 알림함도 숨겨두고 재사용하므로 언어를 바꾸면 제목이 예전 언어로 남는다.
-        if let Some(win) = app.get_webview_window("inbox") {
-            let _ = win.set_title(i18n::current().inbox_title());
         }
     });
 }
@@ -1826,11 +1798,14 @@ pub fn run() {
             import_pet_bundle,
             delete_pet_bundle,
             open_main_window,
+            get_workspace_page,
+            navigate_workspace,
             show_pet_context_menu,
             open_inbox_window,
             get_inbox,
             inbox_land,
             inbox_mark_all_read,
+            inbox_mark_read,
             inbox_remove,
             inbox_clear,
             install_trw,
@@ -1899,7 +1874,7 @@ pub fn run() {
                 });
             }
         })
-        // 팝오버 UX는 main 창에만 적용 (설정 창은 일반 창으로 동작).
+        // 창을 닫아도 모니터링과 수신은 계속한다.
         .on_window_event(|window, event| {
             if window.label() != "main" {
                 return;
@@ -1907,9 +1882,6 @@ pub fn run() {
             match event {
                 WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
-                    let _ = window.hide();
-                }
-                WindowEvent::Focused(false) => {
                     let _ = window.hide();
                 }
                 _ => {}
@@ -1940,14 +1912,14 @@ pub fn run() {
                 .icon_as_template(true)
                 .tooltip("Token Runway")
                 .menu(&menu)
-                // 좌클릭은 메뉴 대신 팝오버 토글에 쓴다.
+                // 좌클릭은 메뉴 대신 대시보드를 연다.
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => {
                         save_pet_position(app);
                         app.exit(0);
                     }
-                    "show" => toggle_popover(app, true, true),
+                    "show" => open_workspace(app, WorkspacePage::Dashboard),
                     "settings" => open_settings(app),
                     "history" => open_history(app),
                     "inbox" => open_inbox(app),
@@ -1964,7 +1936,7 @@ pub fn run() {
                         ..
                     } = event
                     {
-                        toggle_popover(app, false, true);
+                        open_workspace(app, WorkspacePage::Dashboard);
                     }
                 })
                 .build(app)?;
@@ -2001,43 +1973,9 @@ pub fn run() {
         // 트레이 "종료" 외의 경로(⌘Q·로그아웃·업데이트 재시작)로 끝날 때도 위치를 남긴다.
         .run(|app, event| match event {
             tauri::RunEvent::ExitRequested { .. } => save_pet_position(app),
-            // Dock 아이콘 클릭. 팝오버는 트레이 좌표에 붙어 Dock에서 열면 위치가
-            // 어긋나므로, 배지를 보고 누른 흐름에 맞춰 알림함을 띄운다.
-            tauri::RunEvent::Reopen { .. } => open_inbox(app),
+            tauri::RunEvent::Reopen { .. } => open_workspace(app, get_workspace_page()),
             _ => {}
         });
-}
-
-/// 팝오버를 열거나 닫는다. `force_show`면 열려 있어도 닫지 않는다. 트레이에서 열면 아이콘 아래, 노치나 pet에서 열면 노치 옆에
-/// 붙인다 — 노치가 주 화면에 있으면 트레이가 숨어 있어 아이콘 좌표가 없다.
-fn toggle_popover(app: &AppHandle, force_show: bool, from_tray: bool) {
-    let Some(win) = app.get_webview_window("main") else {
-        return;
-    };
-    let visible = win.is_visible().unwrap_or(false);
-    if visible && !force_show {
-        let _ = win.hide();
-        return;
-    }
-    let _ = app.run_on_main_thread(move || {
-        if from_tray || !notch::place_beside(&win) {
-            let _ = win.move_window(Position::TrayBottomCenter);
-        }
-        let _ = win.show();
-        let _ = win.set_focus();
-    });
-}
-
-/// 일반 창을 노치 옆에 띄운다. 이미 떠 있으면 사용자가 옮겨둔 자리를 존중해 앞으로만
-/// 가져온다. 노치가 없으면 원래 자리(처음엔 macOS 기본 위치)에 그대로 띄운다.
-fn reveal_beside_notch(app: &AppHandle, win: tauri::WebviewWindow) {
-    let _ = app.run_on_main_thread(move || {
-        if !win.is_visible().unwrap_or(false) {
-            notch::place_beside(&win);
-        }
-        let _ = win.show();
-        let _ = win.set_focus();
-    });
 }
 
 #[cfg(test)]

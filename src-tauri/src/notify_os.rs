@@ -29,7 +29,9 @@ pub fn init(bundle_id: &str) {
 /// OS 알림엔 색이 없어 막힘과 실패만 표시를 붙인다. 완료는 평소 상태라 제목만으로 충분하다.
 fn level_prefix(level: Level) -> Option<&'static str> {
     match level {
-        Level::Done => None,
+        Level::Done | Level::TurnEnd => None,
+        Level::Waiting => Some("💬"),
+        Level::Interrupted => Some("⏹"),
         Level::Blocked => Some("⏸"),
         Level::Failed => Some("⚠️"),
     }

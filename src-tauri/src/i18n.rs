@@ -40,12 +40,7 @@ impl Lang {
             Lang::En => "Quit",
         }
     }
-    pub fn settings_title(self) -> &'static str {
-        match self {
-            Lang::Ko => "Token Runway 설정",
-            Lang::En => "Token Runway Settings",
-        }
-    }
+
     pub fn menu_history(self) -> &'static str {
         match self {
             Lang::Ko => "히스토리...",
@@ -126,18 +121,7 @@ impl Lang {
             Lang::En => "Update check failed — check your network.",
         }
     }
-    pub fn history_title(self) -> &'static str {
-        match self {
-            Lang::Ko => "Token Runway 히스토리",
-            Lang::En => "Token Runway History",
-        }
-    }
-    pub fn inbox_title(self) -> &'static str {
-        match self {
-            Lang::Ko => "알림",
-            Lang::En => "Notifications",
-        }
-    }
+
     /// 트레이 메뉴의 알림 항목 — 읽지 않은 게 있으면 개수를 붙인다.
     pub fn menu_inbox(self, unread: usize) -> String {
         match (self, unread) {

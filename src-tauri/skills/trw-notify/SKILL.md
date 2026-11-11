@@ -21,7 +21,9 @@ description: >-
 - 사용자가 자리를 비운 사이 몇 분 이상 돌던 작업이 끝났을 때
 - 모니터링이나 폴링 루프에서 기다리던 조건이 충족돼 후속 작업까지 마쳤을 때
 - 사용자가 "끝나면 알려줘"라고 미리 말해둔 작업이 끝났을 때
-- 사람 손이 필요해 멈췄을 때 (`--level blocked`)
+- 사용자의 답변을 기다릴 때 (`--level waiting`)
+- 권한 승인 등으로 진행이 막혔을 때 (`--level blocked`)
+- 작업을 중단했음을 알려야 할 때 (`--level interrupted`)
 - 실패로 끝나 사용자가 알아야 할 때 (`--level failed`)
 
 ## 언제 부르지 않는가
@@ -56,15 +58,26 @@ trw notify "프로덕션 배포 승인 대기" --level blocked --body "스테이
 trw notify "E2E 3건 실패" --level failed --body "결제 플로우 타임아웃 — 로그는 e2e/out/에"
 ```
 
+질문과 선택지를 알림함에서 미리 보게 하려면 다음처럼 보낸다. 미리보기는 읽기 전용이며 답변은 원래 세션에서 한다.
+
+```bash
+trw notify "배포 환경 확인이 필요해요" --level waiting --question "어느 환경에 배포할까요?" --option "스테이징" --option "프로덕션"
+```
+
 ### 옵션
 
 | 옵션 | 뜻 |
 |---|---|
 | `--body <문구>` | 알림 본문. 돌아와서 볼 내용 |
-| `--level done\|blocked\|failed` | 기본 `done` |
+| `--prompt <요청>` | 알림을 만든 턴의 사용자 요청 원문. Orca 채팅은 현재 세션에서 자동 첨부하고, 그 외에는 연결된 훅을 사용 |
+| `--question <질문>` | `--level waiting`과 함께 질문 원문을 전달 |
+| `--option <선택지>` | 질문의 선택지. 여러 번 지정 가능 |
+| `--level done\|waiting\|blocked\|interrupted\|failed\|turnEnd` | 작업 완료·답변 대기·진행 대기·중단·실패·응답 종료. 기본 `done` |
 | `--context <라벨>` | 알림함 리스트에 뜰 출처. 생략하면 워크트리 이름이 들어간다 |
 | `--no-target` | 랜딩 정보를 붙이지 않는다 (눌러도 이동하지 않음) |
 | `--strict` | 전달 실패를 종료 코드 1로 알린다 (기본은 항상 0) |
+
+`Stop` 훅은 한 턴의 응답이 끝났다는 뜻이라 `turnEnd`로 기록한다. 실제 작업 완료를 알릴 때만 `done`을 쓴다.
 
 ### 랜딩은 알아서 붙는다
 

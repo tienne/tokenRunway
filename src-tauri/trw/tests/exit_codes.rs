@@ -54,6 +54,7 @@ fn run(home: &Path, args: &[&str], stdin: Vec<u8>) -> (i32, Vec<u8>) {
         .env_remove("CLAUDE_CODE_SESSION_ID")
         .env_remove("CLAUDE_CONFIG_DIR")
         .env_remove("CODEX_HOME")
+        .env_remove("CODEX_THREAD_ID")
         .current_dir(home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -239,4 +240,114 @@ fn hook_claude_exits_zero_when_write_fails() {
     let (code, stdout) = run(&home.0, &["hook", "claude", "UserPromptSubmit"], input);
     assert_eq!(code, 0);
     assert!(stdout.is_empty());
+}
+
+#[test]
+fn hook_notices_are_typed_quiet_and_replace_the_same_session_spool() {
+    let home = TempHome::new(true);
+    for (tool, event, kind, expected) in [
+        ("claude", "Notification", "agent_needs_input", "waiting"),
+        ("claude", "Notification", "permission_prompt", "blocked"),
+        ("claude", "StopFailure", "", "failed"),
+        ("codex", "Interrupt", "", "interrupted"),
+        ("codex", "Stop", "", "turnEnd"),
+    ] {
+        let input = serde_json::json!({"session_id":"typed-test", "notification_type":kind});
+        let (code, stdout) = run(&home.0, &["hook", tool, event], input.to_string().into_bytes());
+        assert_eq!(code, 0);
+        assert!(stdout.is_empty());
+        let path = home.app_dir().join("pending").join(format!("quiet-{tool}_typed-test.json"));
+        let payload: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(payload.get("status").unwrap_or(&payload["level"]), expected);
+        assert!(matches!(payload["level"].as_str(), Some("done" | "blocked" | "failed")));
+        assert_eq!(payload["quiet"], true);
+        assert_eq!(payload["key"], format!("{tool}:typed-test"));
+    }
+    assert_eq!(std::fs::read_dir(home.app_dir().join("pending")).unwrap().count(), 2);
+}
+
+#[test]
+fn notify_accepts_all_notification_types() {
+    for level in ["done", "waiting", "blocked", "interrupted", "failed", "turnEnd"] {
+        let home = TempHome::new(true);
+        let (code, _) = run(&home.0, &["notify", "상태 테스트", "--level", level, "--strict"], vec![]);
+        assert_eq!(code, 0, "{level}");
+        let path = std::fs::read_dir(home.app_dir().join("pending")).unwrap().next().unwrap().unwrap().path();
+        let raw = std::fs::read_to_string(path).unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(payload.get("status").unwrap_or(&payload["level"]), level);
+        match level {
+            "waiting" | "blocked" => assert_eq!(payload["level"], "blocked"),
+            "interrupted" | "failed" => assert_eq!(payload["level"], "failed"),
+            _ => assert_eq!(payload["level"], "done"),
+        }
+    }
+}
+
+#[test]
+fn asking_hook_delivers_question_options_and_descriptions() {
+    let home = TempHome::new(true);
+    let input = serde_json::json!({
+        "session_id":"question-test", "tool_name":"AskUserQuestion",
+        "tool_input":{"questions":[{
+            "question":"배포 환경은?", "multiSelect":true,
+            "options":[{"label":"스테이징", "description":"검증 환경"}, {"label":"프로덕션"}]
+        }]}
+    });
+    let (code, stdout) = run(&home.0, &["hook", "claude", "PreToolUse"], input.to_string().into_bytes());
+    assert_eq!(code, 0);
+    assert!(stdout.is_empty());
+    let path = home.app_dir().join("pending/quiet-claude_question-test.json");
+    let payload: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(payload["level"], "blocked");
+    assert_eq!(payload["status"], "waiting");
+    assert_eq!(payload["questions"][0]["options"][0]["description"], "검증 환경");
+    assert_eq!(payload["questions"][0]["multiSelect"], true);
+}
+
+#[test]
+fn notify_delivers_question_and_repeated_options() {
+    let home = TempHome::new(true);
+    let (code, _) = run(&home.0, &["notify", "질문", "--level", "waiting", "--question", "환경은?",
+        "--option", "스테이징", "--option", "프로덕션", "--strict"], vec![]);
+    assert_eq!(code, 0);
+    let path = std::fs::read_dir(home.app_dir().join("pending")).unwrap().next().unwrap().unwrap().path();
+    let payload: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(payload["questions"][0]["question"], "환경은?");
+    assert_eq!(payload["questions"][0]["options"].as_array().unwrap().len(), 2);
+    assert_eq!(run(&home.0, &["notify", "질문", "--option", "선택지", "--strict"], vec![]).0, 1);
+}
+
+#[test]
+fn prompt_context_is_scoped_to_session_and_updates_per_turn() {
+    let home = TempHome::new(true);
+    for tool in ["claude", "codex"] {
+        for prompt in ["최초 요청", "이번 턴의 요청\n원문 둘째 줄"] {
+            let input = serde_json::json!({"session_id":"prompt-test", "prompt":prompt});
+            assert_eq!(run(&home.0, &["hook", tool, "UserPromptSubmit"], input.to_string().into_bytes()).0, 0);
+            let stop = serde_json::json!({"session_id":"prompt-test"});
+            assert_eq!(run(&home.0, &["hook", tool, "Stop"], stop.to_string().into_bytes()).0, 0);
+            let path = home.app_dir().join("pending").join(format!("quiet-{tool}_prompt-test.json"));
+            let value: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            assert_eq!(value["prompt"], prompt);
+        }
+        let other = serde_json::json!({"session_id":"other-test"});
+        run(&home.0, &["hook", tool, "Stop"], other.to_string().into_bytes());
+        let path = home.app_dir().join("pending").join(format!("quiet-{tool}_other-test.json"));
+        let value: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert!(value["prompt"].is_null());
+    }
+    let end = serde_json::json!({"session_id":"prompt-test"});
+    run(&home.0, &["hook", "claude", "SessionEnd"], end.to_string().into_bytes());
+    assert!(!home.app_dir().join("notification-prompts/claude-prompt-test.json").exists());
+}
+
+#[test]
+fn explicit_notification_keeps_prompt_verbatim() {
+    let home = TempHome::new(true);
+    let prompt = "알림을 묶어줘\n<원문 그대로>";
+    assert_eq!(run(&home.0, &["notify", "완료", "--prompt", prompt, "--strict"], vec![]).0, 0);
+    let path = std::fs::read_dir(home.app_dir().join("pending")).unwrap().next().unwrap().unwrap().path();
+    let value: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(value["prompt"], prompt);
 }
