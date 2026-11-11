@@ -39,6 +39,34 @@ fn has_landing(target: &Target) -> bool {
     !matches!(target, Target::None)
 }
 
+/// 알림함과 무관한 알림 — 누르면 `on_click`을 부른다. 대기 자리가 없으면 클릭 없이 띄운다.
+pub fn show_clickable(title: String, body: String, on_click: impl FnOnce() + Send + 'static) {
+    let wait = WAITING.load(Ordering::Relaxed) < MAX_WAITING;
+    if wait {
+        WAITING.fetch_add(1, Ordering::Relaxed);
+    }
+    std::thread::spawn(move || {
+        let mut n = Notification::new();
+        n.title(&title);
+        n.message(&body);
+        n.default_sound();
+        if wait {
+            n.wait_for_click(true);
+        } else {
+            n.asynchronous(true);
+        }
+        let result = n.send();
+        if wait {
+            WAITING.fetch_sub(1, Ordering::Relaxed);
+        }
+        match result {
+            Ok(NotificationResponse::Click) | Ok(NotificationResponse::ActionButton(_)) => on_click(),
+            Err(e) => eprintln!("알림 발송 실패: {e}"),
+            _ => {}
+        }
+    });
+}
+
 /// 알림을 띄우고, 사용자가 누르면 읽음 처리 + 랜딩까지 한다.
 ///
 /// 클릭 대기가 블로킹이라 항상 별도 스레드에서 돈다. 호출자는 기다리지 않는다.
