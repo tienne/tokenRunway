@@ -58,6 +58,13 @@ impl Lang {
             Lang::En => "Check for Updates...",
         }
     }
+    /// 받을 버전이 있을 때 "업데이트 확인..." 자리에 대신 넣는다.
+    pub fn menu_install_update(self, version: &str) -> String {
+        match self {
+            Lang::Ko => format!("v{version} 설치..."),
+            Lang::En => format!("Install v{version}..."),
+        }
+    }
     pub fn menu_pet_hide(self) -> &'static str {
         match self {
             Lang::Ko => "펫 숨기기",
@@ -88,7 +95,7 @@ impl Lang {
             Lang::En => "Import from Folder...",
         }
     }
-    /// 시작 시 새 버전 감지 알림 제목 (뒤에 버전 붙임)
+    /// 새 버전 감지 알림 제목 (뒤에 버전 붙임)
     pub fn update_available_title(self) -> &'static str {
         match self {
             Lang::Ko => "새 버전 사용 가능",
@@ -97,8 +104,8 @@ impl Lang {
     }
     pub fn update_available_body(self) -> &'static str {
         match self {
-            Lang::Ko => "설정이나 트레이 메뉴의 '업데이트 확인'에서 설치하세요.",
-            Lang::En => "Install it from 'Check for Updates' in Settings or the tray menu.",
+            Lang::Ko => "누르면 설치하고 다시 시작해요.",
+            Lang::En => "Click to install and restart.",
         }
     }
     pub fn update_installing(self) -> &'static str {
