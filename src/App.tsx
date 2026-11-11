@@ -954,6 +954,7 @@ export interface Settings {
   hapticsEnabled: boolean;
   hapticsOnTurnEnd: boolean;
   codexAppServerFallback: boolean;
+  claudeCliRefresh: boolean;
   language: string | null;
   quietEnabled: boolean;
   quietStartHour: number;
@@ -1786,6 +1787,7 @@ function SettingsView() {
     hapticsEnabled: true,
     hapticsOnTurnEnd: true,
     codexAppServerFallback: true,
+    claudeCliRefresh: true,
     language: null,
     quietEnabled: false,
     quietStartHour: 22,
@@ -2073,6 +2075,18 @@ function SettingsView() {
         </label>
         {settings.codexAppServerFallback && (
           <p className="setting-hint">{tr("codexAppServerFallbackHint")}</p>
+        )}
+
+        <label className="setting-row toggle-row">
+          <span>{tr("claudeCliRefresh")}</span>
+          <input
+            type="checkbox"
+            checked={settings.claudeCliRefresh}
+            onChange={(e) => update({ claudeCliRefresh: e.target.checked })}
+          />
+        </label>
+        {settings.claudeCliRefresh && (
+          <p className="setting-hint">{tr("claudeCliRefreshHint")}</p>
         )}
 
         <label className="setting-row toggle-row">

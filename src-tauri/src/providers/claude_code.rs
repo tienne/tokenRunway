@@ -5,6 +5,7 @@
 //! 토큰을 추출해 시계열 샘플로 변환한다.
 
 use super::claude_accounts::{self, ClaudeAccount};
+use super::claude_cli_refresh;
 use super::last_usage;
 use super::representative;
 use super::{
@@ -290,16 +291,46 @@ fn refresh_stale(accounts: &[ClaudeAccount]) {
             .map(|acc| scope.spawn(move || (acc.id.clone(), fetch_official_usage(acc))))
             .collect();
         let mut observed = Vec::new();
-        for handle in handles {
+        for (acc, handle) in stale.iter().zip(handles) {
             if let Ok((id, (usage, error))) = handle.join() {
                 if let Some(u) = &usage {
                     observed.push((id.clone(), u.clone()));
+                }
+                if error == Some("error.expired") {
+                    request_cli_refresh(acc);
                 }
                 store_usage(&id, usage, error);
             }
         }
         last_usage::remember(TOOL_KEY, &observed, chrono::Utc::now().timestamp_millis());
     });
+}
+
+/// 토큰이 만료된 계정을 CLI에게 갱신시킨다. 우리가 refresh token을 쓰지 않는다.
+///
+/// 성공하면 계정 목록 캐시를 만료 처리하고 그 계정의 사용률 캐시를 지운다. 그래야
+/// 다음 폴링이 Keychain을 다시 읽어 새 토큰으로 묻는다. 목록을 비우지 않고 시각만
+/// 되돌리는 이유는 발견이 도는 동안에도 직전 목록으로 카드를 그리기 위해서다.
+fn request_cli_refresh(acc: &ClaudeAccount) {
+    let id = acc.id.clone();
+    claude_cli_refresh::request(
+        &acc.id,
+        &acc.cli_homes,
+        crate::settings::claude_cli_refresh(),
+        move || {
+            if let Ok(mut guard) = ACCOUNTS_CACHE.lock() {
+                if let Some((at, _)) = guard.as_mut() {
+                    match Instant::now().checked_sub(ACCOUNTS_CACHE_TTL) {
+                        Some(past) => *at = past,
+                        None => *guard = None,
+                    }
+                }
+            }
+            if let Ok(mut cache) = USAGE_CACHE.lock() {
+                cache.remove(&id);
+            }
+        },
+    );
 }
 
 /// 발견한 계정 목록 (짧은 캐시). Keychain 훑기는 폴링마다 할 만큼 싸지 않다.

@@ -135,6 +135,10 @@ pub struct Settings {
     /// 사용량 API가 토큰 만료(401)를 돌려준 Codex 계정만 `codex app-server`로 다시 묻는다.
     #[serde(default = "default_true")]
     pub codex_app_server_fallback: bool,
+    /// 사용량 API가 토큰 만료(401)를 돌려준 Claude 계정만 `claude -p /usage`로 CLI가
+    /// 토큰을 갱신하게 한다.
+    #[serde(default = "default_true")]
+    pub claude_cli_refresh: bool,
     /// 노치 양옆에 잔여율과 활동 상태를 띄울지. 숫자를 한눈에 보는 자리를 노치가 맡으므로
     /// 기본 켜짐이다 — 노치 없는 화면에서는 어차피 창을 만들지 않는다.
     #[serde(default = "default_true")]
@@ -200,6 +204,7 @@ impl Default for Settings {
             pet_last_y: None,
             pet_scale: 1.0,
             codex_app_server_fallback: true,
+            claude_cli_refresh: true,
             notch_enabled: true,
             tray_title_mode: TrayTitleMode::Auto,
             completion_alerts_enabled: default_completion_alerts(),
@@ -333,6 +338,13 @@ pub fn codex_app_server_fallback() -> bool {
     SETTINGS
         .lock()
         .map(|s| s.codex_app_server_fallback)
+        .unwrap_or(true)
+}
+
+pub fn claude_cli_refresh() -> bool {
+    SETTINGS
+        .lock()
+        .map(|s| s.claude_cli_refresh)
         .unwrap_or(true)
 }
 

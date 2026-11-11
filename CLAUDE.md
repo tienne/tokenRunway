@@ -29,6 +29,7 @@ src-tauri/src/
    ├ mod.rs         UsageProvider trait + 공용 타입 + find_recent_jsonl 헬퍼
    ├ claude_code.rs Keychain OAuth + ~/.claude JSONL
    ├ claude_accounts.rs Claude 계정 발견(Keychain 해시 규칙 + 오르카 저장소)
+   ├ claude_cli_refresh.rs 토큰 만료 계정을 `claude -p /usage`로 CLI가 갱신하게 함
    ├ last_usage.rs  계정별 마지막으로 받은 사용률 보관(last-usage.json)
    ├ codex.rs       ~/.codex JSONL (token_count + rate_limits)
    ├ gemini.rs      ~/.gemini 로그 요청 수
@@ -140,12 +141,33 @@ trait UsageProvider {
   - 사용률 180초 캐시는 계정별로 나눠 잡는다(`USAGE_CACHE`는 계정 id 맵). 계정 목록
     자체는 60초 캐시 — Keychain 훑기를 폴링마다 할 만큼 싸지 않다
   - **안 쓰는 계정은 몇 시간 뒤 401이 난다** — CLI가 그 계정 토큰을 갱신하지 않아서다.
+    그래서 두 겹으로 버틴다
     - **마지막 값 보관** (`last_usage.rs`) — 받은 사용률을 계정마다
       `~/.token-runway/last-usage.json`(키 `<도구>#<id>`, 30일 보관)에 남긴다. 401·429로
       못 받으면 이 값을 `AccountUsage.observed_at_ms`와 함께 흐리게 "N시간 전 값"으로
       띄운다. 리셋 시각이 지난 윈도우는 사용률 0으로 넘긴다(`roll_forward`). 이 값은
       대표 계정, 트레이, 경보, 사용률 이력, ETA 어디에도 안 들어간다 — 지금 값이 아니라서다.
       노치 `figureOf`의 폴백도 이 값은 건너뛴다
+    - **CLI 갱신** (`claude_cli_refresh.rs`, 설정 `claude_cli_refresh`, 기본 켜짐) — 401이
+      난 계정만 그 config dir로 `claude -p /usage`를 백그라운드에서 한 번 돌린다. CLI의
+      사용량 조회 경로가 만료 토큰을 먼저 갱신하고 Keychain에 다시 쓴다. 성공하면 계정
+      목록 캐시 시각을 되돌리고 그 계정 사용률 캐시를 지워 다음 폴링이 새 토큰으로 묻는다.
+      **우리는 refresh token을 쓰지 않는다** — CLI가 쥔 토큰과 어긋나지 않게
+      - 플래그: `--no-session-persistence`(없으면 `projects`에 세션 JSONL이 남아 활동
+        감지가 도는 세션으로 본다), `--settings '{"disableAllHooks":true}'`(우리 훅까지
+        상태 파일을 남긴다), `--strict-mcp-config`(MCP를 안 띄운다). **`--bare`는 못 쓴다** —
+        OAuth와 Keychain을 아예 안 읽어 갱신이 안 일어난다
+      - 환경: `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_OAUTH_TOKEN`,
+        `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`을 지운다(남으면 API 키 경로를 타거나
+        엉뚱한 계정을 갱신한다). 접미사 없는 레거시 Keychain 항목의 계정은
+        `CLAUDE_CONFIG_DIR`을 **아예 지운** 채로 띄운다 — `~/.claude`를 명시하면 CLI가 해시가
+        붙은 이름을 읽는다(`CliHome::Default`). 오르카 저장소에서만 찾은 계정은 config dir을
+        몰라 갱신하지 못한다
+      - 한 번에 하나만 돌고(`IN_FLIGHT`) 같은 계정은 30분 안에 다시 띄우지 않는다. 20초
+        안에 안 끝나면 죽인다. 출력은 버린다
+      - 실측: `/usage`는 모델을 부르지 않는다(`num_turns` 0, 비용 0, 10초 안팎). 갱신 경로는
+        CLI 2.1.322 코드로만 확인했다 — 확인할 때 만료된 계정이 없었다. 동시에 도는 세션과의
+        갱신 경합은 CLI가 자체 잠금 파일로 푼다(Codex처럼 도는 홈을 건너뛰지 않는 이유)
 
 ### Codex (`codex.rs`) — 정확, 더 쉬움
 - **시계열**: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, `event_msg`/`token_count`의

@@ -5,6 +5,7 @@
 
 pub mod antigravity;
 pub mod claude_accounts;
+pub mod claude_cli_refresh;
 pub mod claude_code;
 pub mod claude_relay;
 pub mod codex;
