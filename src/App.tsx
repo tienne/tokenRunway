@@ -2885,7 +2885,6 @@ function InboxView({ active = true }: { active?: boolean }) {
   // "3분 전" 표시를 살아 있게 하려고 주기적으로 다시 그린다.
   const [, setTick] = useState(0);
 
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [filter, setFilter] = useState<"all" | "unread" | "attention">("all");
   const [projectQuery, setProjectQuery] = useState("");
   const [activeProject, setActiveProject] = useState<string | null>(null);
@@ -2898,8 +2897,6 @@ function InboxView({ active = true }: { active?: boolean }) {
     try {
       const next = await invoke<InboxItem[]>("get_inbox");
       setItems(next);
-      setExpanded((previous) => Object.fromEntries(groupInbox(next, "").map((group) =>
-        [group.key, previous[group.key] ?? group.unread > 0])));
     } catch {
       /* noop */
     }
@@ -2987,7 +2984,7 @@ function InboxView({ active = true }: { active?: boolean }) {
       window.removeEventListener("scroll", schedule);
       window.removeEventListener("resize", schedule);
     };
-  }, [groupKeys, navigationHeight, expanded, active]);
+  }, [groupKeys, navigationHeight, active]);
 
   useEffect(() => {
     const shortcuts = shortcutsRef.current;
@@ -3002,7 +2999,6 @@ function InboxView({ active = true }: { active?: boolean }) {
   }, [activeProject, query, groupKeys]);
 
   function jumpToProject(key: string) {
-    setExpanded((previous) => ({ ...previous, [key]: true }));
     requestAnimationFrame(() => {
       const section = groupRefs.current.get(key);
       if (!section) return;
@@ -3091,36 +3087,26 @@ function InboxView({ active = true }: { active?: boolean }) {
       {items.length > 0 && visibleGroups.length === 0 && <p className="muted">{t(lang, "inboxNoMatch")}</p>}
       <div className="inbox-groups">
         {visibleGroups.map((group) => {
-          const open = expanded[group.key] ?? group.unread > 0;
-          const latest = group.visibleItems[0];
           return (
             <section className="inbox-group" key={group.key}
+              aria-labelledby={`inbox-project-${encodeURIComponent(group.key)}`}
               ref={(element) => {
                 if (element) groupRefs.current.set(group.key, element);
                 else groupRefs.current.delete(group.key);
               }}
               style={{ scrollMarginTop: navigationHeight + 6 }}>
               <div className="inbox-group-header" style={{ top: navigationHeight }}>
-                <button className="inbox-group-toggle" aria-expanded={open}
-                  aria-controls={`inbox-group-${encodeURIComponent(group.key)}`}
-                  onClick={() => setExpanded((previous) => ({ ...previous, [group.key]: !open }))}>
-                  <span className="inbox-chevron" aria-hidden="true">{open ? "▾" : "▸"}</span>
-                  <span className="inbox-group-label" title={group.path ?? group.label}>{group.label}</span>
+                <div className="inbox-group-heading">
+                  <h2 className="inbox-group-label" id={`inbox-project-${encodeURIComponent(group.key)}`} title={group.path ?? group.label}>{group.label}</h2>
                   {group.unread > 0 && <span className="inbox-group-unread">{t(lang, "inboxUnreadCount", { n: group.unread })}</span>}
                   <span className="inbox-age">{formatAge(group.items[0].createdMs, lang)}</span>
-                </button>
+                </div>
                 {group.unread > 0 && <button className="inbox-group-read" onClick={() => markGroupRead(group.items)}>
                   {t(lang, "inboxMarkAll")}
                 </button>}
               </div>
               {group.attention > 0 && <p className="inbox-group-attention">{t(lang, "inboxAttentionCount", { n: group.attention })}</p>}
-              {!open && <p className="inbox-group-preview">
-                <span className={`inbox-level ${latest.level}`}>{t(lang, `inboxLevel.${latest.level}`)}</span>{" "}
-                {inboxSourceName(latest) && <span className="inbox-worktree-preview">{inboxSourceName(latest)} · </span>}
-                {latest.title}
-                {group.visibleItems.length > 1 && <span> · {t(lang, "inboxMore", { n: group.visibleItems.length - 1 })}</span>}
-              </p>}
-              <ul className="inbox-list" id={`inbox-group-${encodeURIComponent(group.key)}`} hidden={!open}>
+              <ul className="inbox-list">
                 {group.visibleItems.map((it) => {
                   const src = TARGET_LABEL[it.target.kind];
                   const sourceName = inboxSourceName(it);
@@ -3129,7 +3115,7 @@ function InboxView({ active = true }: { active?: boolean }) {
                       <div className="inbox-item-content">
                         <div className="inbox-item-meta">
                           <span className="inbox-row1">
-                            <span className="inbox-dot">{it.read ? "" : "●"}</span>
+                            <span className="inbox-dot" aria-hidden="true">{it.read ? "○" : "●"}</span>
                             <span className="inbox-src">
                               {sourceName && <span className="inbox-worktree" title={sourceName}>{sourceName}</span>}
                               {src && <span className="inbox-app">{src}</span>}
@@ -3147,14 +3133,14 @@ function InboxView({ active = true }: { active?: boolean }) {
                           </details>}
                           <div className="inbox-response">
                           <button className="inbox-main" onClick={() => land(it)}>
-                            <span className="inbox-response-label">{t(lang, "inboxResponse")}</span>
-                            <span className="inbox-title-row">
+                            <span className="inbox-response-meta">
+                              <span className="inbox-response-label">{t(lang, "inboxResponse")}</span>
                               <span className={`inbox-level ${it.level}`}>
                                 <Icon d={LEVEL_ICON[it.level]} size={11} />
                                 {t(lang, `inboxLevel.${it.level}`)}
                               </span>
-                              <span className="inbox-title">{it.title}</span>
                             </span>
+                            <span className="inbox-title">{it.title}</span>
                             {it.body && <span className="inbox-body">{it.body}</span>}
                           </button>
                           {it.level === "waiting" && (it.questions?.length ? (

@@ -1385,6 +1385,28 @@ h1 {
 
 /* ─────────────────────────── 알림함 ─────────────────────────── */
 
+.inbox {
+  --inbox-group-bg: #f7f7f8;
+  --inbox-group-line: #d5d5d9;
+  --inbox-thread-bg: #ffffff;
+  --inbox-thread-line: #e1e1e4;
+  --inbox-request-bg: #f4f4f6;
+  --inbox-request-line: #dedee3;
+  --inbox-badge-bg: #e9e9ed;
+}
+
+@media (prefers-color-scheme: dark) {
+  .inbox {
+    --inbox-group-bg: #141414;
+    --inbox-group-line: #454545;
+    --inbox-thread-bg: #1b1b1b;
+    --inbox-thread-line: #333333;
+    --inbox-request-bg: #272727;
+    --inbox-request-line: #444444;
+    --inbox-badge-bg: #303030;
+  }
+}
+
 /* 팝오버 헤더의 벨 — 읽지 않은 개수를 아이콘 위에 겹친다 */
 .icon-btn.bell {
   position: relative;
@@ -1443,15 +1465,15 @@ h1 {
 .inbox-item {
   display: flex;
   align-items: stretch;
-  gap: 4px;
+  gap: 8px;
   border: none;
   border-radius: 0;
   background: transparent;
   box-shadow: none;
   overflow: visible;
 
-  border-bottom: 1px solid var(--line);
-  padding: 4px 0 0;
+  border-bottom: none;
+  padding: 16px 0 20px;
 }
 
 /* 읽은 항목은 남겨두되 눈에서 물러나게 — 안 읽은 게 먼저 보여야 한다 */
@@ -1466,7 +1488,7 @@ h1 {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 7px;
   padding: 9px 10px;
   border: none;
   background: none;
@@ -1483,14 +1505,15 @@ h1 {
 .inbox-row1 {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 7px;
   font-size: 11px;
   color: var(--sub);
+  line-height: 1.4;
 }
 
 .inbox-dot {
   width: 7px;
-  color: var(--sub);
+  color: var(--accent-text);
   font-size: 9px;
 }
 
@@ -1499,51 +1522,49 @@ h1 {
   align-items: center;
   gap: 3px;
   flex: none;
-  padding: 0;
+  padding: 3px 6px;
   border-radius: 5px;
-  background: none;
-  font-size: var(--text-meta);
+  background: var(--inbox-badge-bg);
+  font-size: 11px;
   font-weight: 600;
-  line-height: 1.2;
+  line-height: 1.3;
   white-space: nowrap;
+  border: 1px solid var(--inbox-thread-line);
 }
 
-.inbox-title-row {
-  display: flex;
-  align-items: baseline;
-  gap: 4px 8px;
 
-  flex-wrap: wrap;
-}
-
-.inbox-title-row .inbox-title {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
 
 .inbox-level.waiting {
-  color: var(--warn);
+  color: var(--accent-text);
+  border-color: var(--inbox-request-line);
+  background: var(--inbox-request-bg);
 }
 
 .inbox-level.interrupted {
-  color: var(--orange-text);
+  color: var(--accent-text);
+  border-color: var(--inbox-request-line);
+  background: var(--inbox-request-bg);
 }
 
 .inbox-level.turnEnd {
-  color: var(--sub);
+  color: var(--fg-2);
 }
 
 
 .inbox-level.done {
-  color: var(--good);
+  color: var(--fg-2);
 }
 
 .inbox-level.blocked {
-  color: var(--warn);
+  color: var(--accent-text);
+  border-color: var(--inbox-request-line);
+  background: var(--inbox-request-bg);
 }
 
 .inbox-level.failed {
-  color: var(--failed);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, var(--inbox-thread-bg));
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--inbox-thread-line));
 }
 
 
@@ -1574,22 +1595,19 @@ h1 {
 .inbox-app {
   flex-shrink: 0;
   color: var(--sub);
-  font-size: 10px;
+  font-size: 11px;
 }
 
-.inbox-worktree-preview {
-  color: var(--fg-2);
-  font-weight: 600;
-}
 
 .inbox-age {
   flex-shrink: 0;
 }
 
 .inbox-title {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 650;
-  line-height: 1.5;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
 }
 
 .inbox-body {
@@ -1713,91 +1731,82 @@ h1 {
 .inbox-groups {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 28px;
 }
 
 .inbox-group {
   min-width: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
 }
 
 .inbox-group-header {
   position: sticky;
   z-index: 2;
-  padding: 10px 0;
+  padding: 12px 0;
   background: var(--app-bg);
-  border-bottom: 1px solid var(--card-line);
+  border-bottom: 2px solid var(--inbox-group-line);
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 10px;
+  gap: 10px;
+  margin: 0 0 8px;
+  border-radius: 0;
 }
 
-.inbox-group-toggle {
+.inbox-group-heading {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
   flex: 1;
-  padding: 4px 0;
-  border: none;
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
+  flex-wrap: wrap;
 }
-.inbox-group-toggle .inbox-age {
+.inbox-group-heading .inbox-age {
   color: var(--sub);
-  font-size: 10px;
+  font-size: 11px;
 }
 
-.inbox-chevron {
-  width: 10px;
-  color: var(--sub);
-  flex-shrink: 0;
-}
 
 .inbox-group-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--text-section);
-  font-weight: 650;
+  font-size: 17px;
+  font-weight: 700;
   letter-spacing: -0.3px;
+  color: var(--accent-text);
+  margin: 0;
+  line-height: 1.4;
 }
 
 .inbox-group-unread {
-  color: var(--sub);
-  font-size: 10px;
+  color: var(--accent-text);
+  font-size: 11px;
   flex-shrink: 0;
+  font-weight: 600;
+  background: var(--inbox-badge-bg);
+  padding: 3px 7px;
+  border-radius: 5px;
 }
 
 .inbox-group-read {
   flex-shrink: 0;
 }
 
-.inbox-group-read:hover, .inbox-group-toggle:hover {
+.inbox-group-read:hover {
   background: var(--hover);
 }
 
 .inbox-group-attention {
-  margin: 0 0 6px 16px;
+  margin: 0 0 4px;
   font-size: 11px;
-  color: var(--warn);
+  color: var(--accent-text);
+  font-weight: 600;
 }
 
-.inbox-group-preview {
-  margin: 0 0 0 16px;
-  color: var(--sub);
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
-.inbox-list[hidden] {
-  display: none;
-}
 
 .inbox button:focus-visible {
   outline: 2px solid var(--sub);
@@ -1901,8 +1910,8 @@ html:has(.inbox) body::-webkit-scrollbar,
 }
 
 .inbox-questions {
-  margin: 0 10px 10px;
-  font-size: 11px;
+  margin: 12px 0 0;
+  font-size: 12px;
 }
 
 .inbox-questions summary {
@@ -1912,10 +1921,11 @@ html:has(.inbox) body::-webkit-scrollbar,
 }
 
 .inbox-question {
-  padding: 8px;
+  padding: 12px;
   margin-top: 6px;
-  background: var(--pill);
+  background: var(--inbox-group-bg);
   border-radius: 8px;
+  border: 1px solid var(--inbox-thread-line);
 }
 
 .inbox-question-text {
@@ -1959,33 +1969,35 @@ html:has(.inbox) body::-webkit-scrollbar,
   padding: 6px 9px;
   border: 1px solid var(--card-line);
   border-radius: 6px;
-  color: var(--fg);
-  background: var(--card);
+  color: var(--accent-text);
+  background: var(--inbox-request-bg);
   font: inherit;
   cursor: pointer;
+  border-color: var(--inbox-request-line);
+  font-weight: 600;
 }
 
 .inbox-prompt {
   align-self: flex-end;
-  max-width: 83%;
+  max-width: 86%;
   box-sizing: border-box;
   margin: 0;
   padding: 10px 12px;
-  border: 1px solid var(--request-line);
+  border: 1px solid var(--inbox-request-line);
   border-radius: 10px 10px 3px 10px;
-  background: var(--request-bg);
+  background: var(--inbox-request-bg);
   font-size: 11px;
 }
 
 .inbox-prompt summary {
   cursor: pointer;
-  color: var(--sub);
-  padding: 5px 0;
+  color: var(--accent-text);
+  padding: 1px 0;
 }
 
 .inbox-prompt summary > span:first-child {
-  color: var(--sub);
-  font-weight: 600;
+  color: var(--accent-text);
+  font-weight: 650;
   font-size: var(--text-meta);
 }
 
@@ -2029,7 +2041,8 @@ html:has(.inbox) body::-webkit-scrollbar,
 }
 
 .inbox-item-meta {
-  padding: 12px 0 4px;
+  padding: 0;
+  border-bottom: none;
 }
 
 .inbox-chat {
@@ -2037,11 +2050,12 @@ html:has(.inbox) body::-webkit-scrollbar,
   flex-direction: column;
   align-items: flex-start;
   gap: 16px;
-  padding: 12px 0 20px;
+  padding: 12px 0 0;
+  margin-left: 14px;
 }
 
 .inbox-response {
-  max-width: 92%;
+  max-width: 100%;
   min-width: 0;
   box-sizing: border-box;
   border: none;
@@ -2050,11 +2064,23 @@ html:has(.inbox) body::-webkit-scrollbar,
   overflow: visible;
 }
 
-.inbox-response .inbox-level {
-  background: none;
+.inbox-response-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
 }
+
+.inbox-item + .inbox-item {
+  border-top: 1px solid var(--inbox-thread-line);
+}
+
+.inbox-item.read .inbox-dot {
+  color: var(--sub);
+}
+
 .inbox-response-label {
-  margin-bottom: 6px;
+  margin-bottom: 0;
   color: var(--sub);
   font-size: var(--text-meta);
   font-weight: 500;
